@@ -1,0 +1,10 @@
+# Python ignores
+__pycache__/
+*.py[cod]
+*$py.class
+backend-api/venv/
+.env
+
+# OS ignores
+.DS_Store
+Thumbs.db
