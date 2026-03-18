@@ -1,18 +1,14 @@
-// This tells the app where your Python brain is living
 const API_URL = "http://127.0.0.1:8000";
 
 async function fetchCalendars() {
   const listElement = document.getElementById("calendar-list");
   
   try {
-    // 1. Ask the Python backend for the data
     const response = await fetch(`${API_URL}/calendars/`);
     const calendars = await response.json();
 
-    // 2. Clear the "Loading..." text
     listElement.innerHTML = "";
 
-    // 3. Loop through the data and put it on the screen
     if (calendars.length === 0) {
       listElement.innerHTML = "<p>No timelines found. Create one in the API!</p>";
       return;
@@ -21,9 +17,27 @@ async function fetchCalendars() {
     calendars.forEach(calendar => {
       const item = document.createElement("div");
       item.className = "calendar-card";
+      
+      let eventsHtml = "<ul class='event-list'>";
+      if (calendar.events && calendar.events.length > 0) {
+          calendar.events.forEach(event => {
+              const startDate = new Date(event.start_time).toLocaleString();
+              eventsHtml += `<li><strong>${event.title}</strong> <br><small>${startDate}</small></li>`;
+          });
+      } else {
+          eventsHtml += "<li><small>No events scheduled.</small></li>";
+      }
+      eventsHtml += "</ul>";
+
       item.innerHTML = `
-        <h3>${calendar.name}</h3>
-        <p>${calendar.description || "No description"}</p>
+        <div class="card-header">
+            <h3>${calendar.name}</h3>
+            <button class="delete-btn" onclick="deleteCalendar(${calendar.id})">Delete</button>
+        </div>
+        <p class="description">${calendar.description || "No description"}</p>
+        <div class="events-container">
+            ${eventsHtml}
+        </div>
       `;
       listElement.appendChild(item);
     });
@@ -34,10 +48,26 @@ async function fetchCalendars() {
   }
 }
 
-// When the window loads, fetch the data
+window.deleteCalendar = async function(id) {
+    if (!confirm("Are you sure you want to delete this timeline and all its events?")) return;
+    
+    try {
+        const response = await fetch(`${API_URL}/calendars/${id}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            fetchCalendars(); 
+        } else {
+            alert("Failed to delete timeline.");
+        }
+    } catch (error) {
+        console.error("Error deleting:", error);
+        alert("Could not connect to the server to delete.");
+    }
+};
+
 window.addEventListener("DOMContentLoaded", () => {
   fetchCalendars();
-  
-  // Make the refresh button work
   document.getElementById("refresh-btn").addEventListener("click", fetchCalendars);
 });

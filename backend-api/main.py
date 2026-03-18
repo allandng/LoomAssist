@@ -107,3 +107,21 @@ def sync_external_calendar(request: SyncRequest, db: Session = Depends(get_db)):
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+    
+
+@app.delete("/calendars/{calendar_id}")
+def delete_calendar(calendar_id: int, db: Session = Depends(get_db)):
+    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
+    
+    if not db_calendar:
+        raise HTTPException(status_code=404, detail="Calendar not found")
+    
+    # Delete associated events to prevent orphaned data
+    db.query(models.Event).filter(models.Event.calendar_id == calendar_id).delete()
+    
+    # Delete the calendar itself
+    db.delete(db_calendar)
+    db.commit()
+    
+    return {"status": "success", "message": f"Calendar {calendar_id} and its events deleted."}
