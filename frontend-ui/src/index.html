@@ -5,17 +5,105 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Loom</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
     <script type="module" src="/main.js" defer></script>
   </head>
 
   <body>
-    <div class="container">
-      <h1>Loom Dashboard</h1>
-      <p>Your connected timelines:</p>
+    <div class="app-layout">
       
-      <div id="calendar-list">Loading timelines...</div>
-      
-      <button id="refresh-btn">Refresh Data</button>
+      <aside class="sidebar">
+        <h1>Loom</h1>
+        
+        <div class="sidebar-section">
+          <div class="section-header">
+            <h3>Timelines</h3>
+            <button id="add-timeline-btn" class="icon-btn">+</button>
+          </div>
+          <ul id="timeline-list">
+            <li>Loading...</li>
+          </ul>
+        </div>
+
+        <div class="record-section">
+          <button id="mic-btn" class="mic-inactive">🎤 Listen</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="top-bar">
+          <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="event-search" placeholder="Search events..." />
+          </div>
+          <button id="add-event-btn" class="primary-btn">+ New Event</button>
+        </header>
+        <div id="calendar-container">
+            </div>
+      </main>
+
+    </div>
+
+    <div id="consent-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Recording Consent</h2>
+        <p>By clicking "I Consent", you authorize this application to record audio.</p>
+        <div class="modal-actions">
+          <button id="decline-btn" class="delete-btn">Decline</button>
+          <button id="accept-btn" class="accept-btn">I Consent</button>
+        </div>
+      </div>
+    </div>
+    <div id="timeline-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>New Timeline</h2>
+        <input type="text" id="timeline-name" placeholder="Timeline Name (e.g., Work)" class="form-input" />
+        <div class="modal-actions">
+          <button id="cancel-timeline-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
+          <button id="save-timeline-btn" class="accept-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="event-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2 id="event-modal-title">New Event</h2>
+        <input type="hidden" id="event-id" />
+        <input type="text" id="event-title" placeholder="Event Title" class="form-input" />
+        <input type="datetime-local" id="event-start" class="form-input" />
+        <input type="datetime-local" id="event-end" class="form-input" />
+        <select id="event-timeline" class="form-input"></select>
+        <div class="modal-actions">
+          <button id="delete-event-btn" class="delete-btn hidden">Delete</button>
+          <button id="cancel-event-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
+          <button id="save-event-btn" class="accept-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="fab-container">
+        <button id="toggle-search-btn" class="fab" title="Search Events">🔍</button>
+        <button id="settings-btn" class="fab" title="Settings">⚙️</button>
+    </div>
+
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Loom Settings</h2>
+        <div class="setting-item">
+            <span>Theme</span>
+            <button id="theme-toggle" class="primary-btn">Toggle Light/Dark</button>
+        </div>
+        <div class="setting-item">
+            <span>Week Starts On</span>
+            <select id="week-start-select" class="form-input" style="margin-bottom:0;">
+                <option value="0">Sunday</option>
+                <option value="1">Monday</option>
+            </select>
+        </div>
+        <div class="modal-actions">
+          <button id="close-settings-btn" class="accept-btn">Close</button>
+        </div>
+      </div>
     </div>
   </body>
 </html>
