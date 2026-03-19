@@ -1,27 +1,35 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import relationship
-from .database import Base
+from typing import List, Optional
+from sqlmodel import SQLModel, Field, Relationship
 
-class Calendar(Base):
-    __tablename__ = "calendars"
+# --- EVENT MODELS ---
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True) # e.g., "Personal", "Family", "OS Class"
-    description = Column(String, nullable=True)
+class EventBase(SQLModel):
+    title: str = Field(index=True)
+    start_time: str
+    end_time: str
+    calendar_id: int = Field(foreign_key="calendar.id")
 
-    # A single calendar can have many events
-    events = relationship("Event", back_populates="calendar")
-
-class Event(Base):
-    __tablename__ = "events"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    start_time = Column(String) 
-    end_time = Column(String)
+class Event(EventBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
     
-    # This links the event to a specific timeline/calendar
-    calendar_id = Column(Integer, ForeignKey("calendars.id"))
-
     # Establishes the relationship back to the Calendar model
-    calendar = relationship("Calendar", back_populates="events")
+    calendar: Optional["Calendar"] = Relationship(back_populates="events")
+
+class EventRead(EventBase):
+    id: int
+
+# --- CALENDAR MODELS ---
+
+class CalendarBase(SQLModel):
+    name: str = Field(index=True)
+    description: Optional[str] = None
+
+class Calendar(CalendarBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    
+    # A single calendar can have many events [cite: 20]
+    events: List["Event"] = Relationship(back_populates="calendar")
+
+class CalendarRead(CalendarBase):
+    id: int
+    events: List[EventRead] = []

@@ -1,5 +1,5 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlmodel import create_engine, SQLModel, Session
+from sqlalchemy.orm import sessionmaker
 
 # This creates a local file named loom.sqlite3 in your root folder
 SQLALCHEMY_DATABASE_URL = "sqlite:///./loom.sqlite3"
@@ -11,5 +11,6 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# This Base class is what our actual database models will inherit from
-Base = declarative_base()
+# In SQLModel, we use the built-in metadata for table creation [cite: 65, 67]
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
