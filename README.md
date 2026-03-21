@@ -8,6 +8,7 @@ Loom is a high-performance, local-first personal assistant designed for students
 * **🎙️ Voice-to-Intent:** Use Faster-Whisper and Ollama (Llama 3.2) to schedule events naturally.
 * **📅 Interactive Grid:** A beautiful, responsive calendar powered by FullCalendar with Month, Week, and Day views (including scroll-wheel zoom).
 * **🔄 Advanced Recurring Events:** Support for complex weekly schedules with occurrence-specific notes.
+* **⌨️ Power User Shortcuts:** Navigate efficiently with keyboard shortcuts (`N` for new, `T` for today, `1-4` for views, `/` for search) alongside a 50-step global Undo/Redo stack.
 * **🔍 Smart Search & Mentions:** Lightning-fast filtering, plus `@[Event]` tagging and Markdown link support in event descriptions.
 * **📥 Universal Import & Export:** Bulk-import `.ics` calendars, use AI to automatically extract dates from Syllabus PDFs, and export timelines to JSON/ICS.
 * **⏪ Global Undo/Redo:** A 50-step history stack (Ctrl+Z) for safe event and timeline management.
@@ -78,6 +79,8 @@ Loom will automatically transcribe your voice, determine the intent, and place t
 - [x] Timeline Export (JSON/ICS)
 - [x] Global Undo/Redo History Stack
 - [x] Markdown Links & @Mention Tagging
+- [x] Reminders & Browser Notifications
+- [x] Database Backup & Restore & Timezone Handling
 - [ ] Next: Flight Searcher Intent Execution
 - [ ] Next: Keyboard Navigation for Mention Dropdown
 

@@ -33,6 +33,7 @@
             <li>Loading...</li>
           </ul>
         </div>
+        
         <div class="record-section">
           <button id="mic-btn" class="mic-inactive">🎤 Listen</button>
         </div>
@@ -41,11 +42,13 @@
         
         <div id="sidebar-approval-panel" class="hidden">
             <h3 style="margin-bottom: 10px; font-size: 1rem;">Review Import</h3>
+            <select id="approval-timeline-select" class="form-input" style="margin-bottom: 10px;"></select>
+            
             <div id="approval-event-list"></div>
-            <div style="margin-top: 10px;">
-                <select id="approval-timeline-select" class="form-input" style="margin-bottom: 10px;"></select>
-                <button id="approval-save-btn" class="accept-btn" style="width: 100%; margin-bottom: 5px;">✓ Save Approved</button>
-                <button id="approval-cancel-btn" class="delete-btn" style="width: 100%; background: var(--border);">✗ Cancel</button>
+            
+            <div class="approval-actions">
+                <button id="approval-cancel-btn" class="delete-btn" style="flex: 1;">Cancel</button>
+                <button id="approval-save-btn" class="accept-btn" style="flex: 2;">Save Approved</button>
             </div>
         </div>
 
@@ -78,13 +81,21 @@
             <button id="undo-btn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↩</button>
             <button id="redo-btn" class="icon-btn" title="Redo (Ctrl+Shift+Z)" disabled>↪</button>
           </div>
+          
+          <div id="quick-add-bar">
+            <input type="text" id="quick-add-input" placeholder='Add event: "Team meeting tomorrow 9am"' />
+            <button id="quick-add-btn">+</button>
+          </div>
+
           <div class="search-container">
             <span class="search-icon">🔍</span>
             <input type="text" id="event-search" placeholder="Search events..." />
           </div>
           <button id="add-event-btn" class="primary-btn">+ New Event</button>
         </header>
-        <div id="calendar-container"></div>
+        <div id="calendar-container">
+          <div id='calendar-empty-overlay' class='hidden'></div>
+        </div>
       </main>
     </div>
 
@@ -93,7 +104,7 @@
         <h2>Recording Consent</h2>
         <p>By clicking "I Consent", you authorize this application to record audio.</p>
         <div class="modal-actions">
-          <button id="decline-btn" class="delete-btn">Decline</button>
+          <button id="decline-btn" class="delete-btn" style="background: var(--border);">Decline</button>
           <button id="accept-btn" class="accept-btn">I Consent</button>
         </div>
       </div>
@@ -126,6 +137,7 @@
             <input type="datetime-local" id="event-end" class="form-input" />
         </div>
 
+        <p id="event-timezone-display" class="muted-text hidden" style="font-size: 0.8rem; margin-top: -10px; margin-bottom: 15px; text-align: left;"></p>
         <div id="recurrence-fields" class="hidden" style="text-align: left; margin-bottom: 15px;">
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Days of Week</p>
             <div style="display: flex; gap: 8px; justify-content: space-between; margin-bottom: 10px;">
@@ -144,6 +156,19 @@
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Repeat Until</p>
             <input type="date" id="recur-end-date" class="form-input" />
+        </div>
+        
+        <div style="text-align: left; margin-bottom: 15px;">
+            <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Reminder</label>
+            <select id="event-reminder" class="form-input" style="margin-bottom: 0;">
+                <option value="">None</option>
+                <option value="5">5 minutes before</option>
+                <option value="10">10 minutes before</option>
+                <option value="15">15 minutes before</option>
+                <option value="30">30 minutes before</option>
+                <option value="60">1 hour before</option>
+                <option value="1440">1 day before</option>
+            </select>
         </div>
 
         <div style="text-align: left; margin-bottom: 15px;">
@@ -165,18 +190,18 @@
 
         <select id="event-timeline" class="form-input"></select>
         
+        <p id="event-modal-error" class="hidden" style="color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></p>
+        <p id="conflict-warning" class="hidden" style="color: var(--danger); font-size: 0.85rem; margin-bottom: 10px;"></p>
+        
         <div class="modal-actions">
+          <button id="duplicate-event-btn" class="delete-btn hidden" style="background: var(--accent);">⧉ Duplicate</button>
           <button id="delete-event-btn" class="delete-btn hidden">Delete</button>
           <button id="cancel-event-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
           <button id="save-event-btn" class="accept-btn">Save</button>
         </div>
       </div>
     </div>
-
-    <div class="fab-container">
-        <button id="settings-btn" class="fab" title="Settings">⚙️</button>
-    </div>
-
+    
     <input type="file" id="import-file-input" accept=".ics,.pdf" style="position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;">
 
     <div id="ics-import-modal" class="modal hidden">
@@ -200,11 +225,36 @@
             <button id="theme-toggle" class="primary-btn">Toggle Light/Dark</button>
         </div>
         <div class="setting-item">
+            <span>Onboarding</span>
+            <button id="replay-onboarding-btn" class="primary-btn">Replay</button>
+        </div>
+        <div class="setting-item">
             <span>Week Starts On</span>
             <select id="week-start-select" class="form-input" style="margin-bottom:0;">
                 <option value="0">Sunday</option>
                 <option value="1">Monday</option>
             </select>
+        </div>
+        <details style="text-align:left; margin-bottom: 15px;">
+          <summary style="cursor:pointer; color: var(--text-muted); font-size:0.9rem;">⌨ Keyboard Shortcuts</summary>
+          <div style="margin-top:10px; font-size:0.85rem; color:var(--text-muted); display:grid; grid-template-columns:auto 1fr; gap:4px 16px;">
+            <code>N</code><span>New event</span>
+            <code>T</code><span>Jump to today</span>
+            <code>1 2 3 4</code><span>Month / Week / Day / List view</span>
+            <code>[ ]</code><span>Previous / Next period</span>
+            <code>B</code><span>Toggle sidebar</span>
+            <code>/</code><span>Focus search</span>
+            <code>Ctrl+Z</code><span>Undo</span>
+            <code>Ctrl+Shift+Z</code><span>Redo</span>
+          </div>
+        </details>
+        <div class="setting-item">
+            <span>Database Data</span>
+            <div>
+                <button id="backup-db-btn" class="primary-btn" style="margin-right: 5px;">Backup</button>
+                <button id="restore-db-btn" class="delete-btn" style="padding: 10px 16px;">Restore</button>
+                <input type="file" id="restore-file-input" accept=".sqlite3" style="display: none;">
+            </div>
         </div>
         <div class="modal-actions">
           <button id="close-settings-btn" class="accept-btn">Close</button>
@@ -213,5 +263,39 @@
     </div>
 
     <div id="mention-dropdown" class="hidden"></div>
+    <div id="event-tooltip" class="hidden"></div>
+    
+    <div id="onboarding-modal" class="modal hidden">
+      <div class="modal-content" style="max-width:420px;">
+        <div class="onboarding-step active">
+          <div style="font-size:3rem;margin-bottom:12px">📅</div>
+          <h2>Welcome to Loom</h2>
+          <p style="color:var(--text-muted);margin-top:8px">Your local AI calendar. Everything runs on your machine — no cloud required.</p>
+        </div>
+        <div class="onboarding-step">
+          <div style="font-size:3rem;margin-bottom:12px">🗂</div>
+          <h2>Create Timelines</h2>
+          <p style="color:var(--text-muted);margin-top:8px">Timelines are color-coded calendars. Start with one for School and one for Personal.</p>
+        </div>
+        <div class="onboarding-step">
+          <div style="font-size:3rem;margin-bottom:12px">🎤</div>
+          <h2>Talk to Loom</h2>
+          <p style="color:var(--text-muted);margin-top:8px">Press Listen and say "Schedule chemistry lab tomorrow at 9am" — Loom adds it instantly.</p>
+        </div>
+        <div style="display:flex;justify-content:center;gap:8px;margin:20px 0;">
+          <span class="onboarding-dot active"></span>
+          <span class="onboarding-dot"></span>
+          <span class="onboarding-dot"></span>
+        </div>
+        <div class="modal-actions">
+          <button id="onboarding-prev-btn" class="delete-btn" style="background:var(--border);" disabled>Previous</button>
+          <button id="onboarding-next-btn" class="accept-btn">Next</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="fab-container">
+      <button id="settings-btn" class="fab" title="Settings">⚙️</button>
+    </div>
   </body>
 </html>

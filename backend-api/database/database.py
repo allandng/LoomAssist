@@ -1,5 +1,8 @@
 from sqlmodel import create_engine, SQLModel, Session
 from sqlalchemy.orm import sessionmaker
+import logging
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 # This creates a local file named loom.sqlite3 in your root folder
 SQLALCHEMY_DATABASE_URL = "sqlite:///./loom.sqlite3"
@@ -14,3 +17,39 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # In SQLModel, we use the built-in metadata for table creation [cite: 65, 67]
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+
+def run_migrations():
+    logging.info("Starting PRAGMA migration check...")
+    with engine.begin() as conn:
+        # 1. Calendar table
+        try:
+            conn.execute(text("ALTER TABLE calendar ADD COLUMN color VARCHAR DEFAULT '#6366f1'"))
+            logging.info("Migration: added column 'color' to calendar table.")
+        except OperationalError:
+            pass # Column already exists
+        
+        # 2. Event table
+        try:
+            result = conn.execute(text("PRAGMA table_info(event)")).fetchall()
+            columns = [row[1] for row in result]
+            
+            new_columns = {
+                "is_recurring": "BOOLEAN DEFAULT FALSE",
+                "recurrence_days": "VARCHAR",
+                "recurrence_end": "VARCHAR",
+                "description": "VARCHAR",
+                "unique_description": "VARCHAR",
+                "reminder_minutes": "INTEGER",
+                "external_uid": "VARCHAR",
+                "timezone": "VARCHAR DEFAULT 'local'"
+            }
+            
+            for col_name, col_type in new_columns.items():
+                if col_name not in columns:
+                    conn.execute(text(f"ALTER TABLE event ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to event table.")
+            
+        except Exception as e:
+            logging.error(f"Migration error on event table: {e}")
+            
+    logging.info("Migration check complete.")

@@ -1,3 +1,5 @@
+from unittest import result
+
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,38 +20,16 @@ from sqlmodel import select
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from pypdf import PdfReader
-
-# Updated imports to SQLModel structure 
-from database.database import SessionLocal, engine
+import shutil
+import hashlib
+from database.database import SessionLocal, engine, create_db_and_tables, run_migrations
 from database import models
 
-# Initialize Database
-models.SQLModel.metadata.create_all(engine)
+# Run migrations FIRST (adds missing columns to existing DB)
+run_migrations()
 
-# Safe Startup Migration Check
-# We use raw PRAGMA here instead of Alembic to keep the single-file nature of the vibecoded backend
-# while safely evolving the schema without dropping the database or destroying existing data.
-with engine.begin() as conn:
-    try:
-        conn.execute(text("ALTER TABLE calendar ADD COLUMN color VARCHAR DEFAULT '#6366f1'"))
-    except OperationalError:
-        pass
-        
-    try:
-        result = conn.execute(text("PRAGMA table_info(event)")).fetchall()
-        columns = [row[1] for row in result]
-        if "is_recurring" not in columns:
-            conn.execute(text("ALTER TABLE event ADD COLUMN is_recurring BOOLEAN DEFAULT FALSE"))
-        if "recurrence_days" not in columns:
-            conn.execute(text("ALTER TABLE event ADD COLUMN recurrence_days VARCHAR"))
-        if "recurrence_end" not in columns:
-            conn.execute(text("ALTER TABLE event ADD COLUMN recurrence_end VARCHAR"))
-        if "description" not in columns:
-            conn.execute(text("ALTER TABLE event ADD COLUMN description VARCHAR"))
-        if "unique_description" not in columns:
-            conn.execute(text("ALTER TABLE event ADD COLUMN unique_description VARCHAR"))
-    except Exception as e:
-        print(f"Migration error: {e}")
+# Then create any brand-new tables
+create_db_and_tables()
 
 app = FastAPI(title="Loom Backend API")
 
@@ -73,6 +53,32 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def validate_event_times(start_time: str, end_time: str):
+    """Raises HTTPException 422 if times are invalid. Only called on new/edited events."""
+    try:
+        start = datetime.fromisoformat(start_time)
+        end = datetime.fromisoformat(end_time)
+    except ValueError:
+        raise HTTPException(status_code=422,
+            detail={'error': {'code': 'invalid_time_format',
+                              'detail': 'start_time and end_time must be valid ISO 8601 strings.'}})
+    if end <= start:
+        raise HTTPException(status_code=422,
+            detail={'error': {'code': 'invalid_time_range',
+                              'detail': 'end_time must be after start_time.'}})
+    if not (1970 <= start.year <= 2100):
+        raise HTTPException(status_code=422,
+            detail={'error': {'code': 'out_of_range',
+                              'detail': 'Event year must be between 1970 and 2100.'}})
+
+def validate_calendar_exists(calendar_id: int, db: Session):
+    """Raises HTTPException 404 if calendar not found."""
+    cal = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
+    if not cal:
+        raise HTTPException(status_code=404,
+            detail={'error': {'code': 'calendar_not_found',
+                              'detail': f'Calendar {calendar_id} does not exist.'}})
 
 @app.get("/")
 async def root():
@@ -130,12 +136,8 @@ def delete_calendar(calendar_id: int, db: Session = Depends(get_db)):
 
 @app.post("/events/", response_model=models.EventRead)
 def create_event(event: models.EventBase, db: Session = Depends(get_db)):
-    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == event.calendar_id).first()
-    if not db_calendar:
-        raise HTTPException(
-            status_code=404, 
-            detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
-        )
+    validate_calendar_exists(event.calendar_id, db)
+    validate_event_times(event.start_time, event.end_time)
     
     db_event = models.Event.model_validate(event)
     db.add(db_event)
@@ -155,6 +157,8 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
             status_code=404, 
             detail={"error": {"code": "not_found", "detail": "Event not found"}}
         )
+    
+    validate_event_times(event.start_time, event.end_time)
     
     for key, value in event.model_dump().items():
         setattr(db_event, key, value)
@@ -180,6 +184,7 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
 # INTEGRATION ROUTES
 # ==========================================
 
+# REPLACE the existing ApprovedEvent class with:
 class ApprovedEvent(BaseModel):
     title: str
     start_time: str
@@ -189,6 +194,7 @@ class ApprovedEvent(BaseModel):
     recurrence_end: Optional[str] = None
     description: Optional[str] = None
     unique_description: Optional[str] = None
+    timezone: Optional[str] = 'local'
 
 class SaveApprovedEventsRequest(BaseModel):
     calendar_id: int
@@ -200,44 +206,41 @@ async def import_ics_file(
     calendar_id: int = Form(...),
     db: Session = Depends(get_db)
 ):
-    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
-    if not db_calendar:
-        raise HTTPException(
-            status_code=404, 
-            detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
-        )
+    validate_calendar_exists(calendar_id, db)
 
     try:
-        file_bytes = await file.read()
-        scraped_events = scraper.parse_ics_bytes(file_bytes)
+        content = await file.read()
+        raw_events = scraper.parse_ics_bytes(content)
         
         events_added = 0
-        added_instances = []
-        for event_data in scraped_events:
+        events_skipped = 0
+        
+        for ev_data in raw_events:
+            # Duplicate Check
+            if ev_data.get("external_uid"):
+                existing = db.query(models.Event).filter(
+                    models.Event.calendar_id == calendar_id,
+                    models.Event.external_uid == ev_data["external_uid"]
+                ).first()
+                
+                if existing:
+                    events_skipped += 1
+                    continue
+                    
             new_event = models.Event(
-                title=event_data["title"],
-                start_time=event_data["start_time"],
-                end_time=event_data["end_time"],
-                calendar_id=calendar_id
+                title=ev_data["title"],
+                start_time=ev_data["start_time"],
+                end_time=ev_data["end_time"],
+                calendar_id=calendar_id,
+                external_uid=ev_data.get("external_uid")
             )
             db.add(new_event)
-            added_instances.append(new_event)
             events_added += 1
             
-        # KNOWN LIMITATION: Duplicate prevention is not yet implemented
-        db.commit() 
-        for ev in added_instances:
-            db.refresh(ev)
-            
-        return {"status": "success", "events_added": events_added, "event_ids": [ev.id for ev in added_instances]}
-        
+        db.commit()
+        return {"status": "success", "events_added": events_added, "events_skipped": events_skipped}
     except Exception as e:
-        db.rollback()
-        logger.warning(f"ICS file import failed: {str(e)}")
-        raise HTTPException(
-            status_code=400, 
-            detail={"error": {"code": "ics_parse_failed", "detail": str(e)}} 
-        )
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/export/timelines/")
 def export_timelines(calendar_ids: str, format: str = "json", db: Session = Depends(get_db)):
@@ -397,48 +400,110 @@ async def extract_syllabus(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
+def generate_event_uid(title: str, date_str: str) -> str:
+    raw = f"{title.strip().lower()}{date_str[:10]}"
+    return 'loom-pdf-' + hashlib.md5(raw.encode()).hexdigest()[:16]
+
 @app.post("/documents/save-approved-events/")
 def save_approved_events(request: SaveApprovedEventsRequest, db: Session = Depends(get_db)):
-    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == request.calendar_id).first()
-    if not db_calendar:
-        raise HTTPException(
-            status_code=404, 
-            detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
-        )
+    validate_calendar_exists(request.calendar_id, db)
         
     try:
         events_added = 0
-        added_instances = []
+        events_skipped = 0
+        created_ids = []
+        
         for ev in request.events:
+            # Generate deterministic hash for PDF events using start_time
+            uid = generate_event_uid(ev.title, ev.start_time)
+            
+            # Duplicate Check
+            existing = db.query(models.Event).filter(
+                models.Event.calendar_id == request.calendar_id,
+                models.Event.external_uid == uid
+            ).first()
+            
+            if existing:
+                events_skipped += 1
+                continue
+                
             new_event = models.Event(
                 title=ev.title,
                 start_time=ev.start_time,
                 end_time=ev.end_time,
+                calendar_id=request.calendar_id,
                 is_recurring=ev.is_recurring,
                 recurrence_days=ev.recurrence_days,
                 recurrence_end=ev.recurrence_end,
                 description=ev.description,
                 unique_description=ev.unique_description,
-                calendar_id=request.calendar_id
+                external_uid=uid,
+                timezone=ev.timezone
             )
             db.add(new_event)
-            added_instances.append(new_event)
+            db.flush() # Populate ID
+            created_ids.append(new_event.id)
             events_added += 1
             
-        # KNOWN LIMITATION: Duplicate prevention is not yet implemented
         db.commit()
-        for ev in added_instances:
-            db.refresh(ev)
-            
-        return {"status": "success", "events_added": events_added, "event_ids": [ev.id for ev in added_instances]}
+        return {
+            "status": "success", 
+            "events_added": events_added, 
+            "events_skipped": events_skipped,
+            "event_ids": created_ids
+        }
     except Exception as e:
         db.rollback()
-        logger.error(f"Save approved events failed: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": {"code": "save_failed", "detail": str(e)}}
-        )
+        raise HTTPException(status_code=400, detail=str(e))
+# ==========================================
+# DATABASE ADMIN ROUTES
+# ==========================================
+# NOTE: This endpoint has no authentication — it is designed for local desktop use only.
+# Do not expose this endpoint over a network without adding auth.
+@app.get('/admin/backup')
+def backup_database():
+    db_path = os.environ.get('LOOM_DB_PATH', './loom.sqlite3')
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404,
+            detail={'error': {'code': 'db_not_found', 'detail': 'Database file not found.'}})
+    with open(db_path, 'rb') as f:
+        content = f.read()
+    return Response(content=content, media_type='application/octet-stream',
+        headers={'Content-Disposition': 'attachment; filename=loom-backup.sqlite3'})
 
+SQLITE_HEADER = b'SQLite format 3\x00'
+
+@app.post('/admin/restore')
+async def restore_database(file: UploadFile = File(...)):
+    content = await file.read()
+    # Validate SQLite magic bytes
+    if len(content) < 16 or content[:16] != SQLITE_HEADER:
+        raise HTTPException(status_code=400,
+            detail={'error': {'code': 'invalid_db_file',
+                              'detail': 'File is not a valid SQLite database.'}})
+    
+    # Write to temp and verify it opens
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.sqlite3') as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+        
+    try:
+        from sqlalchemy import create_engine as ce
+        test_eng = ce(f'sqlite:///{tmp_path}')
+        with test_eng.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        test_eng.dispose()
+    except Exception:
+        os.remove(tmp_path)
+        raise HTTPException(status_code=400,
+            detail={'error': {'code': 'corrupt_db', 'detail': 'Backup file is corrupt.'}})
+    
+    # Replace live DB
+    db_path = os.environ.get('LOOM_DB_PATH', './loom.sqlite3')
+    engine.dispose()  # Close all pooled connections before replacing the file
+    shutil.move(tmp_path, db_path)
+    
+    return {'status': 'success', 'message': 'Database restored. Reload your data.'}
 # ==========================================
 # INTENT ENGINE
 # ==========================================
@@ -465,11 +530,32 @@ def execute_intent(intent: dict, db: Session):
     params = intent.get("parameters", {})
     
     if action == "schedule_event":
-        return f"Scheduled event on Loom."
+        # Change the final return of execute_intent to:
+        return {"message": f"Successfully scheduled {event_data['title']}", "event_id": db_event.id}
     
     # Structured error for unknown intent 
     return {"error": {"code": "unknown_intent", "detail": f"Action '{action}' not supported."}}
 
+# ==========================================
+# QUICK-ADD INTENT ROUTE
+# ==========================================
+class IntentRequest(BaseModel):
+    text: str
+    calendar_id: Optional[int] = None
+
+@app.post('/intent')
+def process_intent(request: IntentRequest, db: Session = Depends(get_db)):
+    try:
+        intent_data = extract_intent(request.text)
+        result = execute_intent(intent_data, db)
+        # Change the return of process_intent to:
+        return {"status": "success", "result": result["message"], "event_id": result["event_id"], "intent": intent_data}
+    except Exception as e:
+        import logging
+        logging.error(f'Intent processing failed: {e}')
+        raise HTTPException(status_code=500,
+            detail={'error': {'code': 'intent_failed', 'detail': str(e)}})
+        
 # ==========================================
 # TRANSCRIPTION ROUTE
 # ==========================================

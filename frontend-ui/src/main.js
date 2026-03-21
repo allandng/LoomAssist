@@ -2,7 +2,16 @@ const API_URL = "http://127.0.0.1:8000";
 let calendarInstance;
 let currentEvents = [];
 let currentTimelines = [];
+let isLoading = true;
+let tooltipTimer;
+let onboardingStep = 0;
+const ONBOARD_STEPS = 3;
+let activeReminders = {};
+let currentEventTimezone = 'local'; 
 
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') scheduleReminders();
+});
 // ==========================================
 // UNDO / REDO HISTORY STACK
 // ==========================================
@@ -172,6 +181,28 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') document.getElementById("mention-dropdown").classList.add("hidden");
 });
 
+function positionTooltip(cx, cy) {
+  const t = document.getElementById('event-tooltip');
+  t.style.left = '-9999px'; t.style.top = '-9999px'; t.style.visibility = 'hidden';
+  // Measure after positioning offscreen
+  requestAnimationFrame(() => {
+    const rect = t.getBoundingClientRect();
+    let x = cx + 14, y = cy - 10;
+    if (x + rect.width > window.innerWidth - 12) x = cx - rect.width - 14;
+    if (y + rect.height > window.innerHeight - 12) y = window.innerHeight - rect.height - 12;
+    if (y < 8) y = 8;
+    t.style.left = x + 'px'; t.style.top = y + 'px'; t.style.visibility = 'visible';
+  });
+}
+
+function showOnboardingStep(index) {
+  document.querySelectorAll('.onboarding-step').forEach((el, i) => el.classList.toggle('active', i === index));
+  document.querySelectorAll('.onboarding-dot').forEach((dot, i) => dot.classList.toggle('active', i === index));
+  document.getElementById('onboarding-prev-btn').disabled = index === 0;
+  const isLast = index === ONBOARD_STEPS - 1;
+  document.getElementById('onboarding-next-btn').textContent = isLast ? 'Get Started' : 'Next';
+}
+
 // ==========================================
 // CALENDAR INITIALIZATION
 // ==========================================
@@ -182,28 +213,247 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     const calendarEl = document.getElementById('calendar-container');
+    const isTouch = 'ontouchstart' in window;
     
-    calendarInstance = new FullCalendar.Calendar(calendarEl, {
+    const calendarOptions = {
       initialView: 'dayGridMonth',
-      headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' },
+      editable: true, // Enables drag & drop / resize
+      eventResizableFromStart: true, // NEW: Enables resizing from the start edge
+      droppable: true, // NEW: Enables external/internal dropping capabilities
+      headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
       height: '100%',
       events: [],
       eventClick: function(info) {
         const rawEvent = currentEvents.find(e => e.id == info.event.id);
         openEventModal(rawEvent || info.event);
       },
-      dateClick: function(info) { openEventModal(null, info.dateStr); }
-    });
+      dateClick: function(info) { openEventModal(null, info.dateStr); },
+      
+      // NEW: Add visual class when dragging starts
+      eventDragStart: function(info) {
+        info.el.classList.add('fc-event-dragging');
+      },
+
+      // UPDATED: Combined Conflict Check & Drag-and-Drop Rescheduling
+      eventDrop: async function(info) {
+        const ev = info.event;
+        const id = ev.id;
+        
+        // 1. Conflict Check (from previous feature)
+        const conflicts = checkForConflicts(ev.startStr, ev.endStr || ev.startStr, ev.extendedProps.calendar_id, id);
+        if (conflicts.length > 0) {
+            const errEl = document.getElementById('import-error');
+            errEl.textContent = `Warning: Dropped event overlaps with ${conflicts.slice(0,2).join(', ')}`;
+            errEl.style.color = "var(--danger)";
+            errEl.classList.remove('hidden');
+            setTimeout(() => errEl.classList.add('hidden'), 3500);
+        }
+
+        // 2. Capture pre-drop state for Undo Stack
+        const preDrop = currentEvents.find(e => e.id === parseInt(id));
+        if (!preDrop) return; // Guard clause
+
+        const payload = {
+            title: ev.title,
+            start_time: ev.start.toISOString(),
+            // Guard: end may be null for all-day events
+            end_time: ev.end ? ev.end.toISOString() : ev.start.toISOString(), 
+            calendar_id: ev.extendedProps.calendar_id
+        };
+
+        // Push undo BEFORE the fetch so it's available even if fetch fails
+        undoStack.push({
+            label: 'Move event',
+            undo: async () => {
+                await fetch(`${API_URL}/events/${id}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ...payload, start_time: preDrop.start_time, end_time: preDrop.end_time })
+                });
+            },
+            redo: async () => {
+                await fetch(`${API_URL}/events/${id}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify(payload)
+                });
+            }
+        });
+        if (undoStack.length > 50) undoStack.shift();
+        redoStack = [];
+        updateUndoRedoButtons();
+
+        // 3. Persist the new time to the backend
+        try {
+            const res = await fetch(`${API_URL}/events/${id}`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                info.revert(); // FullCalendar snaps event back visually
+                document.getElementById('import-error').textContent = 'Failed to save event move.';
+                document.getElementById('import-error').classList.remove('hidden');
+                setTimeout(() => document.getElementById('import-error').classList.add('hidden'), 3000);
+            } else {
+                await loadData();
+            }
+        } catch {
+            info.revert();
+        }
+      },
+      
+      // Conflict check on duration resize
+      // UPDATED: Combined Conflict Check & Event Resizing Persistence
+      eventResize: async function(info) {
+        const ev = info.event;
+        const id = ev.id;
+        
+        // 1. Conflict Check (from B1F)
+        const conflicts = checkForConflicts(ev.startStr, ev.endStr, ev.extendedProps.calendar_id, id);
+        if (conflicts.length > 0) {
+            const errEl = document.getElementById('import-error');
+            errEl.textContent = `Warning: Resized event overlaps with ${conflicts.slice(0,2).join(', ')}`;
+            errEl.style.color = "var(--danger)";
+            errEl.classList.remove('hidden');
+            setTimeout(() => errEl.classList.add('hidden'), 3500);
+        }
+
+        // 2. Capture pre-resize state for Undo Stack
+        const preResize = currentEvents.find(e => e.id === parseInt(id));
+        if (!preResize) return;
+
+        const payload = {
+            title: ev.title,
+            start_time: ev.start.toISOString(),
+            end_time: ev.end ? ev.end.toISOString() : ev.start.toISOString(),
+            calendar_id: ev.extendedProps.calendar_id
+        };
+
+        // Push undo entry before fetch
+        undoStack.push({
+            label: 'Resize event',
+            undo: async () => { 
+                await fetch(`${API_URL}/events/${id}`, { 
+                    method: 'PUT', headers: {'Content-Type':'application/json'}, 
+                    body: JSON.stringify({...payload, start_time: preResize.start_time, end_time: preResize.end_time}) 
+                }); 
+            },
+            redo: async () => { 
+                await fetch(`${API_URL}/events/${id}`, { 
+                    method: 'PUT', headers: {'Content-Type':'application/json'}, 
+                    body: JSON.stringify(payload) 
+                }); 
+            }
+        });
+        if (undoStack.length > 50) undoStack.shift();
+        redoStack = [];
+        updateUndoRedoButtons();
+
+        // 3. Persist the new time to the backend
+        try {
+            const res = await fetch(`${API_URL}/events/${id}`, { 
+                method: 'PUT', headers: {'Content-Type':'application/json'}, 
+                body: JSON.stringify(payload) 
+            });
+            if (!res.ok) { 
+                info.revert(); 
+                document.getElementById('import-error').textContent = 'Failed to save event resize.';
+                document.getElementById('import-error').classList.remove('hidden');
+                setTimeout(() => document.getElementById('import-error').classList.add('hidden'), 3000);
+            } else { 
+                await loadData(); 
+            }
+        } catch { 
+            info.revert(); 
+        }
+      }
+    };
+
+    // Skip on touch devices
+    if (!isTouch) {
+        calendarOptions.eventMouseEnter = function(info) {
+          tooltipTimer = setTimeout(() => {
+            const ev = info.event;
+            const timeline = currentTimelines.find(t => t.id === ev.extendedProps.calendar_id);
+            const start = new Date(ev.start);
+            const end = ev.end ? new Date(ev.end) : null;
+            const timeStr = start.toLocaleString('en-US', {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
+              + (end ? ' – ' + end.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'}) : '');
+            const desc = ev.extendedProps.description || '';
+            const preview = desc.length > 80 ? desc.slice(0,80) + '...' : desc;
+            
+            const tooltip = document.getElementById('event-tooltip');
+            tooltip.innerHTML = `
+              <div style='font-weight:600;margin-bottom:4px'>${ev.title}</div>
+              <div style='color:var(--text-muted);font-size:0.8rem;margin-bottom:4px'>${timeStr}</div>
+              ${timeline ? `<div style='color:var(--text-muted);font-size:0.8rem;margin-bottom:4px'>📁 ${timeline.name}</div>` : ''}
+              ${preview ? `<div style='font-size:0.8rem'>${preview}</div>` : ''}
+            `;
+            tooltip.classList.remove('hidden');
+            positionTooltip(info.jsEvent.clientX, info.jsEvent.clientY);
+          }, 150);
+        };
+        
+        calendarOptions.eventMouseLeave = function() {
+          clearTimeout(tooltipTimer);
+          document.getElementById('event-tooltip').classList.add('hidden');
+        };
+    }
+
+    calendarInstance = new FullCalendar.Calendar(calendarEl, calendarOptions);
     
     calendarInstance.render();
     bindTimelineDropdowns();
     await loadData();
     setupEventListeners();
+    if (!localStorage.getItem('loom-onboarded')) {
+        setTimeout(() => document.getElementById('onboarding-modal').classList.remove('hidden'), 600);
+    }
 });
 
 // ==========================================
 // DATA LOADING
 // ==========================================
+function scheduleReminders() {
+  // Step 1: Cancel all existing scheduled reminders
+  Object.values(activeReminders).forEach(clearTimeout);
+  activeReminders = {};
+
+  // Step 2: Request Notification permission if not yet granted
+  // Do NOT request on page load — request only when there are events with reminders
+  const hasReminders = currentEvents.some(e => e.reminder_minutes);
+  if (hasReminders && Notification.permission === 'default') {
+    Notification.requestPermission(); // Non-blocking — don't await
+  }
+
+  // Step 3: Schedule each reminder
+  const now = Date.now();
+  currentEvents.forEach(event => {
+    if (!event.reminder_minutes) return;
+
+    const startMs = new Date(event.start_time).getTime();
+    const triggerMs = startMs - (event.reminder_minutes * 60 * 1000);
+    const msUntil = triggerMs - now;
+
+    if (msUntil > 0) {
+      // Future reminder — schedule it
+      activeReminders[event.id] = setTimeout(() => showReminder(event), msUntil);
+    } else if (msUntil > -60000) {
+      // Within the past 60 seconds — show immediately (missed due to tab sleep)
+      showReminder(event);
+    }
+    // Older than 60s — skip silently
+  });
+}
+
+function showReminder(event) {
+  if (Notification.permission !== 'granted') return;
+  const minuteLabel = event.reminder_minutes >= 60
+    ? `${event.reminder_minutes / 60} hour${event.reminder_minutes === 60 ? '' : 's'}`
+    : `${event.reminder_minutes} minutes`;
+  new Notification('Loom Reminder', {
+    body: `${event.title} starts in ${minuteLabel}`,
+    icon: '/favicon.ico',
+  });
+}
 async function loadData() {
     try {
         const calResponse = await fetch(`${API_URL}/calendars/`);
@@ -225,6 +475,10 @@ async function loadData() {
             renderCalendarEvents("");
         }
     } catch (error) { console.error("Failed to load events:", error); }
+
+    isLoading = false; // Disable loading flag
+    updateEmptyStates(); // Update states now that data is fetched
+    scheduleReminders(); // NEW: Re-evaluate notifications after data sync   
 }
 
 // ==========================================
@@ -268,6 +522,8 @@ function renderSidebar(timelines) {
             }
         });
     });
+
+    updateEmptyStates();
 }
 
 function renderCalendarEvents(searchTerm = "") {
@@ -284,22 +540,56 @@ function renderCalendarEvents(searchTerm = "") {
             if (event.is_recurring) {
                 const startDate = new Date(event.start_time);
                 const endDate = new Date(event.end_time);
-                return {
+                let evtObj = {
                     id: event.id, title: event.title,
                     daysOfWeek: event.recurrence_days ? event.recurrence_days.split(',').map(Number) : [],
                     startTime: startDate.toTimeString().substring(0, 5), endTime: endDate.toTimeString().substring(0, 5),
                     startRecur: event.start_time.split('T')[0], endRecur: event.recurrence_end,
                     backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true }
+                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description }
                 };
+                if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
+                return evtObj;
             }
-            return {
+            let evtObj = {
                 id: event.id, title: event.title, start: event.start_time, end: event.end_time,
                 backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-                extendedProps: { calendar_id: event.calendar_id, is_recurring: false }
+                extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
             };
+            if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
+            return evtObj;
         });
     calendarInstance.addEventSource(formattedEvents);
+
+    updateEmptyStates();
+}
+function updateEmptyStates() {
+  if (isLoading) return; // Don't flash empty state during fetch
+
+  // Sidebar: no timelines
+  if (currentTimelines.length === 0) {
+    document.getElementById('timeline-list').innerHTML = `
+      <li class='empty-state'>
+        <span style='font-size:2rem'>🗓</span>
+        <p style='font-weight:600; margin-bottom: 0px;'>No timelines yet</p>
+        <p>Create one to get started</p>
+        <button class='accept-btn' style='padding:8px 16px;width:auto;margin-top:6px;'
+          onclick="document.getElementById('timeline-modal').classList.remove('hidden')">
+          + Create Timeline
+        </button>
+      </li>`;
+  }
+
+  // Calendar overlay: timelines exist but no events
+  const overlay = document.getElementById('calendar-empty-overlay');
+  if (overlay) {
+      if (currentTimelines.length > 0 && currentEvents.length === 0) {
+        overlay.classList.remove('hidden');
+        overlay.innerHTML = `<p>No events yet.</p><p>Click any date or press <kbd>N</kbd> to add one.</p>`;
+      } else {
+        overlay.classList.add('hidden');
+      }
+  }
 }
 
 // ==========================================
@@ -311,10 +601,56 @@ function formatForInput(dateObj) {
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     return d.toISOString().slice(0, 16);
 }
+// NEW: Timeline Color Dot Helper 
+function setModalTitleDot(calendarId) {
+  const timeline = currentTimelines.find(t => t.id === parseInt(calendarId));
+  const color = timeline ? (timeline.color || '#6366f1') : '#6366f1';
+  const title = document.getElementById('event-modal-title');
+  
+  // Remove existing dot if present
+  const existing = title.querySelector('.modal-timeline-dot');
+  if (existing) existing.remove();
+  
+  const dot = document.createElement('span');
+  dot.className = 'modal-timeline-dot';
+  dot.style.backgroundColor = color;
+  title.prepend(dot);
+}
+// Standard interval overlap: A overlaps B if A.start < B.end AND A.end > B.start
+function checkForConflicts(startISO, endISO, calendarId, excludeId = null) {
+  const newStart = new Date(startISO).getTime();
+  const newEnd = new Date(endISO).getTime();
 
+  return currentEvents
+    .filter(e => {
+      if (e.calendar_id !== parseInt(calendarId)) return false;   // Different timeline = no conflict
+      if (excludeId && e.id === parseInt(excludeId)) return false; // Don't conflict with itself
+      if (e.is_recurring) return false;                  // Skip recurring — complex, flag as future
+      return true;
+    })
+    .filter(e => {
+      const eStart = new Date(e.start_time).getTime();
+      const eEnd = new Date(e.end_time).getTime();
+      return newStart < eEnd && newEnd > eStart;         // Overlap formula
+    })
+    .map(e => e.title);
+}
+function showModalError(msg) {
+  const el = document.getElementById('event-modal-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function clearModalError() {
+  document.getElementById('event-modal-error').classList.add('hidden');
+}
 function openEventModal(existingEvent = null, clickedDate = null) {
+    document.getElementById('event-tooltip')?.classList.add('hidden');
+    document.getElementById("save-event-btn").textContent = "Save";
+    document.getElementById("conflict-warning").classList.add("hidden");
     const modal = document.getElementById("event-modal");
     document.getElementById("delete-event-btn").classList.add("hidden");
+    document.getElementById("duplicate-event-btn").classList.add("hidden");
     
     const isRecurringCheckbox = document.getElementById("event-is-recurring");
     const recurrenceFields = document.getElementById("recurrence-fields");
@@ -330,11 +666,27 @@ function openEventModal(existingEvent = null, clickedDate = null) {
         document.getElementById("event-modal-title").innerText = "Edit Event";
         document.getElementById("event-id").value = existingEvent.id;
         document.getElementById("event-title").value = existingEvent.title;
-        document.getElementById("event-timeline").value = existingEvent.calendar_id || existingEvent.extendedProps?.calendar_id;
-        document.getElementById("delete-event-btn").classList.remove("hidden");
         
+        const calendarId = existingEvent.calendar_id || existingEvent.extendedProps?.calendar_id;
+        document.getElementById("event-timeline").value = calendarId;
+        document.getElementById("delete-event-btn").classList.remove("hidden");
+        document.getElementById("duplicate-event-btn").classList.remove("hidden");
+        
+        // Update the color dot based on the timeline
+        setModalTitleDot(calendarId);
+
         descArea.value = existingEvent.description || "";
         uDescArea.value = existingEvent.unique_description || "";
+
+        currentEventTimezone = existingEvent.timezone || 'local';
+        const tzDisplay = document.getElementById("event-timezone-display");
+        if (currentEventTimezone !== 'local') {
+            tzDisplay.textContent = `Stored in: ${currentEventTimezone}`;
+            tzDisplay.classList.remove("hidden");
+        } else {
+            tzDisplay.classList.add("hidden");
+        }
+        document.getElementById("event-reminder").value = existingEvent.reminder_minutes || "";
         
         let hasDesc = (existingEvent.description || existingEvent.unique_description);
         toggleDescMode(!hasDesc); 
@@ -377,6 +729,9 @@ function openEventModal(existingEvent = null, clickedDate = null) {
         document.getElementById("event-title").value = "";
         descArea.value = "";
         uDescArea.value = "";
+        currentEventTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+        document.getElementById("event-timezone-display").classList.add("hidden");
+        document.getElementById("event-reminder").value = "";
         toggleDescMode(true); 
 
         isRecurringCheckbox.checked = false;
@@ -388,6 +743,11 @@ function openEventModal(existingEvent = null, clickedDate = null) {
         const endStr = new Date(startStr.getTime() + 60 * 60 * 1000); 
         document.getElementById("event-start").value = formatForInput(startStr);
         document.getElementById("event-end").value = formatForInput(endStr);
+        
+        // Default color dot to first timeline
+        if (currentTimelines.length > 0) {
+            setModalTitleDot(currentTimelines[0].id);
+        }
     }
     modal.classList.remove("hidden");
 }
@@ -555,6 +915,7 @@ document.getElementById("approval-save-btn").addEventListener("click", async (e)
         });
         const data = await res.json();
         if (res.ok) {
+            alert('✓ ' + data.events_added + ' events imported, ' + data.events_skipped + ' duplicates skipped.');
             let addedIds = data.event_ids || [];
             pushHistory(
                 async () => { for (let eid of addedIds) await fetch(`${API_URL}/events/${eid}`, {method: 'DELETE'}); },
@@ -706,17 +1067,96 @@ document.getElementById("export-confirm-btn").addEventListener("click", async ()
     }
 });
 
+async function submitQuickAdd() {
+    const input = document.getElementById("quick-add-input");
+    const btn = document.getElementById("quick-add-btn");
+    const text = input.value.trim();
+    
+    if (!text) {
+        input.focus();
+        return;
+    }
 
+    btn.disabled = true;
+    btn.textContent = "...";
+
+    try {
+        const response = await fetch(`${API_URL}/intent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text })
+        });
+
+        if (!response.ok) throw new Error("Failed to process intent");
+        const data = await response.json();
+        
+        // NEW: Push to Undo/Redo Stack
+        if (data.event_id) {
+            pushHistory(
+                async () => {
+                    // Undo: Delete the event created by quick-add
+                    await fetch(`${API_URL}/events/${data.event_id}`, { method: 'DELETE' });
+                },
+                async () => {
+                    // Redo: Re-run the same intent text
+                    await fetch(`${API_URL}/intent`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text }),
+                    });
+                },
+                'Quick Add Event'
+            );
+        }
+
+        input.value = "";
+        await loadData();
+    } catch (err) {
+        const errEl = document.getElementById("import-error");
+        errEl.textContent = "Quick-add failed. Please try again.";
+        errEl.classList.remove("hidden");
+        setTimeout(() => errEl.classList.add("hidden"), 3000);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "+";
+    }
+}
 // ==========================================
 // EVENT LISTENERS & UI
 // ==========================================
 function setupEventListeners() {
     // --- Undo / Redo Keybinds & Buttons ---
+    // --- Keyboard Shortcuts ---
     document.addEventListener('keydown', (e) => {
+        // Global Undo/Redo logic (bypasses modal/typing guards so it works anywhere)
         if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
             if (e.shiftKey) { e.preventDefault(); performRedo(); }
             else { e.preventDefault(); performUndo(); }
+            return;
         }
+
+        // Guard: do not fire shortcuts while typing in form inputs
+        const typing = e.target.matches('input, textarea, select');
+        // Guard: do not fire if ANY modal is currently visible
+        const modalOpen = document.querySelector('.modal:not(.hidden)') !== null;
+
+        if (!typing && !modalOpen) {
+            switch(e.key.toLowerCase()) { // use toLowerCase() to catch 'N' or 'n'
+                case 'n': e.preventDefault(); openEventModal(); break;
+                case 't': calendarInstance.today(); break;
+                case '1': calendarInstance.changeView('dayGridMonth'); break;
+                case '2': calendarInstance.changeView('timeGridWeek'); break;
+                case '3': calendarInstance.changeView('timeGridDay'); break;
+                case '4': calendarInstance.changeView('listWeek'); break;
+                case '[': calendarInstance.prev(); break;
+                case ']': calendarInstance.next(); break;
+                case 'b': document.getElementById('sidebar-toggle').click(); break;
+                case '/': e.preventDefault(); document.getElementById('event-search').focus(); break;
+            }
+        }
+        
+        // Ensure Escape still closes the mentions dropdown
+        if (e.key === 'Escape') document.getElementById("mention-dropdown").classList.add("hidden");
     });
     document.getElementById("undo-btn").addEventListener("click", performUndo);
     document.getElementById("redo-btn").addEventListener("click", performRedo);
@@ -742,7 +1182,7 @@ function setupEventListeners() {
     });
 
     // --- Scroll Wheel Zoom (Debounced) ---
-    const views = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'];
+    const views = ['dayGridMonth', 'timeGridWeek', 'timeGridDay', 'listWeek'];
     let zoomDebounce = null;
     document.getElementById('calendar-container').addEventListener('wheel', (e) => {
         e.preventDefault();
@@ -750,10 +1190,19 @@ function setupEventListeners() {
         zoomDebounce = setTimeout(() => zoomDebounce = null, 300);
         const currentView = calendarInstance.view.type;
         let idx = views.indexOf(currentView);
+        
+        // Scroll down from day view goes to list view
         if (e.deltaY < 0 && idx < views.length - 1) calendarInstance.changeView(views[idx + 1]);
         else if (e.deltaY > 0 && idx > 0) calendarInstance.changeView(views[idx - 1]);
     });
 
+    // --- Timeline Change Listener for Dot Color ---
+    const eventTimelineSelect = document.getElementById("event-timeline");
+    if (eventTimelineSelect) {
+        eventTimelineSelect.addEventListener('change', (e) => {
+            setModalTitleDot(e.target.value);
+        });
+    }
     // --- Sidebar Toggle ---
     const sidebarToggle = document.getElementById("sidebar-toggle");
     sidebarToggle.addEventListener("click", () => {
@@ -770,6 +1219,15 @@ function setupEventListeners() {
             const val = e.target.value.trim().toLowerCase();
             if (val === "") clearSidebarSearch(); else showSidebarSearchResults(val);
             renderCalendarEvents(val);
+        });
+    }
+    // --- Quick Add Listener ---
+    const quickAddBtn = document.getElementById("quick-add-btn");
+    const quickAddInput = document.getElementById("quick-add-input");
+    if (quickAddBtn && quickAddInput) {
+        quickAddBtn.addEventListener("click", submitQuickAdd);
+        quickAddInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") submitQuickAdd();
         });
     }
 
@@ -801,19 +1259,37 @@ function setupEventListeners() {
     document.getElementById("add-event-btn").addEventListener("click", () => openEventModal());
     document.getElementById("cancel-event-btn").addEventListener("click", () => document.getElementById("event-modal").classList.add("hidden"));
     
-    document.getElementById("save-event-btn").addEventListener("click", async () => {
+    document.getElementById("save-event-btn").addEventListener("click", async (e) => {
+        const btn = e.target;
+        // Frontend Validation
+        clearModalError();
+        const title = document.getElementById('event-title').value.trim();
+        if (!title) { showModalError('Event title is required.'); return; }
+        
+        const startVal = document.getElementById('event-start').value;
+        const endVal = document.getElementById('event-end').value;
+        if (startVal && endVal && new Date(endVal) <= new Date(startVal)) {
+            showModalError('End time must be after start time.'); return;
+        }
         let id = document.getElementById("event-id").value;
         const isRecurring = document.getElementById("event-is-recurring").checked;
         const calId = document.getElementById("event-timeline").value;
         
         if(!calId || calId === "__new__") { alert("Please save the new timeline first."); return; }
         
+        // Clear previous warnings
+        const warningEl = document.getElementById('conflict-warning');
+        warningEl.classList.add('hidden');
+        warningEl.textContent = '';
+
         let payload = {
             title: document.getElementById("event-title").value,
             calendar_id: parseInt(calId),
             is_recurring: isRecurring,
             description: document.getElementById("event-description").value,
-            unique_description: document.getElementById("event-unique-description").value
+            unique_description: document.getElementById("event-unique-description").value,
+            reminder_minutes: parseInt(document.getElementById("event-reminder").value) || null,
+            timezone: currentEventTimezone
         };
 
         if (isRecurring) {
@@ -829,10 +1305,22 @@ function setupEventListeners() {
             payload.recurrence_days = null; payload.recurrence_end = null;
         }
 
+        // Conflict Check Pipeline
+        if (btn.textContent !== "Confirm Save") {
+            const conflicts = checkForConflicts(payload.start_time, payload.end_time, calId, id);
+            if (conflicts.length > 0) {
+                warningEl.textContent = `Overlaps with: ${conflicts.slice(0,3).join(', ')}${conflicts.length > 3 ? '...' : ''}`;
+                warningEl.classList.remove('hidden');
+                btn.textContent = "Confirm Save";
+                return; // Halt save to let user confirm
+            }
+        }
+
+        btn.textContent = "Saving..."; // Visual feedback
+
         const method = id ? "PUT" : "POST";
         const url = id ? `${API_URL}/events/${id}` : `${API_URL}/events/`;
-        let preEditSnapshot = null;
-        if (id) preEditSnapshot = currentEvents.find(e => e.id == id); 
+        let preEditSnapshot = id ? currentEvents.find(e => e.id == id) : null;
 
         const response = await fetch(url, { method: method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (response.ok) {
@@ -853,6 +1341,7 @@ function setupEventListeners() {
             }
         }
         document.getElementById("event-modal").classList.add("hidden");
+        btn.textContent = "Save"; // Reset button text
         loadData();
     });
 
@@ -870,6 +1359,56 @@ function setupEventListeners() {
         }
         document.getElementById("event-modal").classList.add("hidden");
         loadData();
+    });
+    document.getElementById("duplicate-event-btn").addEventListener("click", async () => {
+        const isRecurring = document.getElementById("event-is-recurring").checked;
+        const calId = document.getElementById("event-timeline").value;
+        
+        if(!calId || calId === "__new__") { alert("Please save the new timeline first."); return; }
+
+        // Construct full payload to support recurring events per the mitigation strategy
+        let payload = {
+            title: "Copy of " + document.getElementById("event-title").value,
+            calendar_id: parseInt(calId),
+            is_recurring: isRecurring,
+            description: document.getElementById("event-description").value,
+            unique_description: document.getElementById("event-unique-description").value
+        };
+
+        if (isRecurring) {
+            const tStart = document.getElementById("recur-start-time").value || "09:00";
+            const tEnd = document.getElementById("recur-end-time").value || "10:00";
+            const today = new Date().toISOString().split('T')[0];
+            payload.start_time = `${today}T${tStart}:00`; payload.end_time = `${today}T${tEnd}:00`;
+            payload.recurrence_end = document.getElementById("recur-end-date").value;
+            payload.recurrence_days = Array.from(document.querySelectorAll('.recur-day:checked')).map(cb => cb.value).join(',');
+        } else {
+            payload.start_time = new Date(document.getElementById("event-start").value).toISOString();
+            payload.end_time = new Date(document.getElementById("event-end").value).toISOString();
+            payload.recurrence_days = null; payload.recurrence_end = null;
+        }
+
+        const res = await fetch(`${API_URL}/events/`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload),
+        });
+        
+        if (res.ok) {
+            const newEvent = await res.json();
+            
+            // Push undo: delete the new event
+            undoStack.push({
+                label: 'Duplicate event',
+                undo: async () => { await fetch(`${API_URL}/events/${newEvent.id}`, { method: 'DELETE' }); },
+                redo: async () => { await fetch(`${API_URL}/events/`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); }
+            });
+            if (undoStack.length > 50) undoStack.shift();
+            redoStack = []; 
+            updateUndoRedoButtons();
+            
+            document.getElementById('event-modal').classList.add('hidden');
+            await loadData();
+        }
     });
 
     // --- Timeline Modal ---
@@ -913,6 +1452,44 @@ function setupEventListeners() {
     };
     if (localStorage.getItem("loom-theme") === "light") document.body.classList.add("light-mode");
     document.getElementById("week-start-select").onchange = (e) => calendarInstance.setOption('firstDay', parseInt(e.target.value));
+    // --- Backup & Restore Logic ---
+    document.getElementById('backup-db-btn').addEventListener('click', async () => {
+        const res = await fetch(`${API_URL}/admin/backup`);
+        if (res.ok) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'loom-backup.sqlite3'; a.click();
+            URL.revokeObjectURL(url);
+        }
+    });
+
+    document.getElementById('restore-db-btn').addEventListener('click', () => {
+        document.getElementById('restore-file-input').click();
+    });
+
+    document.getElementById('restore-file-input').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        if (!confirm('This replaces ALL current data with the backup. Are you sure?')) {
+            e.target.value = ''; // Reset input if canceled
+            return;
+        }
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const res = await fetch(`${API_URL}/admin/restore`, { method: 'POST', body: formData });
+        if (res.ok) {
+            alert('Restore successful. Reloading...');
+            await loadData();
+        } else {
+            const err = await res.json();
+            alert('Restore failed: ' + (err?.detail?.error?.detail || 'Unknown error'));
+        }
+        e.target.value = ''; // Reset input
+    });
 
     // ==========================================
     // ICS IMPORT LOGIC
@@ -969,8 +1546,7 @@ function setupEventListeners() {
             const response = await fetch(`${API_URL}/integrations/import-ics-file/`, { method: 'POST', body: formData });
             const data = await response.json();
             if (response.ok) {
-                document.getElementById('ics-import-status').textContent = `✓ Imported successfully!`;
-                document.getElementById('ics-import-status').style.color = "#10b981";
+                document.getElementById('ics-import-status').textContent = '✓ ' + data.events_added + ' events imported, ' + data.events_skipped + ' duplicates skipped.';                document.getElementById('ics-import-status').style.color = "#10b981";
                 
                 let addedIds = data.event_ids || [];
                 let fileClone = new File([file], file.name, {type: file.type});
@@ -988,6 +1564,30 @@ function setupEventListeners() {
                 setTimeout(() => { icsModal.classList.add('hidden'); importFileInput.value = ""; }, 1500);
             } else { confirmIcsBtn.disabled = false; }
         } catch (err) { confirmIcsBtn.disabled = false; }
+    });
+    // --- Onboarding Logic ---
+    document.getElementById('onboarding-next-btn').addEventListener('click', () => {
+        if (onboardingStep < ONBOARD_STEPS - 1) { 
+            onboardingStep++; 
+            showOnboardingStep(onboardingStep); 
+        } else { 
+            localStorage.setItem('loom-onboarded', 'true'); 
+            document.getElementById('onboarding-modal').classList.add('hidden'); 
+        }
+    });
+
+    document.getElementById('onboarding-prev-btn').addEventListener('click', () => {
+        if (onboardingStep > 0) { 
+            onboardingStep--; 
+            showOnboardingStep(onboardingStep); 
+        }
+    });
+
+    document.getElementById('replay-onboarding-btn').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.add('hidden');
+        onboardingStep = 0;
+        showOnboardingStep(onboardingStep);
+        document.getElementById('onboarding-modal').classList.remove('hidden');
     });
 }
 

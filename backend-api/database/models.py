@@ -13,9 +13,18 @@ class EventBase(SQLModel):
     recurrence_days: Optional[str] = Field(default=None) # e.g., "1,3" for Mon/Wed
     recurrence_end: Optional[str] = Field(default=None)
     
-    # NEW: Description Fields
+    # Description Fields
     description: Optional[str] = Field(default=None)
     unique_description: Optional[str] = Field(default=None)
+    
+    # Reminder Field
+    reminder_minutes: Optional[int] = Field(default=None)
+
+    # Duplicate Prevention Field
+    external_uid: Optional[str] = Field(default=None, index=True)
+
+    # NEW: Timezone Handling
+    timezone: Optional[str] = Field(default='local')
 
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
