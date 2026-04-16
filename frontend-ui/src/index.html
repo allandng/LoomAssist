@@ -10,6 +10,28 @@
   </head>
 
   <body>
+
+    <div id="app-drawer">
+      <div class="drawer-strip" id="drawer-strip-btn" title="Open app menu"></div>
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <span class="drawer-title">Loom</span>
+        </div>
+        <button class="drawer-module-btn active" id="drawer-calendar-btn">
+          <span class="drawer-icon">🗓</span>
+          <span class="drawer-label">Calendar</span>
+        </button>
+        <button class="drawer-module-btn" id="drawer-todos-btn">
+          <span class="drawer-icon">✓</span>
+          <span class="drawer-label">Todos</span>
+        </button>
+        <button class="drawer-module-btn" id="drawer-focus-btn">
+          <span class="drawer-icon">🎯</span>
+          <span class="drawer-label">Focus</span>
+        </button>
+      </div>
+    </div>
+
     <div class="app-layout">
       
       <aside class="sidebar">
@@ -23,9 +45,14 @@
             <div class="header-actions" style="position: relative;">
                 <button id="sidebar-menu-btn" class="icon-btn" title="Menu">☰</button>
                 <div id="sidebar-dropdown" class="hidden">
+                    <div class="dropdown-item" id="menu-taskboard-btn">✅ Task Board</div>
+                    <div class="dropdown-item" id="menu-templates-btn">📋 Templates</div>
                     <div class="dropdown-item" id="menu-import-btn">🔍 File Scanner</div>
                     <div class="dropdown-item" id="menu-export-btn">↓ Export Timeline</div>
                     <div class="dropdown-item" id="menu-new-timeline-btn">+ Add Timeline</div>
+                    <div class="dropdown-item" id="menu-stats-btn">📊 Statistics</div>
+                    <div class="dropdown-item" id="menu-print-btn">🖨 Print Week</div>
+                    <div class="dropdown-item" id="menu-focus-btn">🎯 Focus Mode</div>
                 </div>
             </div>
           </div>
@@ -52,6 +79,15 @@
             </div>
         </div>
 
+        <!-- M5: Statistics panel -->
+        <div id="sidebar-stats-panel" class="hidden">
+            <div class="stats-header">
+                <h3 style="font-size: 1rem;">Statistics</h3>
+                <button id="close-stats-btn" class="icon-btn">×</button>
+            </div>
+            <div id="stats-content"></div>
+        </div>
+
         <div id="sidebar-export-panel" class="hidden">
             <div class="export-header">
                 <h3 style="font-size: 1rem;">Export Timelines</h3>
@@ -71,6 +107,32 @@
                 <button id="export-confirm-btn" class="accept-btn">↓ Export</button>
             </div>
         </div>
+
+        <!-- M3: Event Templates panel -->
+        <div id="sidebar-templates-panel" class="hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="font-size: 1rem;">Templates</h3>
+                <button id="close-templates-btn" class="icon-btn">×</button>
+            </div>
+            <div id="template-list" style="overflow-y: auto; flex-grow: 1; display: flex; flex-direction: column; gap: 8px;">
+                <p class="muted-text" style="font-size: 0.85rem;">No templates saved yet. Open any event and click Save as Template.</p>
+            </div>
+        </div>
+
+        <!-- Task Board panel (replaces M1 Todos) -->
+        <div id="sidebar-taskboard-panel" class="hidden">
+          <div style="display: flex; justify-content: space-between;
+                      align-items: center; margin-bottom: 10px;">
+            <h3 style="font-size: 1rem;">Task Board</h3>
+            <button id="close-taskboard-btn" class="icon-btn">×</button>
+          </div>
+          <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+            <button class="format-pill active" id="task-filter-all">All</button>
+            <button class="format-pill" id="task-filter-active">Active</button>
+            <button class="format-pill" id="task-filter-done">Done</button>
+          </div>
+          <div id="taskboard-list"></div>
+        </div>
       </aside>
 
       <main class="main-content">
@@ -81,18 +143,18 @@
             <button id="undo-btn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↩</button>
             <button id="redo-btn" class="icon-btn" title="Redo (Ctrl+Shift+Z)" disabled>↪</button>
           </div>
-          
-          <div id="quick-add-bar">
-            <input type="text" id="quick-add-input" placeholder='Add event: "Team meeting tomorrow 9am"' />
-            <button id="quick-add-btn">+</button>
-          </div>
+            <span id="sync-status"></span>
 
+          <!-- H6: Unified search + quick-add (standalone quick-add bar removed) -->
           <div class="search-container">
             <span class="search-icon">🔍</span>
             <input type="text" id="event-search" placeholder="Search events..." />
+            <button id="search-quick-add-btn" class="hidden" title="Quick-add this as new event">+</button>
           </div>
           <button id="add-event-btn" class="primary-btn">+ New Event</button>
         </header>
+        <!-- M2: Auto-schedule wellness warnings -->
+        <div id="schedule-warnings"></div>
         <div id="calendar-container">
           <div id='calendar-empty-overlay' class='hidden'></div>
         </div>
@@ -126,7 +188,13 @@
         <h2 id="event-modal-title">New Event</h2>
         <input type="hidden" id="event-id" />
         <input type="text" id="event-title" placeholder="Event Title" class="form-input" />
-        
+
+        <!-- H2: All-day checkbox — sits between title and recurring -->
+        <div style="display: flex; align-items: center; justify-content: start; gap: 8px; margin-bottom: 15px;">
+            <input type="checkbox" id="event-is-allday" style="accent-color: var(--accent);">
+            <label for="event-is-allday" style="font-size: 0.9rem;">All day</label>
+        </div>
+
         <div style="display: flex; align-items: center; justify-content: start; gap: 8px; margin-bottom: 15px;">
             <input type="checkbox" id="event-is-recurring" style="accent-color: var(--accent);">
             <label for="event-is-recurring" style="font-size: 0.9rem;">Repeating event</label>
@@ -135,6 +203,12 @@
         <div id="single-date-fields">
             <input type="datetime-local" id="event-start" class="form-input" />
             <input type="datetime-local" id="event-end" class="form-input" />
+        </div>
+
+        <!-- H2: All-day date pickers — hidden by default, shown when all-day is checked -->
+        <div id="allday-date-fields" class="hidden">
+            <input type="date" id="allday-start-date" class="form-input" placeholder="Start date" />
+            <input type="date" id="allday-end-date" class="form-input" placeholder="End date" />
         </div>
 
         <p id="event-timezone-display" class="muted-text hidden" style="font-size: 0.8rem; margin-top: -10px; margin-bottom: 15px; text-align: left;"></p>
@@ -149,10 +223,31 @@
                 <label><input type="checkbox" class="recur-day" value="5"> F</label>
                 <label><input type="checkbox" class="recur-day" value="6"> S</label>
             </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Start / End Time</p>
-            <div style="display: flex; gap: 10px;">
-                <input type="time" id="recur-start-time" class="form-input" />
-                <input type="time" id="recur-end-time" class="form-input" />
+            <!-- H5: Single time pair (hidden when per-day toggle is checked) -->
+            <div id="recur-single-time-fields">
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Start / End Time</p>
+                <div style="display: flex; gap: 10px;">
+                    <input type="time" id="recur-start-time" class="form-input" />
+                    <input type="time" id="recur-end-time" class="form-input" />
+                </div>
+            </div>
+            <!-- H5: Different times per day toggle -->
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                <input type="checkbox" id="recur-per-day-toggle" style="accent-color: var(--accent);">
+                <label for="recur-per-day-toggle" style="font-size: 0.8rem; color: var(--text-muted);">Different times per day</label>
+            </div>
+            <!-- H5: Per-day time grid — one row per selected recurrence day -->
+            <div id="per-day-times-grid" class="hidden" style="margin-bottom: 10px;">
+                <table style="width:100%; font-size:0.8rem; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Day</th>
+                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Start</th>
+                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">End</th>
+                        </tr>
+                    </thead>
+                    <tbody id="per-day-times-tbody"></tbody>
+                </table>
             </div>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Repeat Until</p>
             <input type="date" id="recur-end-date" class="form-input" />
@@ -188,14 +283,34 @@
             </div>
         </div>
 
+        <!-- L3: Per-event task checklist -->
+        <details id="checklist-section" style="text-align: left; margin-bottom: 15px;">
+            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9rem; padding: 4px 0; user-select: none;">Checklist</summary>
+            <div id="checklist-items" style="margin-top: 8px;"></div>
+            <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+                <input type="text" id="checklist-new-item" class="form-input" placeholder="Add checklist item..." style="margin-bottom: 0;" />
+                <button id="checklist-add-btn" class="accept-btn" style="flex: 0; padding: 10px 14px; white-space: nowrap;">Add</button>
+            </div>
+        </details>
+
         <select id="event-timeline" class="form-input"></select>
         
         <p id="event-modal-error" class="hidden" style="color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></p>
         <p id="conflict-warning" class="hidden" style="color: var(--danger); font-size: 0.85rem; margin-bottom: 10px;"></p>
         
+        <p id="save-template-feedback" class="hidden" style="color: #10b981; font-size: 0.85rem; margin-bottom: 6px;"></p>
         <div class="modal-actions">
           <button id="duplicate-event-btn" class="delete-btn hidden" style="background: var(--accent);">⧉ Duplicate</button>
+          <!-- M3: Save as Template — only visible when editing an existing event -->
+          <button id="save-template-btn" class="delete-btn hidden" style="background: var(--border); color: var(--text-main);">📋 Save as Template</button>
           <button id="delete-event-btn" class="delete-btn hidden">Delete</button>
+          <!-- Task Board — only visible when editing an existing event -->
+          <button id="add-to-taskboard-btn" class="delete-btn hidden"
+            style="background: var(--border);">
+            Add to Task Board
+          </button>
+          <!-- H4: Skip this occurrence — only visible on recurring events opened from a specific instance -->
+          <button id="skip-occurrence-btn" class="delete-btn hidden" style="background: var(--border);">Skip Date</button>
           <button id="cancel-event-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
           <button id="save-event-btn" class="accept-btn">Save</button>
         </div>
@@ -228,6 +343,14 @@
             <span>Onboarding</span>
             <button id="replay-onboarding-btn" class="primary-btn">Replay</button>
         </div>
+        <!-- M4: Daily agenda startup toggle -->
+        <div class="setting-item">
+            <span>Daily Agenda on Startup</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="daily-agenda-toggle">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
         <div class="setting-item">
             <span>Week Starts On</span>
             <select id="week-start-select" class="form-input" style="margin-bottom:0;">
@@ -246,6 +369,8 @@
             <code>/</code><span>Focus search</span>
             <code>Ctrl+Z</code><span>Undo</span>
             <code>Ctrl+Shift+Z</code><span>Redo</span>
+            <code>F</code><span>Focus mode</span>
+            <code>Del/Bksp</code><span>Delete selected events</span>
           </div>
         </details>
         <div class="setting-item">
@@ -296,6 +421,27 @@
     
     <div class="fab-container">
       <button id="settings-btn" class="fab" title="Settings">⚙️</button>
+    </div>
+
+    <!-- L2: Focus Mode fullscreen overlay (z-index 9000, below modals at 2000 is intentional — modals still appear on top) -->
+    <div id="focus-overlay" class="hidden">
+      <div class="focus-header">
+        <h2 class="focus-title">Focus Mode</h2>
+        <button id="focus-close-btn" class="focus-close" title="Exit (Esc)">×</button>
+      </div>
+      <div class="focus-body">
+        <div class="focus-left">
+          <h3 class="focus-section-title">Today's Events</h3>
+          <div id="focus-event-list"></div>
+        </div>
+        <div class="focus-right">
+          <div class="focus-timer-display" id="focus-timer-display">00:00</div>
+          <div class="focus-timer-controls">
+            <button id="focus-mode-toggle" class="primary-btn">Pomodoro 25:00</button>
+            <button id="focus-timer-reset" class="delete-btn" style="background:var(--border);color:var(--text-main);">Reset</button>
+          </div>
+        </div>
+      </div>
     </div>
   </body>
 </html>

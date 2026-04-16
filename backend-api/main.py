@@ -22,13 +22,16 @@ from sqlalchemy.exc import OperationalError
 from pypdf import PdfReader
 import shutil
 import hashlib
-from database.database import SessionLocal, engine, create_db_and_tables, run_migrations
+from database.database import SessionLocal, engine, create_db_and_tables, run_migrations, migrate_todo_to_task
 from database import models
 
-# Run migrations FIRST (adds missing columns to existing DB)
+# Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
 
-# Then create any brand-new tables
+# Drop legacy todo table and create task table if needed
+migrate_todo_to_task()
+
+# Then create any brand-new tables (including task)
 create_db_and_tables()
 
 app = FastAPI(title="Loom Backend API")
@@ -172,13 +175,51 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
     db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
     if not db_event:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail={"error": {"code": "not_found", "detail": "Event not found"}}
         )
-    
+
     db.delete(db_event)
     db.commit()
     return {"status": "success", "message": "Event deleted"}
+
+# H4: Pydantic model for skip-date request body
+class SkipDateRequest(BaseModel):
+    date: str
+
+@app.post("/events/{event_id}/skip-date")
+def skip_event_date(event_id: int, body: SkipDateRequest, db: Session = Depends(get_db)):
+    """Append a YYYY-MM-DD date to skipped_dates for a recurring event."""
+    db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not db_event:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Event not found"}}
+        )
+    existing = db_event.skipped_dates or ""
+    dates = [d for d in existing.split(",") if d]
+    if body.date not in dates:
+        dates.append(body.date)
+    db_event.skipped_dates = ",".join(dates)
+    db.commit()
+    db.refresh(db_event)
+    return {"status": "success", "skipped_dates": db_event.skipped_dates}
+
+@app.delete("/events/{event_id}/skip-date")
+def unskip_event_date(event_id: int, body: SkipDateRequest, db: Session = Depends(get_db)):
+    """Remove a previously skipped date from a recurring event."""
+    db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not db_event:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Event not found"}}
+        )
+    existing = db_event.skipped_dates or ""
+    dates = [d for d in existing.split(",") if d and d != body.date]
+    db_event.skipped_dates = ",".join(dates) if dates else None
+    db.commit()
+    db.refresh(db_event)
+    return {"status": "success", "skipped_dates": db_event.skipped_dates}
 
 # ==========================================
 # INTEGRATION ROUTES
@@ -555,7 +596,141 @@ def process_intent(request: IntentRequest, db: Session = Depends(get_db)):
         logging.error(f'Intent processing failed: {e}')
         raise HTTPException(status_code=500,
             detail={'error': {'code': 'intent_failed', 'detail': str(e)}})
-        
+
+# ==========================================
+# EVENT TEMPLATE ROUTES (M3)
+# ==========================================
+
+@app.post("/templates/", response_model=models.EventTemplateRead)
+def create_template(template: models.EventTemplateCreate, db: Session = Depends(get_db)):
+    try:
+        db_template = models.EventTemplate.model_validate(template)
+        db.add(db_template)
+        db.commit()
+        db.refresh(db_template)
+        return db_template
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "template_create_failed", "detail": str(e)}})
+
+@app.get("/templates/", response_model=list[models.EventTemplateRead])
+def list_templates(db: Session = Depends(get_db)):
+    return db.query(models.EventTemplate).all()
+
+@app.delete("/templates/{template_id}")
+def delete_template(template_id: int, db: Session = Depends(get_db)):
+    db_template = db.query(models.EventTemplate).filter(models.EventTemplate.id == template_id).first()
+    if not db_template:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "template_not_found", "detail": f"Template {template_id} does not exist."}})
+    db.delete(db_template)
+    db.commit()
+    return {"status": "success"}
+
+# ==========================================
+# SCHEDULE WELLNESS ANALYSIS (M2)
+# ==========================================
+
+class ScheduleEvent(BaseModel):
+    title: str
+    start_time: str
+    end_time: str
+
+class ScheduleAnalyzeRequest(BaseModel):
+    events: list[ScheduleEvent]
+
+@app.post("/schedule/analyze")
+def analyze_schedule(request: ScheduleAnalyzeRequest):
+    try:
+        sorted_events = sorted(request.events, key=lambda e: e.start_time)
+        schedule_text = "\n".join(
+            f"{e.start_time[11:16]}-{e.end_time[11:16]}: {e.title}"
+            for e in sorted_events
+        )
+        prompt = (
+            "You are a wellness assistant reviewing a daily schedule.\n"
+            f"Schedule:\n{schedule_text}\n"
+            "Identify any of these issues (only if clearly present):\n\n"
+            "No meal break (no 30+ min gap between 11am-2pm)\n"
+            "Back-to-back events with no buffer (events end and start within 5 minutes)\n"
+            "No commute time before first event if it starts before 9am\n"
+            "No break in 4+ consecutive hours of events\n\n"
+            "Respond ONLY as a JSON array of short warning strings (max 12 words each).\n"
+            "If no issues found, respond with: []\n"
+            'Example: ["No lunch break planned between 11am and 2pm"]'
+        )
+        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+        content = response['message']['content'].strip()
+        match = re.search(r'\[.*\]', content, re.DOTALL)
+        if match:
+            warnings = json.loads(match.group(0))
+            return {"warnings": warnings}
+        return {"warnings": []}
+    except Exception as e:
+        logger.warning(f"Schedule analysis failed: {str(e)}")
+        return {"warnings": []}
+
+# ==========================================
+# TASK ROUTES (replaces M1 Todo)
+# ==========================================
+
+class TaskCreate(BaseModel):
+    event_id: int
+    note: Optional[str] = None
+
+class TaskUpdate(BaseModel):
+    is_complete: bool
+    note: Optional[str] = None
+
+@app.post("/tasks/", response_model=models.TaskRead)
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+    # Idempotent — return existing task if this event is already pinned
+    existing = db.query(models.Task).filter(models.Task.event_id == task.event_id).first()
+    if existing:
+        return existing
+    try:
+        db_task = models.Task(
+            event_id=task.event_id,
+            note=task.note,
+            is_complete=False,
+            added_at=datetime.now().isoformat()
+        )
+        db.add(db_task)
+        db.commit()
+        db.refresh(db_task)
+        return db_task
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "task_create_failed", "detail": str(e)}})
+
+@app.get("/tasks/", response_model=list[models.TaskRead])
+def list_tasks(db: Session = Depends(get_db)):
+    return db.query(models.Task).all()
+
+@app.put("/tasks/{task_id}", response_model=models.TaskRead)
+def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "task_not_found", "detail": f"Task {task_id} does not exist."}})
+    db_task.is_complete = task.is_complete
+    db_task.note = task.note
+    db.commit()
+    db.refresh(db_task)
+    return db_task
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "task_not_found", "detail": f"Task {task_id} does not exist."}})
+    db.delete(db_task)
+    db.commit()
+    return {"status": "success"}
+
 # ==========================================
 # TRANSCRIPTION ROUTE
 # ==========================================

@@ -41,7 +41,11 @@ def run_migrations():
                 "unique_description": "VARCHAR",
                 "reminder_minutes": "INTEGER",
                 "external_uid": "VARCHAR",
-                "timezone": "VARCHAR DEFAULT 'local'"
+                "timezone": "VARCHAR DEFAULT 'local'",
+                "is_all_day": "INTEGER DEFAULT 0",
+                "skipped_dates": "TEXT",
+                "per_day_times": "TEXT",
+                "checklist": "TEXT"
             }
             
             for col_name, col_type in new_columns.items():
@@ -51,5 +55,23 @@ def run_migrations():
             
         except Exception as e:
             logging.error(f"Migration error on event table: {e}")
-            
+
     logging.info("Migration check complete.")
+
+def migrate_todo_to_task():
+    """
+    Migrates the old standalone 'todo' table to the new event-linked 'task' table.
+    Drops the todo table if it exists (data is not preserved — todos were
+    standalone records not linked to events in most cases).
+    Creates the task table via SQLModel create_all if it does not exist.
+    This function is idempotent — safe to run on every startup.
+    """
+    with engine.connect() as conn:
+        # Check if old todo table exists
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='todo'"))
+        if result.fetchone():
+            conn.execute(text("DROP TABLE todo"))
+            conn.commit()
+            import logging
+            logging.info("Migration: dropped legacy 'todo' table.")
+    # SQLModel create_all will create the new 'task' table on next startup

@@ -8,6 +8,25 @@ let onboardingStep = 0;
 const ONBOARD_STEPS = 3;
 let activeReminders = {};
 let currentEventTimezone = 'local'; 
+let lastSyncTime = null;
+let syncIntervalId = null;
+let syncState = 'ok'; // L5: tracks last sync outcome to prevent stale display
+let selectedEventIds = new Set(); // H1: multi-select for bulk operations
+let doubleClickTimers = {}; // H1: per-event double-click detection map
+let focusIntervals = []; // L2: all setInterval IDs created by focus mode (cleared on close)
+let agendaTimeout = null; // M4: auto-dismiss timer handle
+let firstLoadDone = false; // M4: show daily agenda only after the very first data load
+let focusMode = 'session'; // L2: 'session' (count-up) | 'pomodoro' (countdown)
+let focusStartTime = null; // L2: epoch ms when session timer started
+let pomodoroSecondsLeft = 25 * 60; // L2: countdown state
+let currentChecklist = []; // L3: in-memory checklist for the event currently open in the modal
+let currentTasks = []; // Task Board: in-memory task list (replaces M1 todos)
+let currentTaskFilter = 'all'; // Task Board: current filter state
+let analyzeDebounceTimer = null; // M2: debounce handle for schedule analysis
+let drawerOpen = false; // L1: track drawer open state for layout management
+
+// H5: day-of-week index to abbreviation
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') scheduleReminders();
@@ -49,6 +68,40 @@ function updateUndoRedoButtons() {
 }
 
 // ==========================================
+// SYNC STATUS INDICATOR (L5)
+// ==========================================
+function updateSyncStatus(state) {
+    const el = document.getElementById('sync-status');
+    if (!el) return;
+    syncState = state;
+    if (state === 'ok') {
+        lastSyncTime = new Date();
+        el.style.color = 'var(--text-muted)';
+        updateSyncTimeDisplay();
+    } else {
+        el.textContent = 'Sync failed';
+        el.style.color = 'var(--danger)';
+    }
+    // Start the 30-second relative-time refresh if not already running
+    if (!syncIntervalId) {
+        syncIntervalId = setInterval(updateSyncTimeDisplay, 30000);
+    }
+}
+
+function updateSyncTimeDisplay() {
+    // Only update text when last sync was successful
+    if (syncState !== 'ok' || !lastSyncTime) return;
+    const el = document.getElementById('sync-status');
+    if (!el) return;
+    const diffSec = Math.floor((Date.now() - lastSyncTime.getTime()) / 1000);
+    let rel;
+    if (diffSec < 10) rel = 'just now';
+    else if (diffSec < 60) rel = `${diffSec}s ago`;
+    else rel = `${Math.floor(diffSec / 60)}m ago`;
+    el.textContent = `Synced ${rel}`;
+}
+
+// ==========================================
 // SIDEBAR STATE & SHARED LOGIC
 // ==========================================
 let sidebarMode = "normal"; // "normal" | "search" | "approval" | "export"
@@ -60,12 +113,18 @@ function updateSidebarMode(mode) {
     const searchResults = document.getElementById('sidebar-search-results');
     const approvalPanel = document.getElementById('sidebar-approval-panel');
     const exportPanel = document.getElementById('sidebar-export-panel');
-    
+    const statsPanel = document.getElementById('sidebar-stats-panel'); // M5
+    const templatesPanel = document.getElementById('sidebar-templates-panel'); // M3
+    const taskboardPanel = document.getElementById('sidebar-taskboard-panel'); // Task Board
+
     mainSections.forEach(el => el.classList.add('hidden'));
     searchResults.classList.add('hidden');
     approvalPanel.classList.add('hidden');
     exportPanel.classList.add('hidden');
-    
+    if (statsPanel) statsPanel.classList.add('hidden'); // M5
+    if (templatesPanel) templatesPanel.classList.add('hidden'); // M3
+    if (taskboardPanel) taskboardPanel.classList.add('hidden'); // Task Board
+
     if (mode === "normal") {
         mainSections.forEach(el => el.classList.remove('hidden'));
     } else if (mode === "search") {
@@ -74,6 +133,12 @@ function updateSidebarMode(mode) {
         approvalPanel.classList.remove('hidden');
     } else if (mode === "export") {
         exportPanel.classList.remove('hidden');
+    } else if (mode === "stats") { // M5
+        if (statsPanel) statsPanel.classList.remove('hidden');
+    } else if (mode === "templates") { // M3
+        if (templatesPanel) templatesPanel.classList.remove('hidden');
+    } else if (mode === "taskboard") { // Task Board
+        if (taskboardPanel) taskboardPanel.classList.remove('hidden');
     }
 }
 
@@ -220,12 +285,41 @@ document.addEventListener('DOMContentLoaded', async function() {
       editable: true, // Enables drag & drop / resize
       eventResizableFromStart: true, // NEW: Enables resizing from the start edge
       droppable: true, // NEW: Enables external/internal dropping capabilities
+      selectable: true, // H1: enable drag-select across the grid to create events
       headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
       height: '100%',
       events: [],
+
+      // H1: drag-select across grid → open new event modal for that range
+      select: function(info) {
+        openEventModal(null, info.startStr);
+        calendarInstance.unselect();
+      },
+
+      // H1: single click = select/deselect; double click (200ms) = open modal
       eventClick: function(info) {
-        const rawEvent = currentEvents.find(e => e.id == info.event.id);
-        openEventModal(rawEvent || info.event);
+        const id = parseInt(info.event.id);
+        if (doubleClickTimers[id]) {
+          // Second click within 200ms → open modal
+          clearTimeout(doubleClickTimers[id]);
+          delete doubleClickTimers[id];
+          const rawEvent = currentEvents.find(e => e.id == id);
+          // H4: pass the specific instance start so skip-occurrence knows which date
+          openEventModal(rawEvent || info.event, null, info.event.start);
+          return;
+        }
+        // First click → wait to see if a second click follows
+        doubleClickTimers[id] = setTimeout(() => {
+          delete doubleClickTimers[id];
+          // Toggle selection: add/remove class and track in set (single-click = select)
+          if (selectedEventIds.has(id)) {
+            selectedEventIds.delete(id);
+            info.el.classList.remove('fc-event-selected');
+          } else {
+            selectedEventIds.add(id);
+            info.el.classList.add('fc-event-selected');
+          }
+        }, 200);
       },
       dateClick: function(info) { openEventModal(null, info.dateStr); },
       
@@ -404,6 +498,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     bindTimelineDropdowns();
     await loadData();
     setupEventListeners();
+    initAppDrawer(); // L1: must be called last — references DOM elements also touched by setupEventListeners
     if (!localStorage.getItem('loom-onboarded')) {
         setTimeout(() => document.getElementById('onboarding-modal').classList.remove('hidden'), 600);
     }
@@ -455,14 +550,21 @@ function showReminder(event) {
   });
 }
 async function loadData() {
+    let syncSuccess = true;
+    
     try {
         const calResponse = await fetch(`${API_URL}/calendars/`);
         if (calResponse.ok) {
             currentTimelines = await calResponse.json();
             renderSidebar(currentTimelines);
             ['event-timeline', 'ics-timeline-select', 'approval-timeline-select'].forEach(id => populateTimelineDropdown(document.getElementById(id)));
+        } else {
+            syncSuccess = false;
         }
-    } catch (error) { console.error("Failed to load timelines:", error); }
+    } catch (error) { 
+        console.error("Failed to load timelines:", error); 
+        syncSuccess = false; 
+    }
 
     try {
         const evResponse = await fetch(`${API_URL}/events/`);
@@ -473,12 +575,35 @@ async function loadData() {
             if (sidebarMode === "search") showSidebarSearchResults(searchTerm);
         } else {
             renderCalendarEvents("");
+            syncSuccess = false;
         }
-    } catch (error) { console.error("Failed to load events:", error); }
+    } catch (error) { 
+        console.error("Failed to load events:", error); 
+        syncSuccess = false; 
+    }
 
     isLoading = false; // Disable loading flag
     updateEmptyStates(); // Update states now that data is fetched
-    scheduleReminders(); // NEW: Re-evaluate notifications after data sync   
+    scheduleReminders(); // Re-evaluate notifications after data sync
+
+    if (syncSuccess) {
+        updateSyncStatus('ok');
+    } else {
+        updateSyncStatus('error');
+    }
+
+    // M4: show daily agenda overlay only on the very first successful load
+    if (!firstLoadDone) {
+        firstLoadDone = true;
+        if (syncSuccess) showDailyAgenda();
+    }
+
+    // M2: debounced schedule analysis — prevents spamming Ollama on rapid loadData() calls
+    clearTimeout(analyzeDebounceTimer);
+    analyzeDebounceTimer = setTimeout(runScheduleAnalysis, 500);
+
+    // Task Board: keep task list fresh after every data reload
+    loadTasks();
 }
 
 // ==========================================
@@ -493,30 +618,68 @@ function renderSidebar(timelines) {
         li.className = "sidebar-item";
         const safeColor = timeline.color || "#6366f1";
 
+        // H3: delete btn visible by default (checkbox starts checked); hidden on uncheck
         li.innerHTML = `
             <input type="checkbox" class="timeline-checkbox" data-id="${timeline.id}" checked>
             <input type="color" class="timeline-color-picker" data-id="${timeline.id}" value="${safeColor}" title="Change timeline color">
-            <span class="timeline-name">${timeline.name}</span>
+            <span class="timeline-name" data-id="${timeline.id}" title="Double-click to rename">${timeline.name}</span>
             <button class="delete-timeline-btn delete-btn-action" data-id="${timeline.id}">×</button>
         `;
         listElement.appendChild(li);
-    });
 
-    document.querySelectorAll('.timeline-checkbox').forEach(box => {
-        box.addEventListener('change', () => {
+        const checkbox = li.querySelector('.timeline-checkbox');
+        const deleteBtn = li.querySelector('.delete-timeline-btn');
+        const nameSpan = li.querySelector('.timeline-name');
+        const colorPicker = li.querySelector('.timeline-color-picker');
+
+        // H3: toggle delete button visibility based on checkbox state
+        checkbox.addEventListener('change', () => {
+            deleteBtn.style.display = checkbox.checked ? '' : 'none';
             const searchTerm = document.getElementById("event-search")?.value.toLowerCase() || "";
             renderCalendarEvents(searchTerm);
         });
-    });
 
-    document.querySelectorAll('.timeline-color-picker').forEach(picker => {
-        picker.addEventListener('change', async (e) => {
-            const id = e.target.getAttribute('data-id');
-            const timeline = currentTimelines.find(t => t.id === parseInt(id));
-            if (timeline) {
+        // H3: double-click timeline name to rename inline; PUT on blur/Enter
+        nameSpan.addEventListener('dblclick', () => {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = timeline.name;
+            input.className = 'timeline-rename-input';
+            nameSpan.replaceWith(input);
+            input.focus();
+            input.select();
+
+            const saveRename = async () => {
+                const newName = input.value.trim();
+                if (newName && newName !== timeline.name) {
+                    try {
+                        const payload = { name: newName, description: timeline.description || '', color: safeColor };
+                        const res = await fetch(`${API_URL}/calendars/${timeline.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (res.ok) { await loadData(); return; }
+                    } catch { /* fall through to revert */ }
+                }
+                // Revert on cancel or error
+                input.replaceWith(nameSpan);
+            };
+
+            input.addEventListener('blur', saveRename);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { input.removeEventListener('blur', saveRename); input.replaceWith(nameSpan); }
+            });
+        });
+
+        // Color picker: PUT updated color
+        colorPicker.addEventListener('change', async (e) => {
+            const t = currentTimelines.find(t => t.id === timeline.id);
+            if (t) {
                 try {
-                    const payload = { name: timeline.name, description: timeline.description, color: e.target.value };
-                    const response = await fetch(`${API_URL}/calendars/${id}`, { method: 'PUT', headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+                    const payload = { name: t.name, description: t.description, color: e.target.value };
+                    const response = await fetch(`${API_URL}/calendars/${timeline.id}`, { method: 'PUT', headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
                     if (response.ok) await loadData();
                 } catch (err) { console.error("Network error saving color:", err); }
             }
@@ -526,38 +689,103 @@ function renderSidebar(timelines) {
     updateEmptyStates();
 }
 
+// ==========================================
+// MAP EVENT — H5: extracted so per-day-times can return an array
+// ==========================================
+function mapEvent(event) {
+    const parentTimeline = currentTimelines.find(t => t.id === event.calendar_id);
+    const timelineColor = (parentTimeline && parentTimeline.color) ? parentTimeline.color : "#6366f1";
+
+    // L3: build display title with checklist badge if applicable
+    let displayTitle = event.title;
+    if (event.checklist) {
+        try {
+            const items = JSON.parse(event.checklist);
+            if (items.length > 0) {
+                const doneCount = items.filter(i => i.done).length;
+                displayTitle = `${event.title} (${doneCount}/${items.length})`;
+            }
+        } catch { /* malformed JSON — use raw title */ }
+    }
+
+    // H2: all-day / multi-day events — pass date-only strings; end is exclusive in FC
+    if (event.is_all_day) {
+        const startDate = event.start_time.split('T')[0];
+        const endDateRaw = event.end_time.split('T')[0];
+        // FullCalendar all-day end is exclusive — add one day
+        const endDt = new Date(endDateRaw + 'T00:00:00');
+        endDt.setDate(endDt.getDate() + 1);
+        const endDate = endDt.toISOString().split('T')[0];
+        return {
+            id: event.id, title: displayTitle,
+            start: startDate, end: endDate,
+            allDay: true,
+            backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
+            extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
+        };
+    }
+
+    if (event.is_recurring) {
+        const startDate = new Date(event.start_time);
+        const endDate = new Date(event.end_time);
+
+        // H5: per_day_times set — expand into one FC object per day key
+        if (event.per_day_times) {
+            try {
+                const perDayMap = JSON.parse(event.per_day_times);
+                const results = Object.entries(perDayMap).map(([dayNum, [startTime, endTime]]) => ({
+                    id: `${event.id}-day${dayNum}`,
+                    title: displayTitle,
+                    daysOfWeek: [parseInt(dayNum)],
+                    startTime, endTime,
+                    startRecur: event.start_time.split('T')[0],
+                    endRecur: event.recurrence_end,
+                    backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
+                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description, parent_id: event.id }
+                }));
+                if (results.length > 0) return results;
+            } catch { /* fall through to default recurring render */ }
+        }
+
+        let evtObj = {
+            id: event.id, title: displayTitle,
+            daysOfWeek: event.recurrence_days ? event.recurrence_days.split(',').map(Number) : [],
+            startTime: startDate.toTimeString().substring(0, 5),
+            endTime: endDate.toTimeString().substring(0, 5),
+            startRecur: event.start_time.split('T')[0], endRecur: event.recurrence_end,
+            backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
+            extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description }
+        };
+        // H4: pass skipped dates as exdate so FC omits those instances
+        if (event.skipped_dates) {
+            const skipped = event.skipped_dates.split(',').filter(d => d.trim());
+            if (skipped.length > 0) evtObj.exdate = skipped;
+        }
+        if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
+        return evtObj;
+    }
+
+    // Standard single-instance event
+    let evtObj = {
+        id: event.id, title: displayTitle, start: event.start_time, end: event.end_time,
+        backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
+        extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
+    };
+    if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
+    return evtObj;
+}
+
 function renderCalendarEvents(searchTerm = "") {
     calendarInstance.removeAllEvents();
+    selectedEventIds.clear(); // H1: reset selection on every re-render
     const activeTimelineIds = Array.from(document.querySelectorAll('.timeline-checkbox:checked')).map(cb => parseInt(cb.dataset.id));
 
     const formattedEvents = currentEvents
         .filter(event => activeTimelineIds.includes(event.calendar_id))
         .filter(event => (event.title || "").toLowerCase().includes(searchTerm))
-        .map(event => {
-            const parentTimeline = currentTimelines.find(t => t.id === event.calendar_id);
-            const timelineColor = (parentTimeline && parentTimeline.color) ? parentTimeline.color : "#6366f1";
-
-            if (event.is_recurring) {
-                const startDate = new Date(event.start_time);
-                const endDate = new Date(event.end_time);
-                let evtObj = {
-                    id: event.id, title: event.title,
-                    daysOfWeek: event.recurrence_days ? event.recurrence_days.split(',').map(Number) : [],
-                    startTime: startDate.toTimeString().substring(0, 5), endTime: endDate.toTimeString().substring(0, 5),
-                    startRecur: event.start_time.split('T')[0], endRecur: event.recurrence_end,
-                    backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description }
-                };
-                if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
-                return evtObj;
-            }
-            let evtObj = {
-                id: event.id, title: event.title, start: event.start_time, end: event.end_time,
-                backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-                extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
-            };
-            if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
-            return evtObj;
+        .flatMap(event => {
+            const r = mapEvent(event);
+            return Array.isArray(r) ? r : [r];
         });
     calendarInstance.addEventSource(formattedEvents);
 
@@ -590,6 +818,122 @@ function updateEmptyStates() {
         overlay.classList.add('hidden');
       }
   }
+}
+
+// ==========================================
+// H4: SKIP OCCURRENCE
+// ==========================================
+async function skipOccurrence(eventId, instanceDate) {
+    // Convert JS Date or ISO string to YYYY-MM-DD
+    const dateStr = instanceDate instanceof Date
+        ? instanceDate.toISOString().split('T')[0]
+        : String(instanceDate).split('T')[0];
+    await fetch(`${API_URL}/events/${eventId}/skip-date`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: dateStr })
+    });
+    // Push undo: call DELETE /skip-date to restore the skipped instance
+    pushHistory(
+        async () => {
+            await fetch(`${API_URL}/events/${eventId}/skip-date`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: dateStr })
+            });
+        },
+        async () => {
+            await fetch(`${API_URL}/events/${eventId}/skip-date`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: dateStr })
+            });
+        },
+        'Skip occurrence'
+    );
+    document.getElementById('event-modal').classList.add('hidden');
+    await loadData();
+}
+
+// ==========================================
+// H5: PER-DAY TIMES GRID
+// ==========================================
+function updatePerDayGrid(existingData = null) {
+    const tbody = document.getElementById('per-day-times-tbody');
+    if (!tbody) return;
+    const checkedDays = Array.from(document.querySelectorAll('.recur-day:checked')).map(cb => cb.value);
+    tbody.innerHTML = '';
+    checkedDays.forEach(dayNum => {
+        const defaults = existingData && existingData[dayNum] ? existingData[dayNum] : ['09:00', '10:00'];
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="padding:4px 6px;color:var(--text-muted);">${DAY_NAMES[parseInt(dayNum)]}</td>
+            <td style="padding:4px 4px;"><input type="time" class="per-day-start form-input" data-day="${dayNum}" value="${defaults[0]}" style="padding:6px;margin:0;"></td>
+            <td style="padding:4px 4px;"><input type="time" class="per-day-end form-input" data-day="${dayNum}" value="${defaults[1]}" style="padding:6px;margin:0;"></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function serializePerDayTimes() {
+    const result = {};
+    document.querySelectorAll('.per-day-start').forEach(input => {
+        const dayNum = input.dataset.day;
+        const endInput = document.querySelector(`.per-day-end[data-day="${dayNum}"]`);
+        // Only include days that are actually checked in the recurrence days picker
+        const isSelected = document.querySelector(`.recur-day[value="${dayNum}"]:checked`);
+        if (isSelected && endInput) {
+            result[dayNum] = [input.value, endInput.value];
+        }
+    });
+    return Object.keys(result).length > 0 ? JSON.stringify(result) : null;
+}
+
+// ==========================================
+// L3: CHECKLIST HELPERS
+// ==========================================
+function renderChecklist() {
+    const container = document.getElementById('checklist-items');
+    if (!container) return;
+    container.innerHTML = '';
+    currentChecklist.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'checklist-item' + (item.done ? ' checklist-item-done' : '');
+        row.innerHTML = `
+            <input type="checkbox" ${item.done ? 'checked' : ''} data-idx="${idx}" class="checklist-cb" style="accent-color:var(--accent);">
+            <span>${item.text.replace(/</g,'&lt;')}</span>
+            <button class="checklist-delete" data-idx="${idx}">×</button>
+        `;
+        row.querySelector('.checklist-cb').addEventListener('change', async (e) => {
+            currentChecklist[parseInt(e.target.dataset.idx)].done = e.target.checked;
+            renderChecklist();
+            await saveChecklistImmediate();
+        });
+        row.querySelector('.checklist-delete').addEventListener('click', async () => {
+            currentChecklist.splice(parseInt(row.querySelector('.checklist-delete').dataset.idx), 1);
+            renderChecklist();
+            await saveChecklistImmediate();
+        });
+        container.appendChild(row);
+    });
+}
+
+async function saveChecklistImmediate() {
+    const eventId = document.getElementById('event-id').value;
+    if (!eventId) return; // New event — no PUT until the user saves
+    const event = currentEvents.find(e => e.id === parseInt(eventId));
+    if (!event) return;
+    // Build a full payload from the stored event, updating only checklist
+    const payload = { ...event, checklist: currentChecklist.length > 0 ? JSON.stringify(currentChecklist) : null };
+    await fetch(`${API_URL}/events/${eventId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    // Keep currentEvents in sync so re-renders show the correct badge
+    event.checklist = payload.checklist;
+    const searchTerm = document.getElementById('event-search')?.value.toLowerCase() || '';
+    renderCalendarEvents(searchTerm);
 }
 
 // ==========================================
@@ -644,14 +988,18 @@ function showModalError(msg) {
 function clearModalError() {
   document.getElementById('event-modal-error').classList.add('hidden');
 }
-function openEventModal(existingEvent = null, clickedDate = null) {
+// H4: instanceDate — the specific FullCalendar occurrence date (for skip-occurrence)
+function openEventModal(existingEvent = null, clickedDate = null, instanceDate = null) {
     document.getElementById('event-tooltip')?.classList.add('hidden');
     document.getElementById("save-event-btn").textContent = "Save";
     document.getElementById("conflict-warning").classList.add("hidden");
     const modal = document.getElementById("event-modal");
     document.getElementById("delete-event-btn").classList.add("hidden");
     document.getElementById("duplicate-event-btn").classList.add("hidden");
-    
+    document.getElementById("save-template-btn").classList.add("hidden"); // M3
+    document.getElementById("save-template-feedback").classList.add("hidden"); // M3
+    document.getElementById("add-to-taskboard-btn").classList.add("hidden"); // Task Board
+
     const isRecurringCheckbox = document.getElementById("event-is-recurring");
     const recurrenceFields = document.getElementById("recurrence-fields");
     const singleFields = document.getElementById("single-date-fields");
@@ -662,15 +1010,40 @@ function openEventModal(existingEvent = null, clickedDate = null) {
 
     document.querySelectorAll('.recur-day').forEach(cb => cb.checked = false);
 
+    // Reset all-day, per-day, skip, and checklist state for every modal open
+    const isAllDayCheckbox = document.getElementById('event-is-allday');
+    const allDayFields = document.getElementById('allday-date-fields');
+    isAllDayCheckbox.checked = false;
+    isAllDayCheckbox.disabled = false;
+    allDayFields.classList.add('hidden');
+    document.getElementById('skip-occurrence-btn').classList.add('hidden');
+    document.getElementById('recur-per-day-toggle').checked = false;
+    document.getElementById('per-day-times-grid').classList.add('hidden');
+    document.getElementById('recur-single-time-fields').classList.remove('hidden');
+    currentChecklist = [];
+    document.getElementById('checklist-items').innerHTML = '';
+
     if (existingEvent && existingEvent.id) {
         document.getElementById("event-modal-title").innerText = "Edit Event";
         document.getElementById("event-id").value = existingEvent.id;
         document.getElementById("event-title").value = existingEvent.title;
-        
+
         const calendarId = existingEvent.calendar_id || existingEvent.extendedProps?.calendar_id;
         document.getElementById("event-timeline").value = calendarId;
         document.getElementById("delete-event-btn").classList.remove("hidden");
         document.getElementById("duplicate-event-btn").classList.remove("hidden");
+        document.getElementById("save-template-btn").classList.remove("hidden"); // M3
+        // Task Board: show button and reflect pinned state
+        const taskboardBtn = document.getElementById("add-to-taskboard-btn");
+        taskboardBtn.classList.remove("hidden");
+        const alreadyPinned = currentTasks.some(t => t.event_id === existingEvent.id);
+        if (alreadyPinned) {
+            taskboardBtn.textContent = '✓ On Task Board';
+            taskboardBtn.classList.add('on-taskboard');
+        } else {
+            taskboardBtn.textContent = 'Add to Task Board';
+            taskboardBtn.classList.remove('on-taskboard');
+        }
         
         // Update the color dot based on the timeline
         setModalTitleDot(calendarId);
@@ -698,12 +1071,23 @@ function openEventModal(existingEvent = null, clickedDate = null) {
             descDisplay.innerHTML = renderDescription(combined);
         }
 
-        if (existingEvent.is_recurring) {
+        // H2: all-day events — show date pickers, hide timed fields
+        if (existingEvent.is_all_day) {
+            isAllDayCheckbox.checked = true;
+            isAllDayCheckbox.disabled = false; // disabled only while recurring is checked
+            allDayFields.classList.remove('hidden');
+            singleFields.classList.add('hidden');
+            recurrenceFields.classList.add('hidden');
+            isRecurringCheckbox.checked = false;
+            isRecurringCheckbox.disabled = true; // all-day recurring is a future improvement
+            document.getElementById('allday-start-date').value = existingEvent.start_time.split('T')[0];
+            document.getElementById('allday-end-date').value = existingEvent.end_time.split('T')[0];
+        } else if (existingEvent.is_recurring) {
             isRecurringCheckbox.checked = true;
             recurrenceFields.classList.remove("hidden");
             singleFields.classList.add("hidden");
             uDescContainer.classList.remove("hidden");
-            
+
             if (existingEvent.recurrence_days) {
                 existingEvent.recurrence_days.split(',').forEach(d => {
                     const cb = document.querySelector(`.recur-day[value="${d}"]`);
@@ -715,6 +1099,28 @@ function openEventModal(existingEvent = null, clickedDate = null) {
             document.getElementById("recur-start-time").value = st.toTimeString().substring(0, 5);
             document.getElementById("recur-end-time").value = et.toTimeString().substring(0, 5);
             document.getElementById("recur-end-date").value = existingEvent.recurrence_end;
+
+            // H5: populate per-day toggle and grid if per_day_times is set
+            if (existingEvent.per_day_times) {
+                try {
+                    const perDayData = JSON.parse(existingEvent.per_day_times);
+                    document.getElementById('recur-per-day-toggle').checked = true;
+                    document.getElementById('per-day-times-grid').classList.remove('hidden');
+                    document.getElementById('recur-single-time-fields').classList.add('hidden');
+                    updatePerDayGrid(perDayData);
+                } catch { /* malformed — leave toggle unchecked */ }
+            }
+
+            // H4: show skip button only when opened from a specific recurring instance
+            if (instanceDate) {
+                const dateStr = instanceDate instanceof Date
+                    ? instanceDate.toISOString().split('T')[0]
+                    : String(instanceDate).split('T')[0];
+                const skipBtn = document.getElementById('skip-occurrence-btn');
+                skipBtn.classList.remove('hidden');
+                skipBtn.dataset.date = dateStr;
+                skipBtn.dataset.eventId = existingEvent.id;
+            }
         } else {
             isRecurringCheckbox.checked = false;
             recurrenceFields.classList.add("hidden");
@@ -723,6 +1129,14 @@ function openEventModal(existingEvent = null, clickedDate = null) {
             document.getElementById("event-start").value = formatForInput(existingEvent.start_time || existingEvent.start);
             document.getElementById("event-end").value = formatForInput(existingEvent.end_time || existingEvent.end);
         }
+
+        // L3: parse and render checklist
+        if (existingEvent.checklist) {
+            try { currentChecklist = JSON.parse(existingEvent.checklist); } catch { currentChecklist = []; }
+        } else {
+            currentChecklist = [];
+        }
+        renderChecklist();
     } else {
         document.getElementById("event-modal-title").innerText = "New Event";
         document.getElementById("event-id").value = "";
@@ -792,6 +1206,54 @@ document.getElementById("event-is-recurring").addEventListener("change", (e) => 
         document.getElementById("single-date-fields").classList.remove("hidden");
         document.getElementById("unique-desc-container").classList.add("hidden");
     }
+});
+
+// H2: all-day checkbox — toggles between date-pickers and normal timed fields
+document.getElementById("event-is-allday").addEventListener("change", (e) => {
+    const allDayFields = document.getElementById("allday-date-fields");
+    const singleFields = document.getElementById("single-date-fields");
+    const recurringCb = document.getElementById("event-is-recurring");
+    const recurrenceFields = document.getElementById("recurrence-fields");
+    if (e.target.checked) {
+        allDayFields.classList.remove("hidden");
+        singleFields.classList.add("hidden");
+        recurrenceFields.classList.add("hidden");
+        // all-day recurring is a future improvement — disable recurring while all-day is active
+        recurringCb.checked = false;
+        recurringCb.disabled = true;
+    } else {
+        allDayFields.classList.add("hidden");
+        recurringCb.disabled = false;
+        // Restore the appropriate timed fields
+        if (recurringCb.checked) {
+            recurrenceFields.classList.remove("hidden");
+        } else {
+            singleFields.classList.remove("hidden");
+        }
+    }
+});
+
+// H5: per-day toggle — switches between single time pair and per-day grid
+document.getElementById("recur-per-day-toggle").addEventListener("change", (e) => {
+    const perDayGrid = document.getElementById("per-day-times-grid");
+    const singleTimeFields = document.getElementById("recur-single-time-fields");
+    if (e.target.checked) {
+        perDayGrid.classList.remove("hidden");
+        singleTimeFields.classList.add("hidden");
+        updatePerDayGrid(); // build rows from currently checked days
+    } else {
+        perDayGrid.classList.add("hidden");
+        singleTimeFields.classList.remove("hidden");
+    }
+});
+
+// H5: when recurrence day checkboxes change, keep per-day grid in sync
+document.querySelectorAll('.recur-day').forEach(cb => {
+    cb.addEventListener('change', () => {
+        if (document.getElementById('recur-per-day-toggle').checked) {
+            updatePerDayGrid();
+        }
+    });
 });
 
 document.getElementById("event-description").addEventListener("input", handleMentions);
@@ -1067,30 +1529,25 @@ document.getElementById("export-confirm-btn").addEventListener("click", async ()
     }
 });
 
-async function submitQuickAdd() {
-    const input = document.getElementById("quick-add-input");
-    const btn = document.getElementById("quick-add-btn");
-    const text = input.value.trim();
-    
-    if (!text) {
-        input.focus();
-        return;
-    }
+// H6: accepts text directly (unified search + quick-add; standalone bar removed)
+async function submitQuickAdd(text) {
+    if (!text || !text.trim()) return;
+    const trimmedText = text.trim();
 
-    btn.disabled = true;
-    btn.textContent = "...";
+    const btn = document.getElementById("search-quick-add-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "..."; }
 
     try {
         const response = await fetch(`${API_URL}/intent`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: text })
+            body: JSON.stringify({ text: trimmedText })
         });
 
         if (!response.ok) throw new Error("Failed to process intent");
         const data = await response.json();
-        
-        // NEW: Push to Undo/Redo Stack
+
+        // Push to Undo/Redo Stack
         if (data.event_id) {
             pushHistory(
                 async () => {
@@ -1102,14 +1559,17 @@ async function submitQuickAdd() {
                     await fetch(`${API_URL}/intent`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: text }),
+                        body: JSON.stringify({ text: trimmedText }),
                     });
                 },
                 'Quick Add Event'
             );
         }
 
-        input.value = "";
+        // Clear search input and hide + button after successful add
+        const searchInput = document.getElementById("event-search");
+        if (searchInput) searchInput.value = "";
+        if (btn) btn.classList.add('hidden');
         await loadData();
     } catch (err) {
         const errEl = document.getElementById("import-error");
@@ -1117,10 +1577,716 @@ async function submitQuickAdd() {
         errEl.classList.remove("hidden");
         setTimeout(() => errEl.classList.add("hidden"), 3000);
     } finally {
-        btn.disabled = false;
-        btn.textContent = "+";
+        if (btn) { btn.disabled = false; btn.textContent = "+"; }
     }
 }
+// ==========================================
+// DAILY AGENDA OVERLAY (M4)
+// ==========================================
+function showDailyAgenda() {
+    // Respect the user's setting (defaults to enabled)
+    if (localStorage.getItem('loom-daily-agenda') === 'false') return;
+
+    const today = new Date().toISOString().split('T')[0];
+    const todayEvents = currentEvents
+        .filter(ev => !ev.is_recurring && ev.start_time && ev.start_time.startsWith(today))
+        .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+    if (todayEvents.length === 0) return;
+
+    const container = document.getElementById('calendar-container');
+    const overlay = document.createElement('div');
+    overlay.id = 'daily-agenda-overlay';
+
+    const listHtml = todayEvents.map(ev => {
+        const time = new Date(ev.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<div class="agenda-item"><span class="agenda-time">${time}</span><span>${ev.title}</span></div>`;
+    }).join('');
+
+    overlay.innerHTML = `
+        <div class="agenda-header">
+            <span>Today's Agenda (${todayEvents.length})</span>
+            <button class="agenda-dismiss-btn" title="Dismiss">×</button>
+        </div>
+        <div class="agenda-list">${listHtml}</div>
+    `;
+
+    container.appendChild(overlay);
+
+    const dismiss = () => {
+        overlay.remove();
+        if (agendaTimeout) { clearTimeout(agendaTimeout); agendaTimeout = null; }
+    };
+
+    overlay.addEventListener('click', dismiss);
+    // Auto-dismiss after 3 seconds
+    agendaTimeout = setTimeout(dismiss, 3000);
+}
+
+// ==========================================
+// USAGE STATISTICS PANEL (M5)
+// ==========================================
+function openStatsPanel() {
+    if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
+        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
+        document.getElementById('sidebar-toggle').textContent = "‹";
+    }
+    updateSidebarMode("stats");
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    // Events this month (non-recurring only for accurate counts)
+    const monthEvents = currentEvents.filter(ev => {
+        if (ev.is_recurring) return false;
+        const d = new Date(ev.start_time);
+        return d >= monthStart && d <= monthEnd;
+    });
+
+    // Hours per timeline this month (CSS bar chart — no library)
+    const hoursByTimeline = {};
+    monthEvents.forEach(ev => {
+        const tl = currentTimelines.find(t => t.id === ev.calendar_id);
+        const name = tl ? tl.name : 'Unknown';
+        const color = tl ? (tl.color || '#6366f1') : '#6366f1';
+        if (!hoursByTimeline[name]) hoursByTimeline[name] = { hours: 0, color };
+        const start = new Date(ev.start_time);
+        const end = new Date(ev.end_time);
+        hoursByTimeline[name].hours += (end - start) / 3_600_000;
+    });
+
+    // Busiest weekday across all non-recurring events
+    const dayCount = [0, 0, 0, 0, 0, 0, 0];
+    currentEvents.filter(ev => !ev.is_recurring).forEach(ev => {
+        dayCount[new Date(ev.start_time).getDay()]++;
+    });
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const busiestIdx = dayCount.indexOf(Math.max(...dayCount));
+    const busiestDay = dayCount[busiestIdx] > 0 ? dayNames[busiestIdx] : 'N/A';
+
+    const maxHours = Math.max(...Object.values(hoursByTimeline).map(v => v.hours), 1);
+    const barsHtml = Object.entries(hoursByTimeline).map(([name, { hours, color }]) => {
+        const pct = Math.round((hours / maxHours) * 100);
+        return `
+            <div class="stats-bar-row">
+                <span class="stats-bar-label" title="${name}">${name}</span>
+                <div class="stats-bar-track">
+                    <div class="stats-bar-fill" style="width:${pct}%;background:${color}"></div>
+                </div>
+                <span class="stats-bar-value">${hours.toFixed(1)}h</span>
+            </div>`;
+    }).join('') || '<p class="muted-text" style="font-size:0.85rem;margin-top:6px">No timed events this month.</p>';
+
+    document.getElementById('stats-content').innerHTML = `
+        <div class="stats-metric">
+            <span class="stats-label">Events this month</span>
+            <span class="stats-value">${monthEvents.length}</span>
+        </div>
+        <div class="stats-metric">
+            <span class="stats-label">Busiest weekday</span>
+            <span class="stats-value">${busiestDay}</span>
+        </div>
+        <div style="margin-top:12px;">
+            <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">Hours per timeline (this month)</p>
+            ${barsHtml}
+        </div>`;
+}
+
+// ==========================================
+// PRINT WEEK VIEW (L4)
+// ==========================================
+function openPrintView() {
+    const view = calendarInstance.view;
+    const start = view.activeStart;
+    const end = view.activeEnd;
+
+    // Skip recurring events — accurate expansion requires complex RRULE logic
+    const weekEvents = currentEvents.filter(ev => {
+        if (ev.is_recurring) return false; // Recurring events skipped in print view
+        const d = new Date(ev.start_time);
+        return d >= start && d < end;
+    });
+
+    // Build one column per day in the current view range
+    const days = [];
+    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+        days.push(new Date(d));
+    }
+
+    const dayColsHtml = days.map(day => {
+        const dayStr = day.toISOString().split('T')[0];
+        const dayEvents = weekEvents
+            .filter(ev => ev.start_time.startsWith(dayStr))
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+        const evHtml = dayEvents.map(ev => {
+            const tl = currentTimelines.find(t => t.id === ev.calendar_id);
+            const color = tl ? (tl.color || '#6366f1') : '#6366f1';
+            const timeStr = new Date(ev.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return `<div style="border-left:3px solid ${color};padding:4px 8px;margin:4px 0;background:#f9f9f9;border-radius:3px;">
+                <strong style="font-size:0.85rem">${ev.title}</strong><br>
+                <small style="color:#666">${timeStr}</small>
+            </div>`;
+        }).join('');
+
+        const label = day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        return `<div class="print-day">
+            <div class="print-day-header">${label}</div>
+            ${evHtml || '<p style="color:#888;font-size:0.8rem;padding:4px 8px;margin:0">No events</p>'}
+        </div>`;
+    }).join('');
+
+    const rangeLabel = start.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+        + ' – ' + new Date(end - 1).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    const html = `<!DOCTYPE html><html><head><title>Loom Week</title><style>
+        body{font-family:-apple-system,sans-serif;margin:20px;color:#111}
+        h1{font-size:1.1rem;margin-bottom:14px;color:#333}
+        .print-grid{display:grid;grid-template-columns:repeat(${days.length},1fr);gap:8px}
+        .print-day{border:1px solid #ddd;border-radius:6px;overflow:hidden}
+        .print-day-header{background:#6366f1;color:white;padding:5px 8px;font-weight:600;font-size:0.8rem}
+        @media print{body{margin:0}.print-day-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+    </style></head><body>
+        <h1>Loom — ${rangeLabel}</h1>
+        <div class="print-grid">${dayColsHtml}</div>
+    </body></html>`;
+
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); win.print(); }
+}
+
+// ==========================================
+// EVENT TEMPLATES (M3)
+// ==========================================
+async function openSidebarTemplates() {
+    if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
+        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
+        document.getElementById('sidebar-toggle').textContent = "‹";
+    }
+    updateSidebarMode("templates");
+    const list = document.getElementById('template-list');
+    if (!list) return;
+    list.innerHTML = '<p class="muted-text" style="font-size:0.85rem;">Loading...</p>';
+
+    try {
+        const res = await fetch(`${API_URL}/templates/`);
+        const templates = await res.json();
+        list.innerHTML = '';
+        if (!templates.length) {
+            list.innerHTML = '<p class="muted-text" style="font-size:0.85rem;">No templates saved yet. Open any event and click Save as Template.</p>';
+            return;
+        }
+        templates.forEach(t => {
+            const card = document.createElement('div');
+            card.className = 'template-card';
+            const recurInfo = t.is_recurring
+                ? `Recurring · ${t.duration_minutes}min`
+                : `${t.duration_minutes}min`;
+            card.innerHTML = `
+                <div class="template-card-info">
+                    <div class="template-card-name">${t.name}</div>
+                    <div class="template-card-preview">${t.title}</div>
+                    <div class="template-card-preview">${recurInfo}</div>
+                </div>
+                <button class="icon-btn template-delete-btn" data-id="${t.id}" title="Delete template" style="flex-shrink:0;">×</button>
+            `;
+            card.querySelector('.template-delete-btn').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await fetch(`${API_URL}/templates/${t.id}`, { method: 'DELETE' });
+                openSidebarTemplates();
+            });
+            card.querySelector('.template-card-info').addEventListener('click', () => {
+                applyTemplate(t);
+            });
+            list.appendChild(card);
+        });
+    } catch {
+        list.innerHTML = '<p class="muted-text" style="font-size:0.85rem;">Failed to load templates.</p>';
+    }
+}
+
+function applyTemplate(template) {
+    openEventModal(null);
+    setTimeout(() => {
+        document.getElementById('event-title').value = template.title;
+        document.getElementById('event-description').value = template.description || '';
+
+        const now = new Date();
+        const end = new Date(now.getTime() + template.duration_minutes * 60000);
+        document.getElementById('event-start').value = formatForInput(now);
+        document.getElementById('event-end').value = formatForInput(end);
+
+        // Set timeline if calendar_id exists and is valid
+        if (template.calendar_id) {
+            const tl = currentTimelines.find(t => t.id === template.calendar_id);
+            if (tl) {
+                document.getElementById('event-timeline').value = template.calendar_id;
+                setModalTitleDot(template.calendar_id);
+            }
+        }
+
+        // Set up recurring fields if template is recurring
+        if (template.is_recurring) {
+            document.getElementById('event-is-recurring').checked = true;
+            document.getElementById('recurrence-fields').classList.remove('hidden');
+            document.getElementById('single-date-fields').classList.add('hidden');
+            if (template.recurrence_days) {
+                template.recurrence_days.split(',').forEach(d => {
+                    const cb = document.querySelector(`.recur-day[value="${d.trim()}"]`);
+                    if (cb) cb.checked = true;
+                });
+            }
+        }
+    }, 50);
+}
+
+document.getElementById('save-template-btn').addEventListener('click', async () => {
+    const defaultName = document.getElementById('event-title').value || '';
+    const name = window.prompt('Template name:', defaultName);
+    if (!name || !name.trim()) return;
+
+    const isRecurring = document.getElementById('event-is-recurring').checked;
+    let durationMinutes = 60;
+    if (!isRecurring) {
+        const startVal = document.getElementById('event-start').value;
+        const endVal = document.getElementById('event-end').value;
+        if (startVal && endVal) {
+            durationMinutes = Math.max(1, Math.round((new Date(endVal) - new Date(startVal)) / 60000));
+        }
+    }
+
+    const calId = document.getElementById('event-timeline').value;
+    const payload = {
+        name: name.trim(),
+        title: document.getElementById('event-title').value,
+        description: document.getElementById('event-description').value || null,
+        duration_minutes: durationMinutes,
+        is_recurring: isRecurring,
+        recurrence_days: isRecurring
+            ? Array.from(document.querySelectorAll('.recur-day:checked')).map(cb => cb.value).join(',') || null
+            : null,
+        calendar_id: calId && calId !== '__new__' ? parseInt(calId) : null
+    };
+
+    try {
+        const res = await fetch(`${API_URL}/templates/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            const feedback = document.getElementById('save-template-feedback');
+            feedback.textContent = 'Template saved!';
+            feedback.classList.remove('hidden');
+            setTimeout(() => feedback.classList.add('hidden'), 2000);
+        }
+    } catch { /* silently fail — template save is non-critical */ }
+});
+
+// ==========================================
+// AUTO-SCHEDULE WELLNESS WARNINGS (M2)
+// ==========================================
+async function runScheduleAnalysis() {
+    const today = new Date().toISOString().split('T')[0];
+    const todayEvents = currentEvents.filter(ev =>
+        !ev.is_recurring && ev.start_time && ev.start_time.startsWith(today)
+    );
+    if (todayEvents.length < 4) return;
+
+    try {
+        const payload = {
+            events: todayEvents.map(ev => ({
+                title: ev.title,
+                start_time: ev.start_time,
+                end_time: ev.end_time
+            }))
+        };
+        const res = await fetch(`${API_URL}/schedule/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        showScheduleWarnings(data.warnings);
+    } catch { /* silently return — never show a fetch error */ }
+}
+
+function showScheduleWarnings(warnings) {
+    const container = document.getElementById('schedule-warnings');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!warnings || !warnings.length) return;
+
+    warnings.forEach(warning => {
+        const key = 'dismissed-warning-' + btoa(encodeURIComponent(warning));
+        if (sessionStorage.getItem(key)) return; // already dismissed this session
+
+        const div = document.createElement('div');
+        div.className = 'schedule-warning';
+
+        let textContent = warning;
+        const textSpan = document.createElement('span');
+        textSpan.className = 'schedule-warning-text';
+        textSpan.textContent = textContent;
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.className = 'schedule-warning-dismiss';
+        dismissBtn.textContent = '×';
+        dismissBtn.addEventListener('click', () => {
+            sessionStorage.setItem(key, '1');
+            div.remove();
+        });
+
+        div.appendChild(textSpan);
+
+        // Premium commute link
+        if (warning.toLowerCase().includes('commute')) {
+            const link = document.createElement('span');
+            link.style.cssText = 'cursor:pointer; color:var(--accent); font-size:0.82rem; flex-shrink:0;';
+            link.textContent = '· Plan Commute Blocks →';
+            link.addEventListener('click', () => {
+                alert('Commute block planning is a Premium feature — coming soon!');
+            });
+            div.appendChild(link);
+        }
+
+        div.appendChild(dismissBtn);
+        container.appendChild(div);
+    });
+}
+
+// ==========================================
+// TODO LIST (M1)
+// ==========================================
+// TASK BOARD (replaces M1 Todos)
+// ==========================================
+async function loadTasks() {
+    try {
+        const res = await fetch(`${API_URL}/tasks/`);
+        if (res.ok) {
+            currentTasks = await res.json();
+            renderTaskBoard();
+        }
+    } catch (err) {
+        console.error('Failed to load tasks:', err);
+    }
+}
+
+function openSidebarTaskboard() {
+    if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
+        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
+        document.getElementById('sidebar-toggle').textContent = "‹";
+    }
+    updateSidebarMode("taskboard");
+    loadTasks();
+}
+
+function renderTaskBoard(filter = currentTaskFilter) {
+    const list = document.getElementById('taskboard-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    // Apply filter
+    let filtered = currentTasks;
+    if (filter === 'active') filtered = currentTasks.filter(t => !t.is_complete);
+    else if (filter === 'done') filtered = currentTasks.filter(t => t.is_complete);
+
+    // Empty state messages
+    if (!filtered.length) {
+        const msg = filter === 'all'
+            ? 'No tasks yet. Open any event and click Add to Task Board.'
+            : filter === 'active'
+                ? 'No active tasks.'
+                : 'No completed tasks yet.';
+        list.innerHTML = `<p class="muted-text" style="font-size:0.85rem; padding: 8px 0;">${msg}</p>`;
+        return;
+    }
+
+    // Group tasks by timeline (calendar_id)
+    const groups = {};
+    filtered.forEach(task => {
+        const event = currentEvents.find(ev => ev.id === task.event_id);
+        const calId = event ? event.calendar_id : '__unknown__';
+        if (!groups[calId]) groups[calId] = { timeline: null, tasks: [] };
+        if (event) {
+            groups[calId].timeline = currentTimelines.find(tl => tl.id === event.calendar_id) || null;
+        }
+        groups[calId].tasks.push({ task, event });
+    });
+
+    // Sort groups by timeline name
+    const sortedGroups = Object.values(groups).sort((a, b) => {
+        const nameA = a.timeline ? a.timeline.name : 'Unknown';
+        const nameB = b.timeline ? b.timeline.name : 'Unknown';
+        return nameA.localeCompare(nameB);
+    });
+
+    sortedGroups.forEach(group => {
+        const timeline = group.timeline;
+        const color = timeline ? timeline.color : 'var(--text-muted)';
+        const tlName = timeline ? timeline.name : 'Unknown';
+
+        // Group header
+        const header = document.createElement('div');
+        header.className = 'taskboard-group-header';
+        header.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0;"></span>${tlName}`;
+        list.appendChild(header);
+
+        group.tasks.forEach(({ task, event }) => {
+            const card = document.createElement('div');
+            card.className = 'task-card' + (task.is_complete ? ' task-complete' : '');
+
+            const eventTitle = event ? event.title : '<span style="color:var(--text-muted)">Event removed</span>';
+            const dateHtml = event
+                ? `<div class="task-date">${new Date(event.start_time).toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'})}</div>`
+                : '';
+            const noteHtml = task.note
+                ? `<div class="task-note">${task.note}</div>`
+                : '';
+            const viewBtn = event
+                ? `<button class="task-action-link view-event-btn">View Event</button>`
+                : '';
+
+            card.innerHTML = `
+                <div class="task-card-top">
+                    <input type="checkbox" class="task-complete-cb" ${task.is_complete ? 'checked' : ''}>
+                    <div style="flex-grow:1; min-width:0;">
+                        <div class="task-title">${eventTitle}</div>
+                        ${dateHtml}
+                        ${noteHtml}
+                        <div class="task-note-edit-area"></div>
+                        <div class="task-actions">
+                            <button class="task-action-link edit-note-btn">Edit note</button>
+                            ${viewBtn}
+                            <button class="task-remove-btn" title="Remove from Task Board">×</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Checkbox: toggle completion
+            card.querySelector('.task-complete-cb').addEventListener('change', async (e) => {
+                await fetch(`${API_URL}/tasks/${task.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_complete: e.target.checked, note: task.note || null })
+                });
+                await loadTasks();
+            });
+
+            // Edit note: replace note display with textarea on click
+            card.querySelector('.edit-note-btn').addEventListener('click', () => {
+                const editArea = card.querySelector('.task-note-edit-area');
+                if (editArea.querySelector('textarea')) return; // Already open
+                const ta = document.createElement('textarea');
+                ta.className = 'task-note-input';
+                ta.value = task.note || '';
+                ta.rows = 2;
+                editArea.appendChild(ta);
+                ta.focus();
+                ta.addEventListener('blur', async () => {
+                    await fetch(`${API_URL}/tasks/${task.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ is_complete: task.is_complete, note: ta.value || null })
+                    });
+                    await loadTasks();
+                });
+            });
+
+            // View Event: open event modal
+            const viewEventBtn = card.querySelector('.view-event-btn');
+            if (viewEventBtn && event) {
+                viewEventBtn.addEventListener('click', () => {
+                    updateSidebarMode('normal');
+                    openEventModal(event);
+                });
+            }
+
+            // Remove from Task Board
+            card.querySelector('.task-remove-btn').addEventListener('click', async () => {
+                await fetch(`${API_URL}/tasks/${task.id}`, { method: 'DELETE' });
+                await loadTasks();
+            });
+
+            list.appendChild(card);
+        });
+    });
+}
+
+// ==========================================
+// FOCUS MODE (L2)
+// ==========================================
+function openFocusMode() {
+    const overlay = document.getElementById('focus-overlay');
+    if (!overlay) return;
+
+    // Populate today's events list
+    const today = new Date().toISOString().split('T')[0];
+    const todayEvents = currentEvents
+        .filter(ev => !ev.is_recurring && ev.start_time && ev.start_time.startsWith(today))
+        .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+    const listEl = document.getElementById('focus-event-list');
+    if (listEl) {
+        listEl.innerHTML = todayEvents.length === 0
+            ? '<p class="muted-text" style="font-size:0.9rem">No events scheduled for today.</p>'
+            : todayEvents.map(ev => {
+                const time = new Date(ev.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                return `<div class="focus-event-item">
+                    <input type="checkbox" class="focus-done-cb" data-id="${ev.id}">
+                    <div>
+                        <div class="focus-event-title">${ev.title}</div>
+                        <div class="focus-event-time">${time}</div>
+                    </div>
+                </div>`;
+            }).join('');
+    }
+
+    // Reset state
+    focusMode = 'session';
+    focusStartTime = Date.now();
+    pomodoroSecondsLeft = 25 * 60;
+    const toggleBtn = document.getElementById('focus-mode-toggle');
+    const timerDisplay = document.getElementById('focus-timer-display');
+    if (toggleBtn) toggleBtn.textContent = 'Pomodoro 25:00';
+    if (timerDisplay) timerDisplay.textContent = '00:00';
+
+    // Clear any lingering intervals from a previous session
+    focusIntervals.forEach(clearInterval);
+    focusIntervals = [];
+
+    // Session count-up timer
+    const sessionInterval = setInterval(() => {
+        if (focusMode !== 'session' || !timerDisplay) return;
+        const elapsed = Math.floor((Date.now() - focusStartTime) / 1000);
+        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        timerDisplay.textContent = `${m}:${s}`;
+    }, 1000);
+    focusIntervals.push(sessionInterval);
+
+    // Pomodoro countdown timer
+    const pomodoroInterval = setInterval(() => {
+        if (focusMode !== 'pomodoro' || !timerDisplay) return;
+        pomodoroSecondsLeft = Math.max(0, pomodoroSecondsLeft - 1);
+        const m = String(Math.floor(pomodoroSecondsLeft / 60)).padStart(2, '0');
+        const s = String(pomodoroSecondsLeft % 60).padStart(2, '0');
+        timerDisplay.textContent = `${m}:${s}`;
+        if (pomodoroSecondsLeft === 0 && Notification.permission === 'granted') {
+            new Notification('Loom — Pomodoro complete!', { body: 'Time for a 5-minute break.' });
+        }
+    }, 1000);
+    focusIntervals.push(pomodoroInterval);
+
+    overlay.classList.remove('hidden');
+}
+
+function closeFocusMode() {
+    document.getElementById('focus-overlay')?.classList.add('hidden');
+    // Clear all setIntervals created during this focus session
+    focusIntervals.forEach(clearInterval);
+    focusIntervals = [];
+}
+
+// ==========================================
+// BULK DELETE SELECTED EVENTS (H1)
+// ==========================================
+async function bulkDeleteSelected() {
+    if (selectedEventIds.size === 0) return;
+    const ids = [...selectedEventIds];
+    // Capture snapshots for undo before deletion
+    const snapshots = ids.map(id => currentEvents.find(e => e.id === id)).filter(Boolean);
+
+    await Promise.all(ids.map(id => fetch(`${API_URL}/events/${id}`, { method: 'DELETE' })));
+
+    // Single undo entry for the entire bulk delete
+    pushHistory(
+        async () => {
+            for (const snap of snapshots) {
+                await fetch(`${API_URL}/events/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(snap)
+                });
+            }
+        },
+        async () => {
+            await Promise.all(ids.map(id => fetch(`${API_URL}/events/${id}`, { method: 'DELETE' })));
+        },
+        `Delete ${ids.length} event${ids.length > 1 ? 's' : ''}`
+    );
+
+    selectedEventIds.clear();
+    await loadData();
+}
+
+// ==========================================
+// APP DRAWER (L1)
+// ==========================================
+function initAppDrawer() {
+    // Restore persisted state before first render
+    const saved = localStorage.getItem('loom-drawer');
+    if (saved === 'open') {
+        openDrawer();
+    }
+
+    document.getElementById('drawer-strip-btn').addEventListener('click', () => {
+        if (drawerOpen) closeDrawer();
+        else openDrawer();
+    });
+
+    // Module buttons
+    document.getElementById('drawer-calendar-btn').addEventListener('click', () => {
+        // Return to calendar view: clear any active sidebar panel
+        updateSidebarMode('normal');
+        setActiveDrawerBtn('drawer-calendar-btn');
+        closeDrawer();
+    });
+
+    document.getElementById('drawer-todos-btn').addEventListener('click', () => {
+        openSidebarTaskboard();
+        setActiveDrawerBtn('drawer-todos-btn');
+        closeDrawer();
+    });
+
+    document.getElementById('drawer-focus-btn').addEventListener('click', () => {
+        // openFocusMode() was implemented in L2
+        if (typeof openFocusMode === 'function') openFocusMode();
+        setActiveDrawerBtn('drawer-focus-btn');
+        closeDrawer();
+    });
+
+    // Close drawer when clicking outside of it
+    document.addEventListener('click', (e) => {
+        if (drawerOpen && !e.target.closest('#app-drawer')) {
+            closeDrawer();
+        }
+    });
+}
+
+function openDrawer() {
+    drawerOpen = true;
+    document.getElementById('app-drawer').classList.add('app-drawer-open');
+    document.body.classList.add('app-drawer-open');
+    localStorage.setItem('loom-drawer', 'open');
+}
+
+function closeDrawer() {
+    drawerOpen = false;
+    document.getElementById('app-drawer').classList.remove('app-drawer-open');
+    document.body.classList.remove('app-drawer-open');
+    localStorage.setItem('loom-drawer', 'closed');
+}
+
+function setActiveDrawerBtn(activeId) {
+    document.querySelectorAll('.drawer-module-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.id === activeId);
+    });
+}
+
 // ==========================================
 // EVENT LISTENERS & UI
 // ==========================================
@@ -1152,11 +2318,20 @@ function setupEventListeners() {
                 case ']': calendarInstance.next(); break;
                 case 'b': document.getElementById('sidebar-toggle').click(); break;
                 case '/': e.preventDefault(); document.getElementById('event-search').focus(); break;
+                case 'f': e.preventDefault(); openFocusMode(); break; // L2
+                // H1: bulk-delete all selected events with a single undo entry
+                case 'delete':
+                case 'backspace':
+                    if (selectedEventIds.size > 0) { e.preventDefault(); bulkDeleteSelected(); }
+                    break;
             }
         }
-        
-        // Ensure Escape still closes the mentions dropdown
-        if (e.key === 'Escape') document.getElementById("mention-dropdown").classList.add("hidden");
+
+        // Ensure Escape closes the mention dropdown and exits focus mode (L2)
+        if (e.key === 'Escape') {
+            document.getElementById("mention-dropdown").classList.add("hidden");
+            if (!document.getElementById('focus-overlay')?.classList.contains('hidden')) closeFocusMode();
+        }
     });
     document.getElementById("undo-btn").addEventListener("click", performUndo);
     document.getElementById("redo-btn").addEventListener("click", performRedo);
@@ -1179,6 +2354,94 @@ function setupEventListeners() {
     document.getElementById('menu-new-timeline-btn').addEventListener('click', () => {
         document.getElementById('sidebar-dropdown').classList.add('hidden');
         document.getElementById('timeline-modal').classList.remove('hidden');
+    });
+    // M3: Templates panel
+    document.getElementById('menu-templates-btn').addEventListener('click', () => {
+        document.getElementById('sidebar-dropdown').classList.add('hidden');
+        openSidebarTemplates();
+    });
+    document.getElementById('close-templates-btn').addEventListener('click', () => updateSidebarMode('normal'));
+
+    // Task Board panel
+    document.getElementById('menu-taskboard-btn').addEventListener('click', () => {
+        document.getElementById('sidebar-dropdown').classList.add('hidden');
+        openSidebarTaskboard();
+    });
+    document.getElementById('close-taskboard-btn').addEventListener('click', () => {
+        updateSidebarMode('normal');
+    });
+    document.getElementById('add-to-taskboard-btn').addEventListener('click', async () => {
+        const id = document.getElementById('event-id').value;
+        if (!id) return;
+        const btn = document.getElementById('add-to-taskboard-btn');
+        if (btn.classList.contains('on-taskboard')) return; // Already added
+        try {
+            const res = await fetch(`${API_URL}/tasks/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event_id: parseInt(id), note: null })
+            });
+            if (res.ok) {
+                btn.textContent = '✓ On Task Board';
+                btn.classList.add('on-taskboard');
+                await loadTasks();
+            }
+        } catch (err) {
+            console.error('Failed to add to task board:', err);
+        }
+    });
+    // Task Board filter pills
+    ['task-filter-all', 'task-filter-active', 'task-filter-done'].forEach(id => {
+        document.getElementById(id).addEventListener('click', () => {
+            currentTaskFilter = id.replace('task-filter-', '');
+            document.querySelectorAll('#sidebar-taskboard-panel .format-pill')
+                .forEach(p => p.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            renderTaskBoard(currentTaskFilter);
+        });
+    });
+
+    // M5: Statistics panel
+    document.getElementById('menu-stats-btn').addEventListener('click', () => {
+        document.getElementById('sidebar-dropdown').classList.add('hidden');
+        openStatsPanel();
+    });
+    document.getElementById('close-stats-btn').addEventListener('click', () => updateSidebarMode('normal'));
+    // L4: Print week view
+    document.getElementById('menu-print-btn').addEventListener('click', () => {
+        document.getElementById('sidebar-dropdown').classList.add('hidden');
+        openPrintView();
+    });
+    // L2: Focus mode via hamburger menu
+    document.getElementById('menu-focus-btn').addEventListener('click', () => {
+        document.getElementById('sidebar-dropdown').classList.add('hidden');
+        openFocusMode();
+    });
+    document.getElementById('focus-close-btn').addEventListener('click', closeFocusMode);
+    document.getElementById('focus-mode-toggle').addEventListener('click', () => {
+        const timerDisplay = document.getElementById('focus-timer-display');
+        const toggleBtn = document.getElementById('focus-mode-toggle');
+        if (focusMode === 'session') {
+            focusMode = 'pomodoro';
+            pomodoroSecondsLeft = 25 * 60;
+            if (timerDisplay) timerDisplay.textContent = '25:00';
+            if (toggleBtn) toggleBtn.textContent = 'Session Timer';
+        } else {
+            focusMode = 'session';
+            focusStartTime = Date.now();
+            if (timerDisplay) timerDisplay.textContent = '00:00';
+            if (toggleBtn) toggleBtn.textContent = 'Pomodoro 25:00';
+        }
+    });
+    document.getElementById('focus-timer-reset').addEventListener('click', () => {
+        const timerDisplay = document.getElementById('focus-timer-display');
+        if (focusMode === 'session') {
+            focusStartTime = Date.now();
+            if (timerDisplay) timerDisplay.textContent = '00:00';
+        } else {
+            pomodoroSecondsLeft = 25 * 60;
+            if (timerDisplay) timerDisplay.textContent = '25:00';
+        }
     });
 
     // --- Scroll Wheel Zoom (Debounced) ---
@@ -1212,22 +2475,29 @@ function setupEventListeners() {
         localStorage.setItem("loom-sidebar", layout.classList.contains('sidebar-hidden') ? "hidden" : "visible");
     });
 
-    // --- Search Listener ---
+    // --- Search Listener (H6: also controls + quick-add button visibility) ---
     const searchInput = document.getElementById("event-search");
+    const searchQABtn = document.getElementById("search-quick-add-btn");
     if (searchInput) {
         searchInput.addEventListener("input", (e) => {
             const val = e.target.value.trim().toLowerCase();
-            if (val === "") clearSidebarSearch(); else showSidebarSearchResults(val);
+            if (val === "") {
+                clearSidebarSearch();
+                if (searchQABtn) searchQABtn.classList.add('hidden');
+            } else {
+                showSidebarSearchResults(val);
+                // H6: show + button only when typed text has no exact title match
+                const hasExact = currentEvents.some(ev => (ev.title || "").toLowerCase() === val);
+                if (searchQABtn) searchQABtn.classList.toggle('hidden', hasExact);
+            }
             renderCalendarEvents(val);
         });
     }
-    // --- Quick Add Listener ---
-    const quickAddBtn = document.getElementById("quick-add-btn");
-    const quickAddInput = document.getElementById("quick-add-input");
-    if (quickAddBtn && quickAddInput) {
-        quickAddBtn.addEventListener("click", submitQuickAdd);
-        quickAddInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") submitQuickAdd();
+    // H6: + button inside search calls submitQuickAdd with current search text
+    if (searchQABtn) {
+        searchQABtn.addEventListener("click", () => {
+            const val = searchInput?.value.trim();
+            if (val) submitQuickAdd(val);
         });
     }
 
@@ -1258,6 +2528,38 @@ function setupEventListeners() {
     // --- Event Modal Saves (With History) ---
     document.getElementById("add-event-btn").addEventListener("click", () => openEventModal());
     document.getElementById("cancel-event-btn").addEventListener("click", () => document.getElementById("event-modal").classList.add("hidden"));
+
+    // H4: skip this occurrence of a recurring event
+    document.getElementById("skip-occurrence-btn").addEventListener("click", async () => {
+        const btn = document.getElementById("skip-occurrence-btn");
+        const eventId = btn.dataset.eventId;
+        const dateStr = btn.dataset.date;
+        if (!eventId || !dateStr) return;
+        await skipOccurrence(eventId, dateStr);
+    });
+
+    // L3: checklist — add item via button click
+    document.getElementById("checklist-add-btn").addEventListener("click", async () => {
+        const input = document.getElementById("checklist-new-item");
+        const text = input.value.trim();
+        if (!text) return;
+        currentChecklist.push({ text, done: false });
+        input.value = "";
+        renderChecklist();
+        await saveChecklistImmediate();
+    });
+
+    // L3: checklist — add item via Enter key
+    document.getElementById("checklist-new-item").addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const text = e.target.value.trim();
+        if (!text) return;
+        currentChecklist.push({ text, done: false });
+        e.target.value = "";
+        renderChecklist();
+        await saveChecklistImmediate();
+    });
     
     document.getElementById("save-event-btn").addEventListener("click", async (e) => {
         const btn = e.target;
@@ -1266,39 +2568,64 @@ function setupEventListeners() {
         const title = document.getElementById('event-title').value.trim();
         if (!title) { showModalError('Event title is required.'); return; }
         
-        const startVal = document.getElementById('event-start').value;
-        const endVal = document.getElementById('event-end').value;
-        if (startVal && endVal && new Date(endVal) <= new Date(startVal)) {
-            showModalError('End time must be after start time.'); return;
+        const isAllDay = document.getElementById('event-is-allday').checked;
+        // Skip time-order validation for all-day events (uses date pickers, not datetime-local)
+        if (!isAllDay) {
+            const startVal = document.getElementById('event-start').value;
+            const endVal = document.getElementById('event-end').value;
+            if (startVal && endVal && new Date(endVal) <= new Date(startVal)) {
+                showModalError('End time must be after start time.'); return;
+            }
         }
         let id = document.getElementById("event-id").value;
         const isRecurring = document.getElementById("event-is-recurring").checked;
         const calId = document.getElementById("event-timeline").value;
-        
+
         if(!calId || calId === "__new__") { alert("Please save the new timeline first."); return; }
-        
+
         // Clear previous warnings
         const warningEl = document.getElementById('conflict-warning');
         warningEl.classList.add('hidden');
         warningEl.textContent = '';
 
+        // L3: include checklist in every save (in-memory array stays authoritative)
+        const checklistVal = currentChecklist.length > 0 ? JSON.stringify(currentChecklist) : null;
+        // H4: preserve skipped_dates when saving so they aren't wiped on edit
+        const existingSkippedDates = id ? (currentEvents.find(e => e.id == id)?.skipped_dates || null) : null;
+
         let payload = {
             title: document.getElementById("event-title").value,
             calendar_id: parseInt(calId),
             is_recurring: isRecurring,
+            is_all_day: isAllDay,
             description: document.getElementById("event-description").value,
             unique_description: document.getElementById("event-unique-description").value,
             reminder_minutes: parseInt(document.getElementById("event-reminder").value) || null,
-            timezone: currentEventTimezone
+            timezone: currentEventTimezone,
+            skipped_dates: existingSkippedDates,
+            checklist: checklistVal,
+            per_day_times: null
         };
 
-        if (isRecurring) {
+        if (isAllDay) {
+            // H2: build full ISO strings from the date-only pickers
+            const startDate = document.getElementById('allday-start-date').value;
+            const endDate = document.getElementById('allday-end-date').value;
+            if (!startDate || !endDate) { showModalError('Start and end dates are required for all-day events.'); return; }
+            payload.start_time = `${startDate}T00:00:00`;
+            payload.end_time = `${endDate}T23:59:59`;
+            payload.recurrence_days = null; payload.recurrence_end = null;
+        } else if (isRecurring) {
             const tStart = document.getElementById("recur-start-time").value || "09:00";
             const tEnd = document.getElementById("recur-end-time").value || "10:00";
             const today = new Date().toISOString().split('T')[0];
             payload.start_time = `${today}T${tStart}:00`; payload.end_time = `${today}T${tEnd}:00`;
             payload.recurrence_end = document.getElementById("recur-end-date").value;
             payload.recurrence_days = Array.from(document.querySelectorAll('.recur-day:checked')).map(cb => cb.value).join(',');
+            // H5: serialize per-day times if the toggle is checked
+            if (document.getElementById('recur-per-day-toggle').checked) {
+                payload.per_day_times = serializePerDayTimes();
+            }
         } else {
             payload.start_time = new Date(document.getElementById("event-start").value).toISOString();
             payload.end_time = new Date(document.getElementById("event-end").value).toISOString();
@@ -1452,6 +2779,14 @@ function setupEventListeners() {
     };
     if (localStorage.getItem("loom-theme") === "light") document.body.classList.add("light-mode");
     document.getElementById("week-start-select").onchange = (e) => calendarInstance.setOption('firstDay', parseInt(e.target.value));
+    // M4: Daily agenda setting — persist preference in localStorage
+    const agendaToggle = document.getElementById('daily-agenda-toggle');
+    if (agendaToggle) {
+        agendaToggle.checked = localStorage.getItem('loom-daily-agenda') !== 'false';
+        agendaToggle.addEventListener('change', () => {
+            localStorage.setItem('loom-daily-agenda', agendaToggle.checked ? 'true' : 'false');
+        });
+    }
     // --- Backup & Restore Logic ---
     document.getElementById('backup-db-btn').addEventListener('click', async () => {
         const res = await fetch(`${API_URL}/admin/backup`);

@@ -368,40 +368,222 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
 .onboarding-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); transition: background 0.2s; }
 .onboarding-dot.active { background: var(--accent); }
 /* ==========================================
-   QUICK-ADD BAR
+   SEARCH QUICK-ADD BUTTON (H6)
+   (standalone quick-add bar removed — + button now lives inside search container)
    ========================================== */
-#quick-add-bar {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-#quick-add-input {
-  background-color: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px;
-  color: var(--text-main);
-  outline: none;
-  flex-grow: 1;
-  max-width: 280px;
-  font-size: 0.95rem;
-}
-#quick-add-input::placeholder {
-  color: var(--text-muted);
-}
-#quick-add-btn {
+#search-quick-add-btn {
   background-color: var(--accent);
   color: white;
   border: none;
   border-radius: 6px;
   font-weight: 600;
   cursor: pointer;
-  padding: 8px 14px;
+  padding: 4px 10px;
+  margin-right: 4px;
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1;
 }
-#quick-add-btn:disabled {
+#search-quick-add-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* ==========================================
+   TIMELINE INLINE RENAME (H3)
+   ========================================== */
+.timeline-rename-input {
+  flex-grow: 1;
+  background: var(--bg-color);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-main);
+  font-size: 0.95rem;
+  padding: 2px 6px;
+  outline: none;
+  margin-left: 10px;
+  min-width: 0;
+}
+
+/* ==========================================
+   DAILY AGENDA OVERLAY (M4)
+   ========================================== */
+#daily-agenda-overlay {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  z-index: 500;
+  min-width: 220px;
+  max-width: 320px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  cursor: pointer;
+  animation: fadeInDown 0.3s ease;
+}
+.agenda-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+.agenda-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.agenda-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 0.85rem;
+}
+.agenda-time {
+  color: var(--text-muted);
+  min-width: 48px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* M4: Settings toggle switch */
+.toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0;
+  background: var(--border);
+  border-radius: 22px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 16px; height: 16px;
+  left: 3px; bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* ==========================================
+   USAGE STATISTICS PANEL (M5)
+   ========================================== */
+#sidebar-stats-panel { display: flex; flex-direction: column; height: 100%; gap: 10px; overflow-y: auto; }
+.stats-header { display: flex; justify-content: space-between; align-items: center; }
+.stats-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.stats-label { color: var(--text-muted); font-size: 0.85rem; }
+.stats-value { font-weight: 700; font-size: 1.1rem; }
+.stats-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.8rem; }
+.stats-bar-label { min-width: 70px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-bar-track { flex-grow: 1; background: var(--bg-color); border-radius: 4px; height: 8px; overflow: hidden; }
+.stats-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+.stats-bar-value { min-width: 32px; text-align: right; color: var(--text-muted); }
+
+/* ==========================================
+   FOCUS MODE OVERLAY (L2)
+   ========================================== */
+#focus-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-color);
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  padding: 32px;
+  overflow-y: auto;
+}
+.focus-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.focus-title { font-size: 1.5rem; font-weight: 700; }
+.focus-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 2rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.focus-close:hover { color: var(--text-main); }
+.focus-body {
+  display: flex;
+  gap: 40px;
+  flex-grow: 1;
+  overflow: hidden;
+}
+.focus-left { flex: 1; overflow-y: auto; }
+.focus-right {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.focus-section-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+.focus-timer-display {
+  font-size: 3.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-main);
+}
+.focus-timer-controls { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.focus-event-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.focus-event-item:last-child { border-bottom: none; }
+.focus-done-cb { accent-color: var(--accent); margin-top: 3px; flex-shrink: 0; }
+.focus-event-title { font-size: 0.9rem; font-weight: 500; }
+.focus-event-time { font-size: 0.8rem; color: var(--text-muted); }
+/* Strike through title when checked (targets sibling div's child) */
+.focus-event-item:has(.focus-done-cb:checked) .focus-event-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+/* ==========================================
+   EVENT SELECTION (H1)
+   ========================================== */
+.fc-event-selected {
+  outline: 2px solid white !important;
+  outline-offset: 1px;
+  filter: brightness(1.25);
+}
+
 /* ==========================================
    FILE SCANNER APPROVAL PINNED FOOTER
    ========================================== */
@@ -427,3 +609,245 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
     position: sticky;
     bottom: 0;
 }
+
+/* ==========================================
+   L3: PER-EVENT TASK CHECKLIST
+   ========================================== */
+.checklist-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+}
+.checklist-item input { accent-color: var(--accent); }
+.checklist-item-done span { text-decoration: line-through; color: var(--text-muted); }
+.checklist-delete {
+  background: none;
+  border: none;
+  color: var(--danger);
+  cursor: pointer;
+  margin-left: auto;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.checklist-delete:hover { opacity: 0.7; }
+
+/* ==========================================
+   EVENT TEMPLATES (M3)
+   ========================================== */
+.template-card {
+  background: var(--bg-color); border-radius: 8px; padding: 10px 12px;
+  border: 1px solid var(--border); cursor: pointer; display: flex;
+  justify-content: space-between; align-items: flex-start;
+  transition: border-color 0.15s;
+}
+.template-card:hover { border-color: var(--accent); }
+.template-card-info { flex-grow: 1; }
+.template-card-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 3px; }
+.template-card-preview { font-size: 0.78rem; color: var(--text-muted); }
+
+/* ==========================================
+   AUTO-SCHEDULE WELLNESS WARNINGS (M2)
+   ========================================== */
+:root { --amber: #D97706; }
+
+.schedule-warning {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; margin-bottom: 6px;
+  background: rgba(217,119,6,0.08);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px; font-size: 0.85rem;
+}
+.schedule-warning-text { flex-grow: 1; color: var(--text-main); }
+.schedule-warning-dismiss {
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 1.1rem; padding: 0 4px; flex-shrink: 0;
+}
+.schedule-warning-dismiss:hover { color: var(--danger); }
+
+/* ==========================================
+   TASK BOARD (replaces M1 Todo)
+   ========================================== */
+#sidebar-taskboard-panel {
+    display: flex; flex-direction: column; height: 100%;
+}
+#taskboard-list {
+    overflow-y: auto; flex-grow: 1; display: flex;
+    flex-direction: column; gap: 6px; padding-bottom: 10px;
+}
+.taskboard-group-header {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-muted);
+    padding: 8px 0 4px 0; border-bottom: 1px solid var(--border);
+    margin-top: 8px;
+}
+.taskboard-group-header:first-child { margin-top: 0; }
+.task-card {
+    background: var(--bg-color); border-radius: 8px; padding: 10px 12px;
+    border: 1px solid var(--border); display: flex;
+    flex-direction: column; gap: 4px; transition: border-color 0.15s;
+}
+.task-card-top {
+    display: flex; align-items: flex-start; gap: 10px;
+}
+.task-card-top input[type="checkbox"] {
+    accent-color: var(--accent); margin-top: 3px; flex-shrink: 0;
+}
+.task-title { font-size: 0.9rem; font-weight: 600; flex-grow: 1; }
+.task-complete .task-title {
+    text-decoration: line-through; color: var(--text-muted);
+}
+.task-complete { opacity: 0.65; }
+.task-date { font-size: 0.75rem; color: var(--text-muted); }
+.task-note { font-size: 0.78rem; color: var(--text-muted); font-style: italic; }
+.task-note-input {
+    width: 100%; font-size: 0.78rem; background: var(--bg-color);
+    border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-main); padding: 4px 6px; resize: vertical;
+}
+.task-actions {
+    display: flex; gap: 10px; align-items: center; margin-top: 2px;
+}
+.task-action-link {
+    font-size: 0.75rem; color: var(--accent); cursor: pointer;
+    background: none; border: none; padding: 0;
+}
+.task-action-link:hover { text-decoration: underline; }
+.task-remove-btn {
+    font-size: 1rem; color: var(--text-muted); background: none;
+    border: none; cursor: pointer; padding: 0; margin-left: auto;
+}
+.task-remove-btn:hover { color: var(--danger); }
+#add-to-taskboard-btn.on-taskboard {
+    background: var(--border); color: var(--text-muted); cursor: default;
+}
+#add-to-taskboard-btn.on-taskboard:hover { background: var(--border); }
+
+/* ==========================================
+   SYNC STATUS
+   ========================================== */
+#sync-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+/* ==========================================
+   APP DRAWER
+   ========================================== */
+
+#app-drawer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: row;
+  z-index: 800;
+  /* z-index 800: above calendar (z-index ~auto) but below modals (z-index 1000)
+     and below onboarding/timeline modals (z-index 2000) */
+}
+
+.drawer-strip {
+  width: 12px;
+  height: 100%;
+  background-color: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+}
+
+.drawer-strip:hover {
+  background-color: var(--accent);
+}
+
+.drawer-panel {
+  width: 0;
+  overflow: hidden;
+  background-color: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.25s ease;
+  white-space: nowrap;
+}
+
+#app-drawer.app-drawer-open .drawer-panel {
+  width: 188px;
+}
+
+.drawer-header {
+  padding: 20px 16px 16px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.drawer-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  background: linear-gradient(to right, #818cf8, #c084fc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.drawer-module-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.9rem;
+  transition: background-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.drawer-module-btn:hover {
+  background-color: var(--bg-color);
+  color: var(--text-main);
+}
+
+.drawer-module-btn.active {
+  color: var(--accent);
+  background-color: rgba(99, 102, 241, 0.1);
+}
+
+.drawer-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+/* ==========================================
+   APP LAYOUT SHIFT FOR DRAWER
+   ========================================== */
+
+/* Default: account for the 12px collapsed drawer strip */
+.app-layout {
+  margin-left: 12px;
+  transition: margin-left 0.25s ease;
+}
+
+/* When drawer is open: account for 12px strip + 188px panel = 200px */
+body.app-drawer-open .app-layout {
+  margin-left: 200px;
+}
+
+/* #sidebar-toggle is position:absolute inside .main-content.
+   It does not need adjustment — it moves with the layout. */
+
+/* FAB container is position:fixed — it does not move with layout shifts.
+   No adjustment needed. */
+
+/* Modals are position:fixed — they do not move with layout shifts.
+   No adjustment needed. */

@@ -1,4 +1,4 @@
-# 🧶 LoomAssist 1.3: Privacy-First Local AI Assistant
+# 🧶 LoomAssist 1.4: Privacy-First Local AI Assistant
 
 Loom is a high-performance, local-first personal assistant designed for students and developers. It transforms your voice into structured calendar events using state-of-the-art speech-to-text and local LLMs—ensuring your data never leaves your Mac.
 
@@ -14,6 +14,21 @@ Loom is a high-performance, local-first personal assistant designed for students
 * **⏪ Global Undo/Redo:** A 50-step history stack (Ctrl+Z) for safe event and timeline management.
 * **🌓 Sleek UI:** A modern "Slate & Indigo" dark mode featuring a hidable sidebar and clean hamburger navigation.
 * **🔒 100% Local:** Everything—from the database to the AI models—runs on your machine.
+* **🖱️ Advanced Event Interaction:** Single-click to select, double-click to edit. Drag across the grid to multi-select. Delete/Backspace for bulk removal.
+* **📋 Task Board:** Pin any event to the Task Board with one click. Track completion, add notes, and group tasks by timeline.
+* **🗂️ Event Templates:** Save any event as a reusable template and apply it from the hamburger menu.
+* **🎯 Focus Mode:** Press `F` for a fullscreen session with a running timer, Pomodoro mode, and today's events.
+* **📊 Usage Statistics:** Hours logged per timeline, busiest day of the week, and monthly event count — all local.
+* **🌅 Daily Agenda Overlay:** On startup, shows today's events as a fullscreen summary before revealing the full calendar.
+* **⚠️ Wellness Warnings:** Ollama detects over-scheduled days and surfaces reminders to plan meals, breaks, and commute time.
+* **🗓️ All-Day & Multi-Day Events:** Full-width banner display for all-day events. Span across multiple days for trips and conferences.
+* **⏭️ Skip Recurring Occurrences:** Skip a single instance of a recurring event without deleting the whole series.
+* **⏱️ Per-Day Times on Recurring Events:** Different start/end times per day on a single recurring event (e.g. Mon 9–11am, Fri 2–4pm).
+* **✅ Per-Event Checklists:** Sub-task checklist per event with a progress chip on the calendar grid (e.g. 2/5).
+* **🖥️ App Drawer:** A collapsible strip on the far left that slides open to reveal module navigation (Calendar, Task Board, Focus Mode).
+* **🔄 Timeline Rename:** Double-click any timeline name to rename it inline. Delete button only appears when the timeline is checked.
+* **🖨️ Print Week View:** Print-optimized week layout opens in a new tab and triggers the browser print dialog.
+* **💾 Sync Status:** Live timestamp in the top bar showing last successful sync. Turns red on connection failure.
 
 ---
 
@@ -49,8 +64,8 @@ pip install -r requirements.txt
 python3 -m uvicorn main:app --reload
 ```
 
-###2. Frontend Setup
-```Bash
+### 2. Frontend Setup
+```bash
 cd frontend-ui
 npm install
 npm run tauri dev
@@ -66,6 +81,28 @@ Click the 🎤 Listen button in the sidebar and try commands like:
 3. "Lunch with the team on Friday at noon."
 Loom will automatically transcribe your voice, determine the intent, and place the event on the correct timeline.
 
+You can also type in the search bar — when your text doesn't match an existing event, a **+** button appears to create it instantly using natural language.
+
+
+---
+## ⌨️ Keyboard Shortcuts
+
+| Shortcut          | Action                          |
+|-------------------|---------------------------------|
+| `N`               | New event                       |
+| `T`               | Jump to today                   |
+| `1`               | Month view                      |
+| `2`               | Week view                       |
+| `3`               | Day view                        |
+| `4`               | Agenda / List view              |
+| `[` / `]`         | Previous / Next period          |
+| `B`               | Toggle sidebar                  |
+| `/`               | Focus search bar                |
+| `F`               | Toggle Focus Mode               |
+| `Delete`          | Delete selected event(s)        |
+| `Ctrl+Z`          | Undo                            |
+| `Ctrl+Shift+Z`    | Redo                            |
+| `Escape`          | Close modal / dismiss dropdown  |
 
 ---
 ## 🗺️ Project Roadmap
@@ -81,18 +118,51 @@ Loom will automatically transcribe your voice, determine the intent, and place t
 - [x] Markdown Links & @Mention Tagging
 - [x] Reminders & Browser Notifications
 - [x] Database Backup & Restore & Timezone Handling
-- [ ] Next: Flight Searcher Intent Execution
-- [ ] Next: Keyboard Navigation for Mention Dropdown
+- [x] Drag-and-Drop Event Rescheduling & Resizing
+- [x] All-Day and Multi-Day Event Support
+- [x] Per-Day Different Times on Recurring Events
+- [x] Skip Individual Recurring Event Occurrences
+- [x] Per-Event Task Checklists
+- [x] Task Board (pin events as tasks)
+- [x] Event Templates
+- [x] Focus Mode with Pomodoro Timer
+- [x] Wellness Warnings via Local AI
+- [x] Usage Statistics Panel
+- [x] Daily Agenda Startup Overlay
+- [x] Sync Status Indicator
+- [x] Unified Search + Quick-Add Bar
+- [x] Timeline Rename and Conditional Delete Button
+- [x] Multi-Select and Bulk Delete Events
+- [x] Print Week View
+- [x] App Drawer Navigation Strip
+- [x] Duplicate Import Prevention
+- [ ] Next: Cloud Premium Layer (Supabase + Stripe + LiteLLM)
+- [ ] Next: One-Key Capture (Ctrl+L) — premium audio capture
+- [ ] Next: AI Study Guide / Cheat Sheet Generator — premium
+- [ ] Next: Mobile App (iOS/Android)
 
 ---
 ## 📂 File Structure
-```File structure
+```
 LoomAssist/
-├── backend-api/        # FastAPI, SQLModel, & AI Logic
-│   ├── database/       # DB Engine and SQLModels
-│   └── services/       # Transcription and Scraping
-├── frontend-ui/        # Tauri & FullCalendar Interface
-│   ├── src/            # HTML/JS/CSS source
-│   └── src-tauri/      # Rust Desktop Wrapper
+├── backend-api/              # FastAPI, SQLModel, & AI Logic
+│   ├── database/             # DB Engine and SQLModels
+│   │   ├── database.py       # DB session and engine
+│   │   └── models.py         # SQLModel table definitions
+│   ├── services/             # Transcription and Scraping
+│   │   └── scraper.py        # PDF/Syllabus scraper
+│   ├── main.py               # FastAPI app and routes
+│   └── loom.sqlite3          # Local SQLite database
+├── frontend-ui/              # Tauri & FullCalendar Interface
+│   ├── src/                  # HTML/JS/CSS source
+│   │   ├── index.html        # App shell
+│   │   ├── main.js           # Calendar logic and API calls
+│   │   └── styles.css        # Dark mode styling
+│   ├── src-tauri/            # Rust Desktop Wrapper
+│   │   ├── src/              # Rust source (lib.rs, main.rs)
+│   │   └── tauri.conf.json   # Tauri configuration
+│   └── package.json          # JS dependencies
+├── .gitignore
+├── LICENSE
 └── README.md
 ```
