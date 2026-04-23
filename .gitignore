@@ -8,3 +8,10 @@ backend-api/venv/
 # OS ignores
 .DS_Store
 Thumbs.db
+
+# Local AI context file
+CLAUDE_CONTEXT.md
+
+# Log files
+*.log
+.last_crash

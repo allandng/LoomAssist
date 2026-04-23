@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Request</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #0f172a; min-height: 100vh; }
+    .container { max-width: 520px; margin: 0 auto; padding: 24px 16px 48px; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #e2e8f0; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.7s linear infinite; margin: 72px auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .avatar { width: 56px; height: 56px; border-radius: 50%; background: #6366f1; color: white; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: 700; margin: 0 auto 12px; }
+    .header { text-align: center; padding: 32px 0 24px; }
+    .header h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 8px; }
+    .header .badge { display: inline-block; background: #ede9fe; color: #6366f1; font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 20px; margin-bottom: 6px; }
+    .header .subtitle { color: #64748b; font-size: 0.9rem; }
+    .confirmed-banner { background: #fef3c7; border: 1.5px solid #fcd34d; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.9rem; color: #92400e; font-weight: 600; text-align: center; }
+    .name-row { margin-bottom: 16px; }
+    .name-row label { display: block; font-size: 0.8rem; color: #64748b; margin-bottom: 5px; font-weight: 600; }
+    .name-row input { width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.95rem; outline: none; transition: border-color 0.15s; font-family: inherit; }
+    .name-row input:focus { border-color: #6366f1; }
+    .tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 20px; }
+    .tab { padding: 8px 16px; border-radius: 20px; border: 1.5px solid #e2e8f0; background: white; cursor: pointer; font-size: 0.85rem; font-weight: 600; white-space: nowrap; color: #475569; transition: all 0.15s; }
+    .tab.active { background: #6366f1; color: white; border-color: #6366f1; }
+    .tab:hover:not(.active) { border-color: #6366f1; color: #6366f1; }
+    .slot-card { background: white; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; transition: border-color 0.15s; }
+    .slot-card:hover { border-color: #6366f1; }
+    .slot-time { font-size: 1rem; font-weight: 600; }
+    .confirm-btn { background: #6366f1; color: white; border: none; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
+    .confirm-btn:hover:not(:disabled) { background: #4f46e5; }
+    .confirm-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+    .no-slots { text-align: center; color: #94a3b8; padding: 32px 0; font-size: 0.9rem; }
+    details { margin-top: 28px; }
+    summary { cursor: pointer; font-size: 0.9rem; color: #6366f1; font-weight: 600; padding: 8px 0; list-style: none; display: flex; align-items: center; gap: 6px; }
+    summary::before { content: '▶'; font-size: 0.65rem; transition: transform 0.2s; }
+    details[open] summary::before { transform: rotate(90deg); }
+    .amend-form { background: white; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 12px; }
+    .amend-form label { display: block; font-size: 0.8rem; color: #64748b; margin-bottom: 5px; font-weight: 600; }
+    .amend-form input, .amend-form select, .amend-form textarea { width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.95rem; margin-bottom: 14px; outline: none; font-family: inherit; transition: border-color 0.15s; }
+    .amend-form input:focus, .amend-form select:focus, .amend-form textarea:focus { border-color: #6366f1; }
+    .amend-form .time-row { display: flex; gap: 8px; }
+    .amend-form .time-row > div { flex: 1; }
+    .amend-btn { background: #6366f1; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.9rem; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.15s; }
+    .amend-btn:hover { background: #4f46e5; }
+    .success-screen { text-align: center; padding: 48px 16px; }
+    .success-icon { font-size: 3rem; margin-bottom: 16px; }
+    .success-screen h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: 8px; }
+    .success-screen p { color: #64748b; font-size: 0.95rem; margin-top: 6px; }
+    .error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 8px; }
+    @media (max-width: 480px) {
+      .slot-card { flex-direction: column; align-items: flex-start; gap: 10px; }
+      .confirm-btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div id="app"><div class="spinner"></div></div>
+</div>
+<script>
+const TOKEN = "{{ token }}";
+const API = "";
+
+let reqData = null;
+let activeTabIndex = 0;
+let receiverName = "";
+let receiverEmail = "";
+let receiverPhone = "";
+let receiverCompany = "";
+
+async function init() {
+  try {
+    const res = await fetch(`${API}/availability/${TOKEN}`);
+    if (res.status === 410) { showState("expired"); return; }
+    if (res.status === 404) { showState("notfound"); return; }
+    if (!res.ok) { showState("error"); return; }
+    reqData = await res.json();
+    if (reqData.status === "confirmed") {
+      const slot = JSON.parse(reqData.confirmed_slot || "null");
+      showAlreadyBooked(slot);
+      return;
+    }
+    render();
+  } catch (e) {
+    showState("error");
+  }
+}
+
+function showState(type) {
+  const states = {
+    expired:  { icon: "⏱", title: "Link Expired",      msg: "This availability link is no longer valid." },
+    notfound: { icon: "✗",  title: "Link Not Found",    msg: "This availability link doesn't exist." },
+    error:    { icon: "!",  title: "Something went wrong", msg: "Could not connect to the server. Please try again." }
+  };
+  const s = states[type] || states.error;
+  document.getElementById("app").innerHTML = `
+    <div class="success-screen">
+      <div class="success-icon" style="color:#94a3b8;">${s.icon}</div>
+      <h2>${s.title}</h2>
+      <p>${s.msg}</p>
+    </div>`;
+}
+
+function showAlreadyBooked(slot) {
+  const slotStr = slot ? `${slot.start}–${slot.end} on ${formatDate(slot.date)}` : "a time slot";
+  document.getElementById("app").innerHTML = `
+    <div class="success-screen">
+      <div class="success-icon" style="color:#10b981;">✓</div>
+      <h2>Already Booked</h2>
+      <p>This meeting was confirmed for ${slotStr}.</p>
+    </div>`;
+}
+
+function initials(name) {
+  return name.trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2) || "?";
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+function generateSubSlots(start, end, durationMinutes) {
+  const slots = [];
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  let cur = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+  const pad = n => String(n).padStart(2, "0");
+  while (cur + durationMinutes <= endMin) {
+    slots.push({
+      start: `${pad(Math.floor(cur / 60))}:${pad(cur % 60)}`,
+      end:   `${pad(Math.floor((cur + durationMinutes) / 60))}:${pad((cur + durationMinutes) % 60)}`
+    });
+    cur += 30;
+  }
+  return slots;
+}
+
+function render() {
+  const slots = JSON.parse(reqData.slots);
+  const dates = [...new Set(slots.map(s => s.date))].sort();
+  const alreadyConfirmed = reqData.status === "confirmed";
+
+  const tabsHtml = dates.map((date, i) =>
+    `<button class="tab ${i === activeTabIndex ? "active" : ""}" onclick="switchTab(${i})">${formatDate(date)}</button>`
+  ).join("");
+
+  const activeDate = dates[activeTabIndex];
+  const windows = slots.filter(s => s.date === activeDate);
+
+  let allSubSlots = [];
+  windows.forEach(w => {
+    generateSubSlots(w.start, w.end, reqData.duration_minutes).forEach(s => {
+      allSubSlots.push({ ...s, date: activeDate });
+    });
+  });
+
+  const seen = new Set();
+  allSubSlots = allSubSlots.filter(s => {
+    const key = `${s.start}-${s.end}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const bannerHtml = alreadyConfirmed
+    ? `<div class="confirmed-banner">A time has already been confirmed.</div>`
+    : "";
+
+  const slotsHtml = allSubSlots.length === 0
+    ? `<p class="no-slots">No available slots for this date.</p>`
+    : allSubSlots.map(s => `
+      <div class="slot-card">
+        <span class="slot-time">${s.start} – ${s.end}</span>
+        <button class="confirm-btn" ${alreadyConfirmed ? "disabled" : ""}
+                onclick="confirmSlot('${s.date}','${s.start}','${s.end}',this)">
+          Confirm slot
+        </button>
+      </div>`).join("");
+
+  const amendDatesHtml = dates.map(d =>
+    `<option value="${d}">${formatDate(d)}</option>`
+  ).join("");
+
+  document.getElementById("app").innerHTML = `
+    <div class="header">
+      <div class="avatar">${initials(reqData.sender_name)}</div>
+      <h1>${reqData.sender_name}'s availability</h1>
+      <div class="badge">${reqData.duration_minutes} min</div>
+      <div class="subtitle">Tap a slot to confirm</div>
+    </div>
+    ${bannerHtml}
+    <div class="name-row">
+      <label>Your name</label>
+      <input type="text" id="receiver-name" placeholder="e.g. Jane" value="${receiverName}"
+             oninput="receiverName = this.value">
+    </div>
+    <div class="name-row">
+      <label>Email</label>
+      <input type="email" id="receiver-email" placeholder="e.g. jane@example.com" value="${receiverEmail}"
+             oninput="receiverEmail = this.value">
+    </div>
+    <div class="name-row">
+      <label>Phone <span style="font-weight:400;color:#94a3b8;">(optional)</span></label>
+      <input type="tel" id="receiver-phone" placeholder="e.g. +1 555 0100" value="${receiverPhone}"
+             oninput="receiverPhone = this.value">
+    </div>
+    <div class="name-row">
+      <label>Company <span style="font-weight:400;color:#94a3b8;">(optional)</span></label>
+      <input type="text" id="receiver-company" placeholder="e.g. Acme Corp" value="${receiverCompany}"
+             oninput="receiverCompany = this.value">
+    </div>
+    <div class="tabs">${tabsHtml}</div>
+    <div id="slots-list">${slotsHtml}</div>
+    <details>
+      <summary>Propose a different time</summary>
+      <div class="amend-form">
+        <label>Your name</label>
+        <input type="text" id="amend-name" placeholder="e.g. Jane" value="${receiverName}">
+        <label>Date</label>
+        <select id="amend-date">${amendDatesHtml}</select>
+        <div class="time-row">
+          <div>
+            <label>Start time</label>
+            <input type="time" id="amend-start">
+          </div>
+          <div>
+            <label>End time</label>
+            <input type="time" id="amend-end">
+          </div>
+        </div>
+        <label>Note (optional)</label>
+        <textarea id="amend-note" rows="2" placeholder="Any context for the sender…"></textarea>
+        <button class="amend-btn" onclick="sendAmendment()">Send amendment request</button>
+        <p id="amend-error" class="error-msg"></p>
+      </div>
+    </details>`;
+}
+
+function switchTab(index) {
+  activeTabIndex = index;
+  render();
+}
+
+async function confirmSlot(date, start, end, btn) {
+  const email = (document.getElementById("receiver-email")?.value || "").trim();
+  if (!email) {
+    alert("Please enter your email address before confirming.");
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Confirming…";
+  const contact = {
+    name: (document.getElementById("receiver-name")?.value || "").trim() || "Guest",
+    email,
+    phone: (document.getElementById("receiver-phone")?.value || "").trim(),
+    company: (document.getElementById("receiver-company")?.value || "").trim()
+  };
+  try {
+    const res = await fetch(`${API}/availability/${TOKEN}/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot: { date, start, end }, contact })
+    });
+    if (res.status === 409) {
+      btn.disabled = false;
+      btn.textContent = "Confirm slot";
+      const card = btn.closest(".slot-card");
+      if (card && !card.querySelector(".error-msg")) {
+        const err = document.createElement("p");
+        err.className = "error-msg";
+        err.textContent = "Already booked. Please choose another slot.";
+        card.appendChild(err);
+      }
+      return;
+    }
+    if (!res.ok) throw new Error();
+    document.getElementById("app").innerHTML = `
+      <div class="success-screen">
+        <div class="success-icon" style="color:#10b981;">✓</div>
+        <h2>Time confirmed!</h2>
+        <p>${reqData.sender_name} will be notified.</p>
+        <p style="margin-top:12px;font-weight:600;color:#0f172a;">${start} – ${end}</p>
+        <p>${formatDate(date)}</p>
+      </div>`;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Confirm slot";
+    alert("Something went wrong. Please try again.");
+  }
+}
+
+async function sendAmendment() {
+  const date  = document.getElementById("amend-date")?.value;
+  const start = document.getElementById("amend-start")?.value;
+  const end   = document.getElementById("amend-end")?.value;
+  const name  = (document.getElementById("amend-name")?.value || "").trim() || "Guest";
+  const note  = document.getElementById("amend-note")?.value || "";
+  const errEl = document.getElementById("amend-error");
+
+  if (!date || !start || !end) { if (errEl) errEl.textContent = "Please fill in all fields."; return; }
+  if (end <= start)            { if (errEl) errEl.textContent = "End time must be after start time."; return; }
+  if (errEl) errEl.textContent = "";
+
+  try {
+    const res = await fetch(`${API}/availability/${TOKEN}/amend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot: { date, start, end }, receiver_name: name, note })
+    });
+    if (!res.ok) throw new Error();
+    document.getElementById("app").innerHTML = `
+      <div class="success-screen">
+        <div class="success-icon">📨</div>
+        <h2>Proposal sent!</h2>
+        <p>Waiting for ${reqData.sender_name} to respond.</p>
+      </div>`;
+  } catch (e) {
+    if (errEl) errEl.textContent = "Failed to send proposal. Please try again.";
+  }
+}
+
+init();
+</script>
+</body>
+</html>

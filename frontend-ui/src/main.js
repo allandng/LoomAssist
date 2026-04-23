@@ -1,4 +1,16 @@
+import { logger } from './logger.js';
+import { initNotifications, addNotification, updateNotification } from './notifications.js';
+
 const API_URL = "http://127.0.0.1:8000";
+
+window.__loomCrashHandler = function showCrashDialog(errorInfo) {
+    const modal = document.getElementById('crash-modal');
+    if (!modal || modal.__shown) return;
+    modal.__shown = true;
+    const detail = document.getElementById('crash-modal-detail');
+    if (detail) detail.textContent = errorInfo?.message ?? 'Unknown error';
+    modal.classList.remove('hidden');
+};
 let calendarInstance;
 let currentEvents = [];
 let currentTimelines = [];
@@ -466,20 +478,41 @@ document.addEventListener('DOMContentLoaded', async function() {
         calendarOptions.eventMouseEnter = function(info) {
           tooltipTimer = setTimeout(() => {
             const ev = info.event;
+            const rawId = parseInt(ev.id);
+            const rawEvent = currentEvents.find(e => e.id === rawId);
             const timeline = currentTimelines.find(t => t.id === ev.extendedProps.calendar_id);
             const start = new Date(ev.start);
             const end = ev.end ? new Date(ev.end) : null;
             const timeStr = start.toLocaleString('en-US', {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
               + (end ? ' – ' + end.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'}) : '');
-            const desc = ev.extendedProps.description || '';
-            const preview = desc.length > 80 ? desc.slice(0,80) + '...' : desc;
-            
+
+            const descHtml = renderDescription(rawEvent?.description || ev.extendedProps.description || '');
+
+            let checklistHtml = '';
+            if (rawEvent?.checklist) {
+              try {
+                const items = JSON.parse(rawEvent.checklist);
+                if (items.length) {
+                  checklistHtml = `
+                    <div class="hc-divider"></div>
+                    <div class="hc-checklist">
+                      ${items.map(item => `
+                        <div class="hc-check-item${item.done ? ' done' : ''}">
+                          <span class="hc-check-icon">${item.done ? '✓' : '○'}</span>
+                          <span>${item.text.replace(/</g, '&lt;')}</span>
+                        </div>`).join('')}
+                    </div>`;
+                }
+              } catch {}
+            }
+
             const tooltip = document.getElementById('event-tooltip');
             tooltip.innerHTML = `
-              <div style='font-weight:600;margin-bottom:4px'>${ev.title}</div>
-              <div style='color:var(--text-muted);font-size:0.8rem;margin-bottom:4px'>${timeStr}</div>
-              ${timeline ? `<div style='color:var(--text-muted);font-size:0.8rem;margin-bottom:4px'>📁 ${timeline.name}</div>` : ''}
-              ${preview ? `<div style='font-size:0.8rem'>${preview}</div>` : ''}
+              <div class="hc-title">${rawEvent?.title ?? ev.title}</div>
+              <div class="hc-meta">${timeStr}</div>
+              ${timeline ? `<div class="hc-meta">📁 ${timeline.name}</div>` : ''}
+              ${descHtml ? `<div class="hc-divider"></div><div class="hc-desc">${descHtml}</div>` : ''}
+              ${checklistHtml}
             `;
             tooltip.classList.remove('hidden');
             positionTooltip(info.jsEvent.clientX, info.jsEvent.clientY);
@@ -493,11 +526,42 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     calendarInstance = new FullCalendar.Calendar(calendarEl, calendarOptions);
-    
+
     calendarInstance.render();
     bindTimelineDropdowns();
     await loadData();
+    logger.info("LoomAssist initialized");
+
+    // Check if the previous run crashed
+    try {
+        const flagRes = await fetch(`${API_URL}/api/logs/crash-flag`);
+        if (flagRes.ok) {
+            const { crashed, crash_file } = await flagRes.json();
+            const reportsEnabled = localStorage.getItem('loom_crash_reports_enabled') !== 'false';
+            if (crashed && reportsEnabled) {
+                window.__loomCrashHandler({ message: `Crash detected (${crash_file ?? 'unknown'})` });
+            }
+        }
+    } catch { /* backend not ready — skip */ }
+
+    // Listen for Rust panic events from Tauri
+    if (window.__TAURI__) {
+        window.__TAURI__.event.listen('rust-panic', (ev) => {
+            window.__loomCrashHandler?.(ev.payload);
+        });
+    }
+
     setupEventListeners();
+    initNotifications();
+    logger.setFlushCallback((batch) => {
+        const errors = batch.filter(e => e.level === 'ERROR');
+        errors.forEach(e => addNotification({
+            type: 'warning',
+            title: 'Error captured',
+            message: e.message,
+            dismissible: true,
+        }));
+    });
     initAppDrawer(); // L1: must be called last — references DOM elements also touched by setupEventListeners
     if (!localStorage.getItem('loom-onboarded')) {
         setTimeout(() => document.getElementById('onboarding-modal').classList.remove('hidden'), 600);
@@ -540,13 +604,29 @@ function scheduleReminders() {
 }
 
 function showReminder(event) {
-  if (Notification.permission !== 'granted') return;
   const minuteLabel = event.reminder_minutes >= 60
     ? `${event.reminder_minutes / 60} hour${event.reminder_minutes === 60 ? '' : 's'}`
     : `${event.reminder_minutes} minutes`;
-  new Notification('Loom Reminder', {
-    body: `${event.title} starts in ${minuteLabel}`,
-    icon: '/favicon.ico',
+
+  if (Notification.permission === 'granted') {
+    new Notification('Loom Reminder', {
+      body: `${event.title} starts in ${minuteLabel}`,
+      icon: '/favicon.ico',
+    });
+  }
+
+  addNotification({
+    type: 'warning',
+    title: 'Upcoming event',
+    message: `${event.title} starts in ${minuteLabel}`,
+    dismissible: true,
+    autoRemoveMs: null,
+    actionable: true,
+    actionLabel: 'Open event →',
+    actionFn: () => {
+      const ev = currentEvents.find(e => e.id === event.id);
+      if (ev) openEventModal(ev);
+    },
   });
 }
 async function loadData() {
@@ -561,9 +641,9 @@ async function loadData() {
         } else {
             syncSuccess = false;
         }
-    } catch (error) { 
-        console.error("Failed to load timelines:", error); 
-        syncSuccess = false; 
+    } catch (error) {
+        logger.warn("Failed to load timelines", { message: error?.message });
+        syncSuccess = false;
     }
 
     try {
@@ -577,9 +657,9 @@ async function loadData() {
             renderCalendarEvents("");
             syncSuccess = false;
         }
-    } catch (error) { 
-        console.error("Failed to load events:", error); 
-        syncSuccess = false; 
+    } catch (error) {
+        logger.warn("Failed to load events", { message: error?.message });
+        syncSuccess = false;
     }
 
     isLoading = false; // Disable loading flag
@@ -1016,6 +1096,11 @@ function openEventModal(existingEvent = null, clickedDate = null, instanceDate =
     isAllDayCheckbox.checked = false;
     isAllDayCheckbox.disabled = false;
     allDayFields.classList.add('hidden');
+    document.getElementById('event-start').disabled = false;
+    document.getElementById('event-end').disabled = false;
+    document.getElementById('recur-start-time').disabled = false;
+    document.getElementById('recur-end-time').disabled = false;
+    document.querySelector('.time-lock-label')?.remove();
     document.getElementById('skip-occurrence-btn').classList.add('hidden');
     document.getElementById('recur-per-day-toggle').checked = false;
     document.getElementById('per-day-times-grid').classList.add('hidden');
@@ -1137,6 +1222,21 @@ function openEventModal(existingEvent = null, clickedDate = null, instanceDate =
             currentChecklist = [];
         }
         renderChecklist();
+
+        if (existingEvent.title === "Meeting (availability booking)") {
+            ['event-start','event-end','recur-start-time','recur-end-time'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = true;
+            });
+            const singleFields = document.getElementById('single-date-fields');
+            if (singleFields && !singleFields.querySelector('.time-lock-label')) {
+                const lbl = document.createElement('p');
+                lbl.className = 'time-lock-label';
+                lbl.style.cssText = 'font-size:0.8rem;color:var(--text-muted);margin:-8px 0 12px;';
+                lbl.textContent = '🔒 Time set by availability booking';
+                singleFields.appendChild(lbl);
+            }
+        }
     } else {
         document.getElementById("event-modal-title").innerText = "New Event";
         document.getElementById("event-id").value = "";
@@ -1377,7 +1477,14 @@ document.getElementById("approval-save-btn").addEventListener("click", async (e)
         });
         const data = await res.json();
         if (res.ok) {
-            alert('✓ ' + data.events_added + ' events imported, ' + data.events_skipped + ' duplicates skipped.');
+            addNotification({
+                type: 'success',
+                title: 'Syllabus saved',
+                message: `${data.events_added} event${data.events_added !== 1 ? 's' : ''} added` +
+                    (data.events_skipped > 0 ? `, ${data.events_skipped} duplicate${data.events_skipped !== 1 ? 's' : ''} skipped.` : '.'),
+                dismissible: true,
+                autoRemoveMs: 8000,
+            });
             let addedIds = data.event_ids || [];
             pushHistory(
                 async () => { for (let eid of addedIds) await fetch(`${API_URL}/events/${eid}`, {method: 'DELETE'}); },
@@ -1537,6 +1644,19 @@ async function submitQuickAdd(text) {
     const btn = document.getElementById("search-quick-add-btn");
     if (btn) { btn.disabled = true; btn.textContent = "..."; }
 
+    const _qaNotifId = addNotification({
+        type: 'progress',
+        title: 'Processing intent…',
+        message: `"${trimmedText.slice(0, 50)}${trimmedText.length > 50 ? '…' : ''}"`,
+        progress: 10,
+        dismissible: false,
+    });
+    let _qaProgVal = 10;
+    const _qaProgInt = setInterval(() => {
+        _qaProgVal = _qaProgVal >= 90 ? 10 : _qaProgVal + 10;
+        updateNotification(_qaNotifId, { progress: _qaProgVal });
+    }, 400);
+
     try {
         const response = await fetch(`${API_URL}/intent`, {
             method: "POST",
@@ -1571,7 +1691,24 @@ async function submitQuickAdd(text) {
         if (searchInput) searchInput.value = "";
         if (btn) btn.classList.add('hidden');
         await loadData();
+        clearInterval(_qaProgInt);
+        updateNotification(_qaNotifId, {
+            type: 'success',
+            title: 'Event added',
+            message: `"${trimmedText.slice(0, 60)}" added to calendar.`,
+            progress: null,
+            dismissible: true,
+            autoRemoveMs: 6000,
+        });
     } catch (err) {
+        clearInterval(_qaProgInt);
+        updateNotification(_qaNotifId, {
+            type: 'error',
+            title: 'Quick-add failed',
+            message: 'Could not process your request. Please try again.',
+            progress: null,
+            dismissible: true,
+        });
         const errEl = document.getElementById("import-error");
         errEl.textContent = "Quick-add failed. Please try again.";
         errEl.classList.remove("hidden");
@@ -1910,6 +2047,14 @@ async function runScheduleAnalysis() {
         if (!res.ok) return;
         const data = await res.json();
         showScheduleWarnings(data.warnings);
+        if (data.warnings?.length > 0) {
+            data.warnings.forEach(w => addNotification({
+                type: 'warning',
+                title: 'Schedule warning',
+                message: w,
+                dismissible: true,
+            }));
+        }
     } catch { /* silently return — never show a fetch error */ }
 }
 
@@ -2806,15 +2951,15 @@ function setupEventListeners() {
     document.getElementById('restore-file-input').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
+
         if (!confirm('This replaces ALL current data with the backup. Are you sure?')) {
             e.target.value = ''; // Reset input if canceled
             return;
         }
-        
+
         const formData = new FormData();
         formData.append('file', file);
-        
+
         const res = await fetch(`${API_URL}/admin/restore`, { method: 'POST', body: formData });
         if (res.ok) {
             alert('Restore successful. Reloading...');
@@ -2824,6 +2969,51 @@ function setupEventListeners() {
             alert('Restore failed: ' + (err?.detail?.error?.detail || 'Unknown error'));
         }
         e.target.value = ''; // Reset input
+    });
+
+    // --- Crash dialog ---
+    document.getElementById('crash-send-btn')?.addEventListener('click', async () => {
+        const res = await fetch(`${API_URL}/api/logs/export`);
+        if (res.ok) {
+            const blob = await res.blob();
+            const a = Object.assign(document.createElement('a'),
+                { href: URL.createObjectURL(blob), download: 'loomassist_logs.txt' });
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+        const issueUrl = 'https://github.com/allandng/LoomAssist/issues/new?title=Crash+report+v1.4&body=Please+attach+your+loomassist_logs.txt+file+below.+Describe+what+you+were+doing+when+the+crash+occurred.';
+        if (window.__TAURI__) {
+            window.__TAURI__.opener.openUrl(issueUrl);
+        } else {
+            window.open(issueUrl, '_blank');
+        }
+        const modal = document.getElementById('crash-modal');
+        if (modal) { modal.classList.add('hidden'); modal.__shown = false; }
+    });
+    document.getElementById('crash-dismiss-btn')?.addEventListener('click', () => {
+        const modal = document.getElementById('crash-modal');
+        if (modal) { modal.classList.add('hidden'); modal.__shown = false; }
+    });
+
+    // --- Settings: Diagnostics & Logs ---
+    const crashToggle = document.getElementById('crash-reports-toggle');
+    if (crashToggle) {
+        crashToggle.checked = localStorage.getItem('loom_crash_reports_enabled') !== 'false';
+        crashToggle.addEventListener('change', () =>
+            localStorage.setItem('loom_crash_reports_enabled', crashToggle.checked ? 'true' : 'false'));
+    }
+    document.getElementById('view-logs-btn')?.addEventListener('click', async () => {
+        const res = await fetch(`${API_URL}/api/logs/export`);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const a = Object.assign(document.createElement('a'),
+            { href: URL.createObjectURL(blob), download: 'loomassist_logs.txt' });
+        a.click();
+        URL.revokeObjectURL(a.href);
+    });
+    document.getElementById('clear-logs-btn')?.addEventListener('click', async () => {
+        if (!confirm('Clear all log files?')) return;
+        await fetch(`${API_URL}/api/logs`, { method: 'DELETE' });
     });
 
     // ==========================================
@@ -2851,20 +3041,62 @@ function setupEventListeners() {
             importError.textContent = "🔍 Reading syllabus with AI... this may take 10-15 seconds.";
             importError.style.color = "var(--accent)";
             importError.classList.remove('hidden');
-            
+
+            const _pdfNotifId = addNotification({
+                type: 'progress',
+                title: 'Reading syllabus…',
+                message: `${file.name} · AI extraction in progress`,
+                progress: 20,
+                dismissible: false,
+            });
+            let _pdfProg = 20;
+            const _pdfInt = setInterval(() => {
+                _pdfProg = _pdfProg >= 80 ? 20 : _pdfProg + 10;
+                updateNotification(_pdfNotifId, { progress: _pdfProg });
+            }, 600);
+
             const formData = new FormData(); formData.append('file', file);
             try {
                 const response = await fetch(`${API_URL}/documents/extract-syllabus/`, { method: 'POST', body: formData });
                 const result = await response.json();
+                clearInterval(_pdfInt);
                 if (response.ok && result.events && result.events.length > 0) {
                     importError.classList.add('hidden');
                     openSidebarApproval(result.events);
+                    updateNotification(_pdfNotifId, {
+                        type: 'success',
+                        title: 'Syllabus extracted',
+                        message: `${result.events.length} event${result.events.length !== 1 ? 's' : ''} found — review in sidebar.`,
+                        progress: null,
+                        dismissible: true,
+                        actionable: true,
+                        actionLabel: 'Review in sidebar →',
+                        actionFn: () => {},
+                    });
                 } else {
                     importError.textContent = "No valid dates could be extracted from this PDF.";
                     importError.style.color = "var(--danger)";
+                    updateNotification(_pdfNotifId, {
+                        type: 'error',
+                        title: 'No dates found',
+                        message: 'No valid events could be extracted from this PDF.',
+                        progress: null,
+                        dismissible: true,
+                    });
                     setTimeout(() => updateSidebarMode("normal"), 3000);
                 }
-            } catch (err) { importError.textContent = "Network error during AI extraction."; importError.style.color = "var(--danger)"; }
+            } catch (err) {
+                clearInterval(_pdfInt);
+                importError.textContent = "Network error during AI extraction.";
+                importError.style.color = "var(--danger)";
+                updateNotification(_pdfNotifId, {
+                    type: 'error',
+                    title: 'Extraction failed',
+                    message: 'Network error during AI extraction.',
+                    progress: null,
+                    dismissible: true,
+                });
+            }
         }
     });
 
@@ -2877,12 +3109,31 @@ function setupEventListeners() {
         const file = importFileInput.files[0];
         const formData = new FormData(); formData.append('file', file); formData.append('calendar_id', calId);
 
+        const _icsFileName = file?.name ?? 'calendar.ics';
+        const _icsNotifId = addNotification({
+            type: 'progress',
+            title: 'Importing calendar…',
+            message: _icsFileName,
+            progress: 30,
+            dismissible: false,
+        });
+
         try {
             const response = await fetch(`${API_URL}/integrations/import-ics-file/`, { method: 'POST', body: formData });
             const data = await response.json();
             if (response.ok) {
                 document.getElementById('ics-import-status').textContent = '✓ ' + data.events_added + ' events imported, ' + data.events_skipped + ' duplicates skipped.';                document.getElementById('ics-import-status').style.color = "#10b981";
-                
+
+                updateNotification(_icsNotifId, {
+                    type: data.events_skipped > 0 ? 'warning' : 'success',
+                    title: 'Import complete',
+                    message: `${data.events_added} event${data.events_added !== 1 ? 's' : ''} imported` +
+                        (data.events_skipped > 0 ? `, ${data.events_skipped} duplicate${data.events_skipped !== 1 ? 's' : ''} skipped.` : '.'),
+                    progress: null,
+                    dismissible: true,
+                    autoRemoveMs: 8000,
+                });
+
                 let addedIds = data.event_ids || [];
                 let fileClone = new File([file], file.name, {type: file.type});
                 pushHistory(
@@ -2890,15 +3141,33 @@ function setupEventListeners() {
                     async () => {
                         let fd = new FormData(); fd.append('file', fileClone); fd.append('calendar_id', calId);
                         let r = await fetch(`${API_URL}/integrations/import-ics-file/`, {method: 'POST', body: fd});
-                        let d = await r.json(); addedIds = d.event_ids; 
+                        let d = await r.json(); addedIds = d.event_ids;
                     },
                     "ICS Import"
                 );
-                
+
                 await loadData();
                 setTimeout(() => { icsModal.classList.add('hidden'); importFileInput.value = ""; }, 1500);
-            } else { confirmIcsBtn.disabled = false; }
-        } catch (err) { confirmIcsBtn.disabled = false; }
+            } else {
+                updateNotification(_icsNotifId, {
+                    type: 'error',
+                    title: 'Import failed',
+                    message: 'Server returned an error.',
+                    progress: null,
+                    dismissible: true,
+                });
+                confirmIcsBtn.disabled = false;
+            }
+        } catch (err) {
+            updateNotification(_icsNotifId, {
+                type: 'error',
+                title: 'Import failed',
+                message: 'Network error. Please try again.',
+                progress: null,
+                dismissible: true,
+            });
+            confirmIcsBtn.disabled = false;
+        }
     });
     // --- Onboarding Logic ---
     document.getElementById('onboarding-next-btn').addEventListener('click', () => {
@@ -2923,6 +3192,67 @@ function setupEventListeners() {
         onboardingStep = 0;
         showOnboardingStep(onboardingStep);
         document.getElementById('onboarding-modal').classList.remove('hidden');
+    });
+
+    // --- Send Availability ---
+    document.getElementById("send-availability-btn").addEventListener("click", openAvailabilityModal);
+
+    document.getElementById("avail-cancel-btn").addEventListener("click", () => {
+        document.getElementById("availability-modal").classList.add("hidden");
+    });
+
+    document.getElementById("avail-send-btn").addEventListener("click", sendAvailability);
+
+    document.getElementById("avail-cal-prev").addEventListener("click", () => {
+        availabilityCalMonth--;
+        if (availabilityCalMonth < 0) { availabilityCalMonth = 11; availabilityCalYear--; }
+        renderMiniCalendar(availabilityCalYear, availabilityCalMonth);
+    });
+
+    document.getElementById("avail-cal-next").addEventListener("click", () => {
+        availabilityCalMonth++;
+        if (availabilityCalMonth > 11) { availabilityCalMonth = 0; availabilityCalYear++; }
+        renderMiniCalendar(availabilityCalYear, availabilityCalMonth);
+    });
+
+    document.getElementById("avail-copy-btn").addEventListener("click", () => {
+        const link = document.getElementById("avail-share-link").value;
+        navigator.clipboard.writeText(link).then(() => {
+            const btn = document.getElementById("avail-copy-btn");
+            btn.textContent = "Copied!";
+            setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+        });
+    });
+
+    document.getElementById("avail-open-browser-btn").addEventListener("click", () => {
+        const link = document.getElementById("avail-share-link").value;
+        if (link) window.open(link, "_blank");
+    });
+
+    document.getElementById("avail-response-close-btn").addEventListener("click", () => {
+        stopAvailabilityPolling();
+        document.getElementById("availability-response-modal").classList.add("hidden");
+    });
+
+    document.getElementById("avail-accept-amendment-btn").addEventListener("click", () => {
+        if (availabilityCurrentToken) handleAmendmentResponse(availabilityCurrentToken, "accept");
+    });
+
+    document.getElementById("avail-decline-amendment-btn").addEventListener("click", () => {
+        if (availabilityCurrentToken) handleAmendmentResponse(availabilityCurrentToken, "decline");
+    });
+
+    document.getElementById("avail-counter-btn").addEventListener("click", () => {
+        document.getElementById("avail-counter-section").classList.toggle("hidden");
+    });
+
+    document.getElementById("avail-send-counter-btn").addEventListener("click", () => {
+        if (!availabilityCurrentToken) return;
+        const date = document.getElementById("avail-counter-date").value;
+        const start = document.getElementById("avail-counter-start").value;
+        const end = document.getElementById("avail-counter-end").value;
+        if (!date || !start || !end) return;
+        handleAmendmentResponse(availabilityCurrentToken, "counter", { date, start, end });
     });
 }
 
@@ -2955,8 +3285,457 @@ async function stopRecording() {
         micBtn.innerHTML = "⏳ Processing..."; micBtn.className = "mic-inactive";
         mediaRecorder.onstop = async () => {
             const formData = new FormData(); formData.append("file", new Blob(audioChunks, { type: 'audio/webm' }), "recording.webm");
-            try { await fetch(`${API_URL}/transcribe`, { method: "POST", body: formData }); await loadData(); } catch (err) { console.error(err); } 
-            finally { micBtn.innerHTML = "🎤 Listen"; isRecording = false; }
+            const _vNotifId = addNotification({
+                type: 'progress',
+                title: 'Transcribing audio…',
+                message: 'Processing your recording with AI.',
+                progress: 15,
+                dismissible: false,
+            });
+            let _vProg = 15;
+            const _vInt = setInterval(() => {
+                _vProg = _vProg >= 85 ? 15 : _vProg + 10;
+                updateNotification(_vNotifId, { progress: _vProg });
+            }, 500);
+            try {
+                const _vResp = await fetch(`${API_URL}/transcribe`, { method: "POST", body: formData });
+                clearInterval(_vInt);
+                if (_vResp.ok) {
+                    const _vData = await _vResp.json();
+                    const _vErrors = (_vData.execution_results ?? []).filter(r => r.error);
+                    const _vAdded  = (_vData.execution_results ?? []).filter(r => r.event_id);
+                    if (_vErrors.length > 0) {
+                        updateNotification(_vNotifId, {
+                            type: 'error',
+                            title: 'Transcription error',
+                            message: _vErrors[0].error?.detail ?? 'Could not process audio.',
+                            progress: null,
+                            dismissible: true,
+                        });
+                    } else {
+                        updateNotification(_vNotifId, {
+                            type: 'success',
+                            title: 'Voice processed',
+                            message: `${_vAdded.length} event${_vAdded.length !== 1 ? 's' : ''} added.`,
+                            progress: null,
+                            dismissible: true,
+                            autoRemoveMs: 6000,
+                        });
+                    }
+                    await loadData();
+                } else {
+                    updateNotification(_vNotifId, {
+                        type: 'error',
+                        title: 'Transcription failed',
+                        message: 'Server returned an error.',
+                        progress: null,
+                        dismissible: true,
+                    });
+                }
+            } catch (err) {
+                clearInterval(_vInt);
+                updateNotification(_vNotifId, {
+                    type: 'error',
+                    title: 'Transcription failed',
+                    message: 'Network error. Please try again.',
+                    progress: null,
+                    dismissible: true,
+                });
+                console.error(err);
+            } finally { micBtn.innerHTML = "🎤 Listen"; isRecording = false; }
         };
+    }
+}
+
+// ==========================================
+// SEND AVAILABILITY FEATURE
+// ==========================================
+
+let availabilitySelectedDays = new Set();
+let availabilityCalYear = new Date().getFullYear();
+let availabilityCalMonth = new Date().getMonth();
+let availabilityPollingId = null;
+let availabilityCurrentToken = null;
+
+function openAvailabilityModal() {
+    availabilitySelectedDays = new Set();
+    availabilityCalYear = new Date().getFullYear();
+    availabilityCalMonth = new Date().getMonth();
+    renderMiniCalendar(availabilityCalYear, availabilityCalMonth);
+    renderTimeWindowList();
+    document.getElementById("avail-conflicts").innerHTML = "";
+    const errEl = document.getElementById("avail-modal-error");
+    errEl.textContent = "";
+    errEl.classList.add("hidden");
+    const savedName = localStorage.getItem("loom-sender-name") || "";
+    document.getElementById("avail-sender-name").value = savedName;
+    document.getElementById("availability-modal").classList.remove("hidden");
+}
+
+function renderMiniCalendar(year, month) {
+    const container = document.getElementById("avail-mini-cal");
+    const label = document.getElementById("avail-cal-month-label");
+    const dayNames = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    const monthNames = ["January","February","March","April","May","June",
+                        "July","August","September","October","November","December"];
+    label.textContent = `${monthNames[month]} ${year}`;
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let html = dayNames.map(d => `<div class="avail-cal-day-header">${d}</div>`).join("");
+    for (let i = 0; i < firstDay; i++) {
+        html += `<div class="avail-cal-day avail-cal-day-empty"></div>`;
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dateObj = new Date(year, month, d);
+        const isPast = dateObj < today;
+        const isToday = dateObj.getTime() === today.getTime();
+        const mm = String(month + 1).padStart(2, "0");
+        const dd = String(d).padStart(2, "0");
+        const dateStr = `${year}-${mm}-${dd}`;
+        const isSelected = availabilitySelectedDays.has(dateStr);
+
+        let cls = "avail-cal-day";
+        if (isPast) cls += " avail-cal-day-past";
+        if (isToday) cls += " avail-cal-day-today";
+        if (isSelected) cls += " avail-cal-day-selected";
+
+        html += `<div class="${cls}" data-date="${dateStr}">${d}</div>`;
+    }
+    container.innerHTML = html;
+    container.onclick = (e) => {
+        const cell = e.target.closest(".avail-cal-day");
+        if (!cell || cell.classList.contains("avail-cal-day-past") || cell.classList.contains("avail-cal-day-empty")) return;
+        toggleDaySelection(cell.dataset.date);
+    };
+}
+
+function toggleDaySelection(dateStr) {
+    if (availabilitySelectedDays.has(dateStr)) {
+        availabilitySelectedDays.delete(dateStr);
+    } else {
+        availabilitySelectedDays.add(dateStr);
+    }
+    renderMiniCalendar(availabilityCalYear, availabilityCalMonth);
+    renderTimeWindowList();
+    checkConflictsForSlots();
+}
+
+function renderTimeWindowList() {
+    const container = document.getElementById("avail-time-windows");
+    const sortedDays = Array.from(availabilitySelectedDays).sort();
+    if (sortedDays.length === 0) {
+        container.innerHTML = `<p style="font-size:0.85rem;color:var(--text-muted);text-align:center;padding:8px 0;">Click dates above to add availability windows.</p>`;
+        return;
+    }
+    container.innerHTML = "";
+    sortedDays.forEach(dateStr => {
+        const d = new Date(dateStr + "T00:00:00");
+        const chipLabel = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        const row = document.createElement("div");
+        row.className = "avail-time-row";
+        row.dataset.date = dateStr;
+        row.innerHTML = `
+            <span class="avail-date-chip">${chipLabel}</span>
+            <input type="time" class="form-input avail-start-time" data-date="${dateStr}" value="09:00">
+            <span style="color:var(--text-muted);font-size:0.8rem;flex-shrink:0;">to</span>
+            <input type="time" class="form-input avail-end-time" data-date="${dateStr}" value="17:00">
+            <button class="avail-remove-day-btn" data-date="${dateStr}" title="Remove">&#215;</button>
+        `;
+        row.querySelector(".avail-remove-day-btn").addEventListener("click", (e) => {
+            availabilitySelectedDays.delete(e.target.dataset.date);
+            renderMiniCalendar(availabilityCalYear, availabilityCalMonth);
+            renderTimeWindowList();
+            checkConflictsForSlots();
+        });
+        row.querySelector(".avail-start-time").addEventListener("change", checkConflictsForSlots);
+        row.querySelector(".avail-end-time").addEventListener("change", checkConflictsForSlots);
+        container.appendChild(row);
+    });
+}
+
+function checkConflictsForSlots() {
+    const conflictContainer = document.getElementById("avail-conflicts");
+    conflictContainer.innerHTML = "";
+    document.querySelectorAll(".avail-time-row").forEach(row => {
+        const dateStr = row.dataset.date;
+        const start = row.querySelector(".avail-start-time")?.value;
+        const end = row.querySelector(".avail-end-time")?.value;
+        if (!start || !end) return;
+        const sStart = new Date(`${dateStr}T${start}:00`).getTime();
+        const sEnd = new Date(`${dateStr}T${end}:00`).getTime();
+        const overlapping = (currentEvents || []).filter(ev => {
+            if (ev.is_recurring) return false;
+            const eStart = new Date(ev.start_time).getTime();
+            const eEnd = new Date(ev.end_time).getTime();
+            return sStart < eEnd && sEnd > eStart;
+        });
+        if (overlapping.length > 0) {
+            const names = overlapping.slice(0, 2).map(e => e.title).join(", ");
+            const w = document.createElement("div");
+            w.className = "avail-conflict-warning";
+            w.textContent = `⚠ ${dateStr}: conflicts with ${names}${overlapping.length > 2 ? "…" : ""}`;
+            conflictContainer.appendChild(w);
+        }
+    });
+}
+
+async function sendAvailability() {
+    const senderName = document.getElementById("avail-sender-name").value.trim();
+    const durationMinutes = parseInt(document.getElementById("avail-duration").value);
+    const errEl = document.getElementById("avail-modal-error");
+
+    if (!senderName) {
+        errEl.textContent = "Please enter your name.";
+        errEl.classList.remove("hidden");
+        return;
+    }
+    const rows = document.querySelectorAll(".avail-time-row");
+    if (rows.length === 0) {
+        errEl.textContent = "Please select at least one date.";
+        errEl.classList.remove("hidden");
+        return;
+    }
+    const slots = [];
+    let hasTimeError = false;
+    rows.forEach(row => {
+        const date = row.dataset.date;
+        const start = row.querySelector(".avail-start-time")?.value;
+        const end = row.querySelector(".avail-end-time")?.value;
+        if (start && end && end > start) {
+            slots.push({ date, start, end });
+        } else {
+            hasTimeError = true;
+        }
+    });
+    if (hasTimeError) {
+        errEl.textContent = "End time must be after start time for all slots.";
+        errEl.classList.remove("hidden");
+        return;
+    }
+    localStorage.setItem("loom-sender-name", senderName);
+    const sendBtn = document.getElementById("avail-send-btn");
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending…";
+    errEl.classList.add("hidden");
+    try {
+        const res = await fetch(`${API_URL}/availability`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sender_name: senderName, duration_minutes: durationMinutes, slots })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            errEl.textContent = err?.error?.detail || "Failed to create link.";
+            errEl.classList.remove("hidden");
+            return;
+        }
+        const data = await res.json();
+        availabilityCurrentToken = data.token;
+        document.getElementById("availability-modal").classList.add("hidden");
+        document.getElementById("avail-share-link").value = data.share_url;
+        document.getElementById("avail-status-text").textContent = "Pending";
+        document.getElementById("avail-confirmed-slot-display").classList.add("hidden");
+        document.getElementById("avail-amendment-section").classList.add("hidden");
+        document.getElementById("avail-counter-section").classList.add("hidden");
+        document.getElementById("availability-response-modal").classList.remove("hidden");
+        startAvailabilityPolling(data.token);
+        addNotification({
+            type: 'info',
+            title: 'Availability link sent',
+            message: `Share link created for ${senderName} — waiting for a response.`,
+            dismissible: true,
+            autoRemoveMs: 8000,
+        });
+    } catch (e) {
+        errEl.textContent = "Network error. Is the backend running?";
+        errEl.classList.remove("hidden");
+    } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send link";
+    }
+}
+
+function startAvailabilityPolling(token) {
+    stopAvailabilityPolling();
+    pollAvailabilityStatus(token);
+    availabilityPollingId = setInterval(() => pollAvailabilityStatus(token), 10000);
+}
+
+function stopAvailabilityPolling() {
+    if (availabilityPollingId) {
+        clearInterval(availabilityPollingId);
+        availabilityPollingId = null;
+    }
+}
+
+async function pollAvailabilityStatus(token) {
+    const indicator = document.getElementById("avail-poll-indicator");
+    const statusEl = document.getElementById("avail-status-text");
+    if (!statusEl) return;
+    if (indicator) indicator.textContent = "Checking…";
+    try {
+        const res = await fetch(`${API_URL}/availability/${token}`);
+        if (res.status === 410) {
+            if (indicator) indicator.textContent = "Expired";
+            if (statusEl) statusEl.textContent = "Expired";
+            stopAvailabilityPolling();
+            return;
+        }
+        if (!res.ok) return;
+        const data = await res.json();
+        if (indicator) indicator.textContent = "Live";
+
+        if (data.status === "confirmed" && statusEl.textContent !== "Confirmed") {
+            statusEl.textContent = "Confirmed";
+            stopAvailabilityPolling();
+            const slotDisplay = document.getElementById("avail-confirmed-slot-display");
+            if (data.confirmed_slot && slotDisplay) {
+                const slot = typeof data.confirmed_slot === "string"
+                    ? JSON.parse(data.confirmed_slot) : data.confirmed_slot;
+                slotDisplay.textContent = `✓ ${slot.start}–${slot.end} on ${slot.date} with ${data.receiver_name || "guest"}`;
+                slotDisplay.classList.remove("hidden");
+                addNotification({
+                    type: 'success',
+                    title: 'Meeting confirmed!',
+                    message: `${slot.start}–${slot.end} on ${slot.date}${data.receiver_name ? ' with ' + data.receiver_name : ''}`,
+                    dismissible: true,
+                    actionable: true,
+                    actionLabel: 'View on calendar →',
+                    actionFn: () => { if (calendarInstance) calendarInstance.gotoDate(slot.date); },
+                });
+            }
+            document.getElementById("avail-amendment-section").classList.add("hidden");
+            await loadData();
+            const meetingEvent = [...(currentEvents || [])].reverse()
+                .find(e => e.title === "Meeting (availability booking)");
+            if (meetingEvent) {
+                const eventId = meetingEvent.id;
+                const slot = typeof data.confirmed_slot === "string"
+                    ? JSON.parse(data.confirmed_slot) : data.confirmed_slot;
+                pushHistory(
+                    async () => { await fetch(`${API_URL}/events/${eventId}`, { method: "DELETE" }); await loadData(); },
+                    async () => {
+                        const cal = currentTimelines[0];
+                        if (cal) {
+                            await fetch(`${API_URL}/events/`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    title: meetingTitle,
+                                    start_time: `${slot.date}T${slot.start}:00`,
+                                    end_time: `${slot.date}T${slot.end}:00`,
+                                    calendar_id: cal.id,
+                                    reminder_minutes: 15
+                                })
+                            });
+                            await loadData();
+                        }
+                    },
+                    "Meeting created"
+                );
+            }
+
+        } else if (data.status === "amended" && statusEl.textContent !== "Amendment proposed") {
+            statusEl.textContent = "Amendment proposed";
+            const amendSection = document.getElementById("avail-amendment-section");
+            const amendSlotText = document.getElementById("avail-amendment-slot-text");
+            if (data.amendment_slot && amendSlotText) {
+                const slot = typeof data.amendment_slot === "string"
+                    ? JSON.parse(data.amendment_slot) : data.amendment_slot;
+                amendSlotText.textContent = `${slot.start}–${slot.end} on ${slot.date}${data.receiver_name ? " from " + data.receiver_name : ""}`;
+                addNotification({
+                    type: 'warning',
+                    title: 'Amendment proposed',
+                    message: `${slot.start}–${slot.end} on ${slot.date}${data.receiver_name ? ' from ' + data.receiver_name : ''}`,
+                    dismissible: false,
+                    actionable: true,
+                    actionLabel: 'Review →',
+                    actionFn: () => {
+                        document.getElementById('availability-response-modal')?.classList.remove('hidden');
+                    },
+                });
+            }
+            if (amendSection) amendSection.classList.remove("hidden");
+
+        } else if (data.status === "declined") {
+            statusEl.textContent = "Declined";
+            stopAvailabilityPolling();
+            addNotification({
+                type: 'error',
+                title: 'Availability declined',
+                message: 'Your proposed times were declined.',
+                dismissible: true,
+            });
+
+        } else if (data.status === "pending" && statusEl.textContent === "Amendment proposed") {
+            statusEl.textContent = "Pending";
+            const amendSection = document.getElementById("avail-amendment-section");
+            if (amendSection) amendSection.classList.add("hidden");
+        }
+    } catch (e) {
+        if (indicator) indicator.textContent = "Offline";
+    }
+}
+
+async function handleAmendmentResponse(token, action, counterSlot = null) {
+    const body = { action };
+    if (counterSlot) body.counter_slot = counterSlot;
+    try {
+        const res = await fetch(`${API_URL}/availability/${token}/respond-amendment`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const statusEl = document.getElementById("avail-status-text");
+        if (statusEl) statusEl.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+        const amendSection = document.getElementById("avail-amendment-section");
+        if (amendSection) amendSection.classList.add("hidden");
+        const counterSection = document.getElementById("avail-counter-section");
+        if (counterSection) counterSection.classList.add("hidden");
+
+        if (data.status === "confirmed") {
+            stopAvailabilityPolling();
+            await loadData();
+            const confirmedSlot = data.confirmed_slot
+                ? (typeof data.confirmed_slot === "string" ? JSON.parse(data.confirmed_slot) : data.confirmed_slot)
+                : counterSlot;
+            const slotDisplay = document.getElementById("avail-confirmed-slot-display");
+            if (confirmedSlot && slotDisplay) {
+                slotDisplay.textContent = `✓ ${confirmedSlot.start}–${confirmedSlot.end} on ${confirmedSlot.date}`;
+                slotDisplay.classList.remove("hidden");
+            }
+            addNotification({
+                type: 'success',
+                title: 'Meeting confirmed!',
+                message: confirmedSlot
+                    ? `${confirmedSlot.start}–${confirmedSlot.end} on ${confirmedSlot.date}`
+                    : 'Meeting scheduled.',
+                dismissible: true,
+                actionable: !!confirmedSlot?.date,
+                actionLabel: 'View on calendar →',
+                actionFn: () => { if (calendarInstance && confirmedSlot?.date) calendarInstance.gotoDate(confirmedSlot.date); },
+            });
+            // Find and register undo for auto-created event
+            const meetingEvent = [...(currentEvents || [])].reverse()
+                .find(e => e.title === "Meeting (availability booking)");
+            if (meetingEvent) {
+                const eventId = meetingEvent.id;
+                pushHistory(
+                    async () => { await fetch(`${API_URL}/events/${eventId}`, { method: "DELETE" }); await loadData(); },
+                    async () => { /* re-creation handled by re-accepting */ },
+                    "Meeting created"
+                );
+            }
+        } else if (data.status === "pending") {
+            startAvailabilityPolling(token);
+        }
+    } catch (e) {
+        console.error("Failed to respond to amendment:", e);
     }
 }

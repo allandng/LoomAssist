@@ -1,4 +1,4 @@
-# 🧶 LoomAssist 1.4: Privacy-First Local AI Assistant
+# 🧶 LoomAssist 1.5: Privacy-First Local AI Assistant
 
 Loom is a high-performance, local-first personal assistant designed for students and developers. It transforms your voice into structured calendar events using state-of-the-art speech-to-text and local LLMs—ensuring your data never leaves your Mac.
 
@@ -29,6 +29,10 @@ Loom is a high-performance, local-first personal assistant designed for students
 * **🔄 Timeline Rename:** Double-click any timeline name to rename it inline. Delete button only appears when the timeline is checked.
 * **🖨️ Print Week View:** Print-optimized week layout opens in a new tab and triggers the browser print dialog.
 * **💾 Sync Status:** Live timestamp in the top bar showing last successful sync. Turns red on connection failure.
+* **🔔 In-App Notifications:** A bell-icon panel in the top bar for info, success, warning, error, and progress alerts. Supports actionable cards, auto-dismiss, progress bars, unread badge, and full keyboard accessibility.
+* **📅 Appointment Scheduling:** Send a shareable availability link to contacts. They confirm, decline, or propose a counter-slot; accepted slots auto-create a calendar event. Includes mini-calendar slot picker and real-time polling.
+* **👁️ Quick-Peek Hover Card:** Hover over any calendar event to see a rich preview — title, time range, timeline, rendered description, and checklist items — without opening the full editor.
+* **📋 Structured Logging:** Full-stack JSON log pipeline. The backend writes rotating logs to `~/Library/Logs/LoomAssist/`; the frontend ships batched entries every 10 s; Rust panics write a dedicated crash file. A log viewer and crash-recovery notification are built in.
 
 ---
 
@@ -136,6 +140,10 @@ You can also type in the search bar — when your text doesn't match an existing
 - [x] Print Week View
 - [x] App Drawer Navigation Strip
 - [x] Duplicate Import Prevention
+- [x] In-App Notification Panel (bell icon, badge, progress, actionable cards)
+- [x] Appointment Scheduling via Shareable Availability Link
+- [x] Quick-Peek Hover Card (rich event preview on mouse-over)
+- [x] Structured Full-Stack Logging (rotating JSON logs, crash snapshots, log viewer)
 - [ ] Next: Cloud Premium Layer (Supabase + Stripe + LiteLLM)
 - [ ] Next: One-Key Capture (Ctrl+L) — premium audio capture
 - [ ] Next: AI Study Guide / Cheat Sheet Generator — premium

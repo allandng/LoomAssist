@@ -104,3 +104,30 @@ class TaskRead(SQLModel):
     is_complete: bool
     note: Optional[str]
     added_at: Optional[str]
+
+# --- AVAILABILITY REQUEST MODELS ---
+class AvailabilityRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    token: str = Field(unique=True, index=True)
+    sender_name: str
+    duration_minutes: int = Field(default=60)
+    slots: str                              # JSON: [{"date":"YYYY-MM-DD","start":"HH:MM","end":"HH:MM"}, ...]
+    status: str = Field(default="pending")  # pending | confirmed | amended | declined
+    confirmed_slot: Optional[str] = None    # JSON object, null until confirmed
+    amendment_slot: Optional[str] = None    # JSON object, null until proposed
+    receiver_name: Optional[str] = None
+    created_at: str
+    expires_at: str
+
+class AvailabilityRequestRead(SQLModel):
+    id: int
+    token: str
+    sender_name: str
+    duration_minutes: int
+    slots: str
+    status: str
+    confirmed_slot: Optional[str]
+    amendment_slot: Optional[str]
+    receiver_name: Optional[str]
+    created_at: str
+    expires_at: str

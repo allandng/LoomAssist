@@ -1,27 +1,34 @@
-from unittest import result
+from loom_logger import get_logger, write_crash_snapshot, LOG_FILE, CRASH_FLAG
+import logging
+logging.basicConfig(handlers=[])  # suppress root handler noise
 
-from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Request
+from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from services import scraper   
+from services import scraper
 import asyncio
 from faster_whisper import WhisperModel
 import os
 import tempfile
-import ollama 
-import json   
-import re     
-import logging
-from datetime import datetime, timedelta 
+import ollama
+import json
+import re
+import time as _time
+from collections import defaultdict
+from datetime import datetime, timedelta
 from sqlmodel import select
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from pypdf import PdfReader
 import shutil
 import hashlib
+import uuid
+from pathlib import Path
 from database.database import SessionLocal, engine, create_db_and_tables, run_migrations, migrate_todo_to_task
 from database import models
 
@@ -36,9 +43,26 @@ create_db_and_tables()
 
 app = FastAPI(title="Loom Backend API")
 
-# Configure logging as per guardrail
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("loom")
+logger = get_logger("main")
+
+
+class CrashMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            get_logger("crash").critical(
+                f"Unhandled {request.method} {request.url.path}",
+                exc_info=True,
+            )
+            write_crash_snapshot(type(exc), exc, exc.__traceback__)
+            return JSONResponse(
+                status_code=500,
+                content={"error": {"code": "internal_error", "detail": "An unexpected error occurred."}},
+            )
+
+
+app.add_middleware(CrashMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -82,6 +106,81 @@ def validate_calendar_exists(calendar_id: int, db: Session):
         raise HTTPException(status_code=404,
             detail={'error': {'code': 'calendar_not_found',
                               'detail': f'Calendar {calendar_id} does not exist.'}})
+
+# ==========================================
+# LOG RATE LIMITER
+# ==========================================
+
+_log_rate: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
+
+
+def _check_rate(ip: str, limit: int = 100, window: float = 60.0) -> bool:
+    count, start = _log_rate[ip]
+    now = _time.monotonic()
+    if now - start > window:
+        _log_rate[ip] = (1, now)
+        return True
+    if count >= limit:
+        return False
+    _log_rate[ip] = (count + 1, start)
+    return True
+
+
+# ==========================================
+# LOGGING ENDPOINTS
+# ==========================================
+
+class FrontendLogEntry(BaseModel):
+    level: str
+    message: str
+    context: Optional[dict] = None
+
+
+@app.post("/api/logs")
+async def receive_frontend_log(entry: FrontendLogEntry, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    if not _check_rate(ip):
+        return JSONResponse(status_code=429, content={"error": {"code": "rate_limited"}})
+    frontend_logger = get_logger("frontend")
+    level = entry.level.upper()
+    msg = entry.message if not entry.context else f"{entry.message} | {entry.context}"
+    getattr(frontend_logger, level.lower(), frontend_logger.info)(msg)
+    return {"status": "ok"}
+
+
+@app.get("/api/logs/crash-flag")
+def get_crash_flag():
+    if CRASH_FLAG.exists():
+        crash_file = CRASH_FLAG.read_text().strip()
+        CRASH_FLAG.unlink(missing_ok=True)
+        return {"crashed": True, "crash_file": crash_file}
+    return {"crashed": False, "crash_file": None}
+
+
+@app.get("/api/logs/export")
+def export_logs():
+    if not LOG_FILE.exists():
+        return Response(
+            content="No log file found.",
+            media_type="text/plain",
+            headers={"Content-Disposition": 'attachment; filename="loomassist_logs.txt"'},
+        )
+    lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    content = "".join(lines[-500:])
+    return Response(
+        content=content,
+        media_type="text/plain",
+        headers={"Content-Disposition": 'attachment; filename="loomassist_logs.txt"'},
+    )
+
+
+@app.delete("/api/logs")
+def clear_logs():
+    if LOG_FILE.exists():
+        LOG_FILE.unlink()
+    LOG_FILE.touch()
+    return {"status": "ok"}
+
 
 @app.get("/")
 async def root():
@@ -771,3 +870,209 @@ async def transcribe_audio(file: UploadFile = File(...), db: Session = Depends(g
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+
+# ============================================================
+# AVAILABILITY REQUEST ROUTES
+# ============================================================
+
+class CreateAvailabilityRequest(BaseModel):
+    sender_name: str
+    duration_minutes: int = 60
+    slots: list  # [{"date":"YYYY-MM-DD","start":"HH:MM","end":"HH:MM"}]
+
+class ContactInfo(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
+
+class ConfirmAvailabilityRequest(BaseModel):
+    slot: dict
+    receiver_name: Optional[str] = None
+    contact: Optional[ContactInfo] = None
+
+class AmendAvailabilityRequest(BaseModel):
+    slot: dict
+    receiver_name: str
+    note: Optional[str] = None
+
+class RespondAmendmentRequest(BaseModel):
+    action: str  # "accept" | "decline" | "counter"
+    counter_slot: Optional[dict] = None
+
+
+def _check_availability_expiry(req: models.AvailabilityRequest):
+    if datetime.utcnow() > datetime.fromisoformat(req.expires_at):
+        raise HTTPException(
+            status_code=410,
+            detail={"error": {"code": "link_expired", "detail": "This availability link has expired."}}
+        )
+
+
+def _create_meeting_event(db: Session, slot: dict, contact: dict | None = None) -> Optional[int]:
+    calendar = db.query(models.Calendar).first()
+    if not calendar:
+        return None
+    date_str = slot["date"]
+    description = None
+    if contact:
+        lines = []
+        if contact.get("name"):    lines.append(f"Name: {contact['name']}")
+        if contact.get("email"):   lines.append(f"Email: {contact['email']}")
+        if contact.get("phone"):   lines.append(f"Phone: {contact['phone']}")
+        if contact.get("company"): lines.append(f"Company: {contact['company']}")
+        description = "\n".join(lines) if lines else None
+    event_data = models.EventBase(
+        title="Meeting (availability booking)",
+        description=description,
+        start_time=f"{date_str}T{slot['start']}:00",
+        end_time=f"{date_str}T{slot['end']}:00",
+        calendar_id=calendar.id,
+        reminder_minutes=15,
+    )
+    db_event = models.Event.model_validate(event_data)
+    db.add(db_event)
+    db.commit()
+    db.refresh(db_event)
+    return db_event.id
+
+
+@app.post("/availability")
+def create_availability(body: CreateAvailabilityRequest, db: Session = Depends(get_db)):
+    token = str(uuid.uuid4())
+    now = datetime.utcnow()
+    req = models.AvailabilityRequest(
+        token=token,
+        sender_name=body.sender_name,
+        duration_minutes=body.duration_minutes,
+        slots=json.dumps(body.slots),
+        status="pending",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(days=7)).isoformat(),
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    share_url = f"http://localhost:8000/availability/{token}/view"
+    return {"id": req.id, "token": token, "share_url": share_url, "view_url": share_url}
+
+
+@app.get("/availability/{token}", response_model=models.AvailabilityRequestRead)
+def get_availability(token: str, db: Session = Depends(get_db)):
+    req = db.query(models.AvailabilityRequest).filter(
+        models.AvailabilityRequest.token == token
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Availability request not found."}})
+    _check_availability_expiry(req)
+    return req
+
+
+@app.post("/availability/{token}/confirm")
+def confirm_availability(token: str, body: ConfirmAvailabilityRequest, db: Session = Depends(get_db)):
+    req = db.query(models.AvailabilityRequest).filter(
+        models.AvailabilityRequest.token == token
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Availability request not found."}})
+    _check_availability_expiry(req)
+    if req.status == "confirmed":
+        raise HTTPException(status_code=409,
+            detail={"error": {"code": "already_resolved", "detail": "This time has already been booked."}})
+    req.status = "confirmed"
+    req.confirmed_slot = json.dumps(body.slot)
+    if body.contact and body.contact.name:
+        req.receiver_name = body.contact.name
+    elif body.receiver_name:
+        req.receiver_name = body.receiver_name
+    db.commit()
+    db.refresh(req)
+    contact_dict = body.contact.model_dump() if body.contact else None
+    event_id = _create_meeting_event(db, body.slot, contact_dict)
+    return {"status": req.status, "confirmed_slot": json.loads(req.confirmed_slot), "event_id": event_id}
+
+
+@app.post("/availability/{token}/amend")
+def amend_availability(token: str, body: AmendAvailabilityRequest, db: Session = Depends(get_db)):
+    req = db.query(models.AvailabilityRequest).filter(
+        models.AvailabilityRequest.token == token
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Availability request not found."}})
+    _check_availability_expiry(req)
+    if req.status not in ("pending",):
+        raise HTTPException(status_code=409,
+            detail={"error": {"code": "already_resolved", "detail": "Request cannot be amended in its current state."}})
+    req.status = "amended"
+    req.amendment_slot = json.dumps(body.slot)
+    req.receiver_name = body.receiver_name
+    db.commit()
+    db.refresh(req)
+    return {"status": req.status, "amendment_slot": json.loads(req.amendment_slot)}
+
+
+@app.post("/availability/{token}/respond-amendment")
+def respond_amendment(token: str, body: RespondAmendmentRequest, db: Session = Depends(get_db)):
+    req = db.query(models.AvailabilityRequest).filter(
+        models.AvailabilityRequest.token == token
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Availability request not found."}})
+    _check_availability_expiry(req)
+
+    if body.action == "accept":
+        slot = json.loads(req.amendment_slot)
+        req.status = "confirmed"
+        req.confirmed_slot = req.amendment_slot
+        db.commit()
+        db.refresh(req)
+        event_id = _create_meeting_event(db, slot)
+        return {"status": "confirmed", "event_id": event_id}
+
+    elif body.action == "decline":
+        req.status = "declined"
+        db.commit()
+        return {"status": "declined"}
+
+    elif body.action == "counter":
+        if not body.counter_slot:
+            raise HTTPException(status_code=422,
+                detail={"error": {"code": "missing_counter_slot", "detail": "counter_slot is required for counter action."}})
+        req.status = "pending"
+        req.amendment_slot = json.dumps(body.counter_slot)
+        db.commit()
+        return {"status": "pending", "amendment_slot": body.counter_slot}
+
+    raise HTTPException(status_code=422,
+        detail={"error": {"code": "invalid_action", "detail": "action must be accept, decline, or counter."}})
+
+
+_404_HTML = (
+    "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Not Found</title>"
+    "<style>body{font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a;"
+    "display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}"
+    ".box{text-align:center;padding:48px 24px}"
+    "h2{font-size:1.4rem;font-weight:700;margin-bottom:8px}"
+    "p{color:#64748b;font-size:0.95rem}</style></head>"
+    "<body><div class='box'><h2>Link not found</h2>"
+    "<p>This availability link does not exist.</p></div></body></html>"
+)
+
+
+@app.get("/availability/{token}/view", response_class=HTMLResponse)
+def view_availability(token: str, db: Session = Depends(get_db)):
+    req = db.query(models.AvailabilityRequest).filter(
+        models.AvailabilityRequest.token == token
+    ).first()
+    if not req:
+        return HTMLResponse(content=_404_HTML, status_code=404)
+    html_path = Path(__file__).parent / "availability_receiver.html"
+    html = html_path.read_text(encoding="utf-8").replace("{{ token }}", token)
+    return HTMLResponse(content=html)

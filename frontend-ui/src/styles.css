@@ -181,6 +181,7 @@ body {
 
 #undo-btn, #redo-btn { font-size: 1.1rem; }
 #undo-btn:disabled, #redo-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.form-input:disabled { opacity: 0.5; cursor: not-allowed; background: var(--border); }
 
 .search-container {
   display: flex; align-items: center; background-color: var(--card-bg); border: 1px solid var(--border);
@@ -348,18 +349,28 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
    EVENT HOVER TOOLTIP
    ========================================== */
 #event-tooltip {
-  position: fixed; 
+  position: fixed;
   z-index: 5000;
-  background: var(--card-bg); 
+  background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 8px; 
-  padding: 12px 14px; 
-  max-width: 260px;
-  pointer-events: none; 
+  border-radius: 8px;
+  padding: 12px 14px;
+  max-width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  pointer-events: none;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-  font-size: 0.85rem; 
+  font-size: 0.85rem;
   line-height: 1.5;
 }
+.hc-title { font-weight: 600; margin-bottom: 4px; }
+.hc-meta { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 4px; }
+.hc-divider { border-top: 1px solid var(--border); margin: 8px 0; }
+.hc-desc { font-size: 0.8rem; }
+.hc-checklist { display: flex; flex-direction: column; gap: 4px; }
+.hc-check-item { display: flex; align-items: baseline; gap: 6px; font-size: 0.8rem; }
+.hc-check-item.done { color: var(--text-muted); text-decoration: line-through; }
+.hc-check-icon { flex-shrink: 0; font-size: 0.75rem; }
 /* ==========================================
    ONBOARDING
    ========================================== */
@@ -851,3 +862,343 @@ body.app-drawer-open .app-layout {
 
 /* Modals are position:fixed — they do not move with layout shifts.
    No adjustment needed. */
+
+/* ==========================================
+   SEND AVAILABILITY FEATURE
+   ========================================== */
+
+.avail-mini-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+  user-select: none;
+}
+
+.avail-cal-day-header {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 4px 0;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.avail-cal-day {
+  text-align: center;
+  padding: 6px 2px;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border: 1px solid transparent;
+  line-height: 1.4;
+}
+
+.avail-cal-day:hover:not(.avail-cal-day-empty):not(.avail-cal-day-past) {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: var(--accent);
+}
+
+.avail-cal-day-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.avail-cal-day-past {
+  color: var(--text-muted);
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: default;
+}
+
+.avail-cal-day-selected {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
+}
+
+.avail-cal-day-today {
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.avail-time-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-color);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.avail-date-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent);
+  border-radius: 20px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 88px;
+  text-align: center;
+}
+
+.avail-time-row input[type="time"] {
+  flex: 1;
+  padding: 6px 8px;
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.avail-remove-day-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.avail-remove-day-btn:hover { color: var(--danger); }
+
+.avail-conflict-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(217, 119, 6, 0.08);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--text-main);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* ==========================================
+   NOTIFICATION BELL & PANEL
+   ========================================== */
+
+.notif-bell-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.notif-bell-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  transition: background-color 0.15s, color 0.15s;
+  color: var(--text-muted);
+}
+.notif-bell-btn:hover {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: var(--text-main);
+}
+
+.notif-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background-color: #ef4444;
+  color: white;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.notif-panel {
+  position: fixed;
+  width: 340px;
+  max-height: 480px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.notif-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.notif-panel__title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.notif-panel__clear-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+.notif-panel__clear-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+}
+
+.notif-list {
+  overflow-y: auto;
+  flex-grow: 1;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.notif-list::-webkit-scrollbar { width: 4px; }
+.notif-list::-webkit-scrollbar-track { background: transparent; }
+.notif-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.notif-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.notif-card {
+  position: relative;
+  padding: 10px 12px 10px 16px;
+  background: var(--bg-color);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.notif-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--notif-color, var(--accent));
+  border-radius: 8px 0 0 8px;
+}
+.notif-card--actionable {
+  cursor: pointer;
+}
+.notif-card--actionable:hover,
+.notif-card--actionable:focus {
+  border-color: var(--notif-color, var(--accent));
+  outline: none;
+}
+
+.notif-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.notif-card__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-main);
+  flex-grow: 1;
+  line-height: 1.3;
+}
+
+.notif-card__dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+.notif-card__dismiss:hover {
+  opacity: 1;
+  color: #10b981;
+}
+
+.notif-card__message {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+
+.notif-progressbar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.notif-progressbar__fill {
+  height: 100%;
+  background: #6366f1;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+@keyframes notif-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+.notif-progressbar__fill--shimmer {
+  background: linear-gradient(
+    90deg,
+    #6366f1 25%,
+    #818cf8 50%,
+    #6366f1 75%
+  );
+  background-size: 200% 100%;
+  animation: notif-shimmer 1.5s infinite linear;
+}
+
+.notif-card__action-label {
+  display: inline-block;
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.notif-card__ts {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
