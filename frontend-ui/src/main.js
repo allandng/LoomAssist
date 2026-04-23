@@ -1,5 +1,8 @@
 import { logger } from './logger.js';
 import { initNotifications, addNotification, updateNotification } from './notifications.js';
+import { initAppDrawer } from './components/appDrawer.js';
+import { initContextSidebar, expand as expandSidebar } from './components/contextSidebar.js';
+import { initTopBar, setActiveView } from './components/topBar.js';
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -35,7 +38,8 @@ let currentChecklist = []; // L3: in-memory checklist for the event currently op
 let currentTasks = []; // Task Board: in-memory task list (replaces M1 todos)
 let currentTaskFilter = 'all'; // Task Board: current filter state
 let analyzeDebounceTimer = null; // M2: debounce handle for schedule analysis
-let drawerOpen = false; // L1: track drawer open state for layout management
+// TODO v2.0 cleanup: drawerOpen obsolete — app drawer is now always-visible (components/appDrawer.js)
+let drawerOpen = false;
 
 // H5: day-of-week index to abbreviation
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -284,10 +288,8 @@ function showOnboardingStep(index) {
 // CALENDAR INITIALIZATION
 // ==========================================
 document.addEventListener('DOMContentLoaded', async function() {
-    if (localStorage.getItem("loom-sidebar") === "hidden") {
-        document.querySelector('.app-layout').classList.add('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "›";
-    }
+    // v2.0: Context sidebar handles its own state restore
+    initContextSidebar();
 
     const calendarEl = document.getElementById('calendar-container');
     const isTouch = 'ontouchstart' in window;
@@ -298,7 +300,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       eventResizableFromStart: true, // NEW: Enables resizing from the start edge
       droppable: true, // NEW: Enables external/internal dropping capabilities
       selectable: true, // H1: enable drag-select across the grid to create events
-      headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
+      headerToolbar: false, // v2.0: view switcher + date nav live in .top-bar (topBar.js)
       height: '100%',
       events: [],
 
@@ -528,6 +530,27 @@ document.addEventListener('DOMContentLoaded', async function() {
     calendarInstance = new FullCalendar.Calendar(calendarEl, calendarOptions);
 
     calendarInstance.render();
+
+    // v2.0: wire top bar view switcher + date nav to calendarInstance
+    document.addEventListener('loom:view-change', (e) => {
+        calendarInstance.changeView(e.detail.view);
+        setActiveView(e.detail.view);
+    });
+    document.addEventListener('loom:date-nav', (e) => {
+        if (e.detail.action === 'prev')  calendarInstance.prev();
+        else if (e.detail.action === 'next')  calendarInstance.next();
+        else if (e.detail.action === 'today') calendarInstance.today();
+    });
+    // v2.0: app drawer navigation
+    document.addEventListener('loom:navigate', (e) => {
+        const dest = e.detail.destination;
+        localStorage.setItem('loom:destination', dest);
+        if (dest === 'focus')    openFocusMode();
+        if (dest === 'tasks')    openSidebarTaskboard();
+        if (dest === 'settings') document.getElementById('settings-modal')?.classList.remove('hidden');
+        if (dest === 'calendar') updateSidebarMode('normal');
+    });
+
     bindTimelineDropdowns();
     await loadData();
     logger.info("LoomAssist initialized");
@@ -553,6 +576,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     setupEventListeners();
     initNotifications();
+    initTopBar();
     logger.setFlushCallback((batch) => {
         const errors = batch.filter(e => e.level === 'ERROR');
         errors.forEach(e => addNotification({
@@ -562,7 +586,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             dismissible: true,
         }));
     });
-    initAppDrawer(); // L1: must be called last — references DOM elements also touched by setupEventListeners
+    initAppDrawer(); // v2.0: imported from components/appDrawer.js — wires the 56px persistent rail
     if (!localStorage.getItem('loom-onboarded')) {
         setTimeout(() => document.getElementById('onboarding-modal').classList.remove('hidden'), 600);
     }
@@ -1403,8 +1427,7 @@ let approvalState = [];
 
 function openSidebarApproval(events) {
     if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
-        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "‹";
+        expandSidebar();
     }
 
     updateSidebarMode("approval");
@@ -1514,8 +1537,7 @@ document.getElementById('menu-export-btn').addEventListener('click', () => {
 
 function openSidebarExport() {
     if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
-        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "‹";
+        expandSidebar();
     }
     updateSidebarMode("export");
     
@@ -1765,8 +1787,7 @@ function showDailyAgenda() {
 // ==========================================
 function openStatsPanel() {
     if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
-        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "‹";
+        expandSidebar();
     }
     updateSidebarMode("stats");
 
@@ -1898,8 +1919,7 @@ function openPrintView() {
 // ==========================================
 async function openSidebarTemplates() {
     if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
-        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "‹";
+        expandSidebar();
     }
     updateSidebarMode("templates");
     const list = document.getElementById('template-list');
@@ -2121,8 +2141,7 @@ async function loadTasks() {
 
 function openSidebarTaskboard() {
     if (document.querySelector('.app-layout').classList.contains('sidebar-hidden')) {
-        document.querySelector('.app-layout').classList.remove('sidebar-hidden');
-        document.getElementById('sidebar-toggle').textContent = "‹";
+        expandSidebar();
     }
     updateSidebarMode("taskboard");
     loadTasks();
@@ -2371,66 +2390,15 @@ async function bulkDeleteSelected() {
 // ==========================================
 // APP DRAWER (L1)
 // ==========================================
-function initAppDrawer() {
-    // Restore persisted state before first render
-    const saved = localStorage.getItem('loom-drawer');
-    if (saved === 'open') {
-        openDrawer();
-    }
-
-    document.getElementById('drawer-strip-btn').addEventListener('click', () => {
-        if (drawerOpen) closeDrawer();
-        else openDrawer();
-    });
-
-    // Module buttons
-    document.getElementById('drawer-calendar-btn').addEventListener('click', () => {
-        // Return to calendar view: clear any active sidebar panel
-        updateSidebarMode('normal');
-        setActiveDrawerBtn('drawer-calendar-btn');
-        closeDrawer();
-    });
-
-    document.getElementById('drawer-todos-btn').addEventListener('click', () => {
-        openSidebarTaskboard();
-        setActiveDrawerBtn('drawer-todos-btn');
-        closeDrawer();
-    });
-
-    document.getElementById('drawer-focus-btn').addEventListener('click', () => {
-        // openFocusMode() was implemented in L2
-        if (typeof openFocusMode === 'function') openFocusMode();
-        setActiveDrawerBtn('drawer-focus-btn');
-        closeDrawer();
-    });
-
-    // Close drawer when clicking outside of it
-    document.addEventListener('click', (e) => {
-        if (drawerOpen && !e.target.closest('#app-drawer')) {
-            closeDrawer();
-        }
-    });
+// TODO v2.0 cleanup: _legacyInitAppDrawer replaced by components/appDrawer.js
+function _legacyInitAppDrawer() {
+    // kept for reference only — no longer called
 }
 
-function openDrawer() {
-    drawerOpen = true;
-    document.getElementById('app-drawer').classList.add('app-drawer-open');
-    document.body.classList.add('app-drawer-open');
-    localStorage.setItem('loom-drawer', 'open');
-}
-
-function closeDrawer() {
-    drawerOpen = false;
-    document.getElementById('app-drawer').classList.remove('app-drawer-open');
-    document.body.classList.remove('app-drawer-open');
-    localStorage.setItem('loom-drawer', 'closed');
-}
-
-function setActiveDrawerBtn(activeId) {
-    document.querySelectorAll('.drawer-module-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.id === activeId);
-    });
-}
+// TODO v2.0 cleanup: openDrawer/closeDrawer/setActiveDrawerBtn obsolete — drawer is now persistent
+function openDrawer() { drawerOpen = true; }
+function closeDrawer() { drawerOpen = false; }
+function setActiveDrawerBtn(_activeId) { /* superseded by appDrawer.js */ }
 
 // ==========================================
 // EVENT LISTENERS & UI
@@ -2455,10 +2423,10 @@ function setupEventListeners() {
             switch(e.key.toLowerCase()) { // use toLowerCase() to catch 'N' or 'n'
                 case 'n': e.preventDefault(); openEventModal(); break;
                 case 't': calendarInstance.today(); break;
-                case '1': calendarInstance.changeView('dayGridMonth'); break;
-                case '2': calendarInstance.changeView('timeGridWeek'); break;
-                case '3': calendarInstance.changeView('timeGridDay'); break;
-                case '4': calendarInstance.changeView('listWeek'); break;
+                case '1': calendarInstance.changeView('dayGridMonth'); setActiveView('dayGridMonth'); break;
+                case '2': calendarInstance.changeView('timeGridWeek'); setActiveView('timeGridWeek'); break;
+                case '3': calendarInstance.changeView('timeGridDay'); setActiveView('timeGridDay'); break;
+                case '4': calendarInstance.changeView('listWeek'); setActiveView('listWeek'); break;
                 case '[': calendarInstance.prev(); break;
                 case ']': calendarInstance.next(); break;
                 case 'b': document.getElementById('sidebar-toggle').click(); break;
@@ -2611,14 +2579,7 @@ function setupEventListeners() {
             setModalTitleDot(e.target.value);
         });
     }
-    // --- Sidebar Toggle ---
-    const sidebarToggle = document.getElementById("sidebar-toggle");
-    sidebarToggle.addEventListener("click", () => {
-        const layout = document.querySelector('.app-layout');
-        layout.classList.toggle('sidebar-hidden');
-        sidebarToggle.textContent = layout.classList.contains('sidebar-hidden') ? "›" : "‹";
-        localStorage.setItem("loom-sidebar", layout.classList.contains('sidebar-hidden') ? "hidden" : "visible");
-    });
+    // v2.0: sidebar toggle is handled by contextSidebar.js (click listener on #sidebar-toggle)
 
     // --- Search Listener (H6: also controls + quick-add button visibility) ---
     const searchInput = document.getElementById("event-search");

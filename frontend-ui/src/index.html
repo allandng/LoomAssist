@@ -11,156 +11,203 @@
 
   <body>
 
-    <div id="app-drawer">
-      <div class="drawer-strip" id="drawer-strip-btn" title="Open app menu"></div>
-      <div class="drawer-panel">
-        <div class="drawer-header">
-          <span class="drawer-title">Loom</span>
-        </div>
-        <button class="drawer-module-btn active" id="drawer-calendar-btn">
-          <span class="drawer-icon">🗓</span>
-          <span class="drawer-label">Calendar</span>
-        </button>
-        <button class="drawer-module-btn" id="drawer-todos-btn">
-          <span class="drawer-icon">✓</span>
-          <span class="drawer-label">Todos</span>
-        </button>
-        <button class="drawer-module-btn" id="drawer-focus-btn">
-          <span class="drawer-icon">🎯</span>
-          <span class="drawer-label">Focus</span>
-        </button>
-      </div>
-    </div>
+    <!-- ==========================================
+         v2.0 THREE-COLUMN SHELL
+         .app-layout kept so existing sidebar-hidden class checks in main.js still work
+         ========================================== -->
+    <div class="app-layout app-shell">
 
-    <div class="app-layout">
-      
-      <aside class="sidebar">
-        <h1>Loom</h1>
-        
-        <p id="import-error" class="hidden" style="margin: 0 0 10px 0; color: var(--danger); font-size: 0.8rem;"></p>
+      <!-- 56px persistent navigation rail -->
+      <nav class="app-drawer" id="app-drawer">
+        <button class="app-drawer__item active" id="drawer-calendar-btn" data-dest="calendar" title="Calendar">
+          <svg class="app-drawer__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <span class="app-drawer__label">Calendar</span>
+        </button>
+        <button class="app-drawer__item" id="drawer-todos-btn" data-dest="tasks" title="Tasks">
+          <svg class="app-drawer__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path>
+          </svg>
+          <span class="app-drawer__label">Tasks</span>
+        </button>
+        <button class="app-drawer__item" id="drawer-focus-btn" data-dest="focus" title="Focus">
+          <svg class="app-drawer__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <circle cx="12" cy="12" r="6"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+          </svg>
+          <span class="app-drawer__label">Focus</span>
+        </button>
+        <button class="app-drawer__item" id="drawer-settings-btn" data-dest="settings" title="Settings">
+          <svg class="app-drawer__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"></path>
+          </svg>
+          <span class="app-drawer__label">Settings</span>
+        </button>
+      </nav>
 
-        <div class="sidebar-section">
-          <div class="section-header">
-            <h3>Timelines</h3>
-            <div class="header-actions" style="position: relative;">
+      <!-- Collapsible context sidebar (260px → 48px via .sidebar-hidden on .app-layout) -->
+      <div class="context-sidebar" id="context-sidebar">
+        <button id="sidebar-toggle" class="sidebar-chevron" title="Collapse sidebar (B)" aria-label="Toggle sidebar">‹</button>
+
+        <div class="context-sidebar__scroll" id="sidebar-content">
+
+          <p id="import-error" class="hidden" style="margin: 0 0 10px 0; color: var(--danger); font-size: 0.8rem;"></p>
+
+          <div class="sidebar-section">
+            <div class="section-header">
+              <h3>Timelines</h3>
+              <div class="header-actions" style="position: relative;">
                 <button id="sidebar-menu-btn" class="icon-btn" title="Menu">☰</button>
                 <div id="sidebar-dropdown" class="hidden">
-                    <div class="dropdown-item" id="menu-taskboard-btn">✅ Task Board</div>
-                    <div class="dropdown-item" id="menu-templates-btn">📋 Templates</div>
-                    <div class="dropdown-item" id="menu-import-btn">🔍 File Scanner</div>
-                    <div class="dropdown-item" id="menu-export-btn">↓ Export Timeline</div>
-                    <div class="dropdown-item" id="menu-new-timeline-btn">+ Add Timeline</div>
-                    <div class="dropdown-item" id="menu-stats-btn">📊 Statistics</div>
-                    <div class="dropdown-item" id="menu-print-btn">🖨 Print Week</div>
-                    <div class="dropdown-item" id="menu-focus-btn">🎯 Focus Mode</div>
+                  <div class="dropdown-item" id="menu-taskboard-btn">✅ Task Board</div>
+                  <div class="dropdown-item" id="menu-templates-btn">📋 Templates</div>
+                  <div class="dropdown-item" id="menu-import-btn">🔍 File Scanner</div>
+                  <div class="dropdown-item" id="menu-export-btn">↓ Export Timeline</div>
+                  <div class="dropdown-item" id="menu-new-timeline-btn">+ Add Timeline</div>
+                  <div class="dropdown-item" id="menu-stats-btn">📊 Statistics</div>
+                  <div class="dropdown-item" id="menu-print-btn">🖨 Print Week</div>
+                  <div class="dropdown-item" id="menu-focus-btn">🎯 Focus Mode</div>
                 </div>
+              </div>
             </div>
+            <ul id="timeline-list">
+              <li>Loading...</li>
+            </ul>
           </div>
-          <ul id="timeline-list">
-            <li>Loading...</li>
-          </ul>
-        </div>
-        
-        <div class="record-section">
-          <button id="mic-btn" class="mic-inactive">🎤 Listen</button>
-        </div>
 
-        <div id="sidebar-search-results" class="hidden"></div>
-        
-        <div id="sidebar-approval-panel" class="hidden">
+          <div class="record-section">
+            <button id="mic-btn" class="mic-inactive">🎤 Listen</button>
+          </div>
+
+          <div id="sidebar-search-results" class="hidden"></div>
+
+          <div id="sidebar-approval-panel" class="hidden">
             <h3 style="margin-bottom: 10px; font-size: 1rem;">Review Import</h3>
             <select id="approval-timeline-select" class="form-input" style="margin-bottom: 10px;"></select>
-            
             <div id="approval-event-list"></div>
-            
             <div class="approval-actions">
-                <button id="approval-cancel-btn" class="delete-btn" style="flex: 1;">Cancel</button>
-                <button id="approval-save-btn" class="accept-btn" style="flex: 2;">Save Approved</button>
+              <button id="approval-cancel-btn" class="delete-btn" style="flex: 1;">Cancel</button>
+              <button id="approval-save-btn" class="accept-btn" style="flex: 2;">Save Approved</button>
             </div>
-        </div>
+          </div>
 
-        <!-- M5: Statistics panel -->
-        <div id="sidebar-stats-panel" class="hidden">
+          <!-- M5: Statistics panel -->
+          <div id="sidebar-stats-panel" class="hidden">
             <div class="stats-header">
-                <h3 style="font-size: 1rem;">Statistics</h3>
-                <button id="close-stats-btn" class="icon-btn">×</button>
+              <h3 style="font-size: 1rem;">Statistics</h3>
+              <button id="close-stats-btn" class="icon-btn">×</button>
             </div>
             <div id="stats-content"></div>
-        </div>
+          </div>
 
-        <div id="sidebar-export-panel" class="hidden">
+          <div id="sidebar-export-panel" class="hidden">
             <div class="export-header">
-                <h3 style="font-size: 1rem;">Export Timelines</h3>
-                <button id="close-export-btn" class="icon-btn">×</button>
+              <h3 style="font-size: 1rem;">Export Timelines</h3>
+              <button id="close-export-btn" class="icon-btn">×</button>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <button id="export-toggle-all" class="export-toggle-link">Deselect All</button>
-                <div class="export-format-pills">
-                    <button id="export-fmt-json" class="format-pill active">JSON</button>
-                    <button id="export-fmt-ics" class="format-pill">ICS</button>
-                </div>
+              <button id="export-toggle-all" class="export-toggle-link">Deselect All</button>
+              <div class="export-format-pills">
+                <button id="export-fmt-json" class="format-pill active">JSON</button>
+                <button id="export-fmt-ics" class="format-pill">ICS</button>
+              </div>
             </div>
             <div id="export-timeline-list"></div>
             <p id="export-status" style="font-size: 0.85rem; margin: 5px 0; min-height: 1.2em;"></p>
             <div style="margin-top: auto; display: flex; gap: 10px;">
-                <button id="export-cancel-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
-                <button id="export-confirm-btn" class="accept-btn">↓ Export</button>
+              <button id="export-cancel-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
+              <button id="export-confirm-btn" class="accept-btn">↓ Export</button>
             </div>
-        </div>
+          </div>
 
-        <!-- M3: Event Templates panel -->
-        <div id="sidebar-templates-panel" class="hidden">
+          <!-- M3: Event Templates panel -->
+          <div id="sidebar-templates-panel" class="hidden">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <h3 style="font-size: 1rem;">Templates</h3>
-                <button id="close-templates-btn" class="icon-btn">×</button>
+              <h3 style="font-size: 1rem;">Templates</h3>
+              <button id="close-templates-btn" class="icon-btn">×</button>
             </div>
             <div id="template-list" style="overflow-y: auto; flex-grow: 1; display: flex; flex-direction: column; gap: 8px;">
-                <p class="muted-text" style="font-size: 0.85rem;">No templates saved yet. Open any event and click Save as Template.</p>
+              <p class="muted-text" style="font-size: 0.85rem;">No templates saved yet. Open any event and click Save as Template.</p>
             </div>
-        </div>
-
-        <!-- Task Board panel (replaces M1 Todos) -->
-        <div id="sidebar-taskboard-panel" class="hidden">
-          <div style="display: flex; justify-content: space-between;
-                      align-items: center; margin-bottom: 10px;">
-            <h3 style="font-size: 1rem;">Task Board</h3>
-            <button id="close-taskboard-btn" class="icon-btn">×</button>
           </div>
-          <div style="display: flex; gap: 5px; margin-bottom: 10px;">
-            <button class="format-pill active" id="task-filter-all">All</button>
-            <button class="format-pill" id="task-filter-active">Active</button>
-            <button class="format-pill" id="task-filter-done">Done</button>
-          </div>
-          <div id="taskboard-list"></div>
-        </div>
-      </aside>
 
-      <main class="main-content">
-        <button id="sidebar-toggle" title="Toggle Sidebar">‹</button>
-
-        <header class="top-bar">
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <button id="undo-btn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↩</button>
-            <button id="redo-btn" class="icon-btn" title="Redo (Ctrl+Shift+Z)" disabled>↪</button>
+          <!-- Task Board panel -->
+          <div id="sidebar-taskboard-panel" class="hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <h3 style="font-size: 1rem;">Task Board</h3>
+              <button id="close-taskboard-btn" class="icon-btn">×</button>
+            </div>
+            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+              <button class="format-pill active" id="task-filter-all">All</button>
+              <button class="format-pill" id="task-filter-active">Active</button>
+              <button class="format-pill" id="task-filter-done">Done</button>
+            </div>
+            <div id="taskboard-list"></div>
           </div>
-            <span id="sync-status"></span>
 
-          <!-- H6: Unified search + quick-add (standalone quick-add bar removed) -->
-          <div class="search-container">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="event-search" placeholder="Search events..." />
-            <button id="search-quick-add-btn" class="hidden" title="Quick-add this as new event">+</button>
+        </div><!-- end #sidebar-content -->
+      </div><!-- end .context-sidebar -->
+
+      <!-- Main column: top bar + content -->
+      <div class="main-column">
+        <header class="top-bar" id="top-bar">
+          <!-- Left cluster: view switcher + date nav + undo/redo -->
+          <div class="top-bar__left" id="top-bar-left">
+            <div class="view-switcher" id="view-switcher">
+              <button class="view-pill active" data-view="dayGridMonth" id="view-month">Month</button>
+              <button class="view-pill" data-view="timeGridWeek" id="view-week">Week</button>
+              <button class="view-pill" data-view="timeGridDay" id="view-day">Day</button>
+              <button class="view-pill" data-view="listWeek" id="view-agenda">Agenda</button>
+            </div>
+            <div class="date-nav">
+              <button id="cal-prev-btn" class="icon-btn" title="Previous [">‹</button>
+              <button id="cal-today-btn" class="icon-btn date-nav__today" title="Today (T)">Today</button>
+              <button id="cal-next-btn" class="icon-btn" title="Next ]">›</button>
+            </div>
+            <div class="undo-redo-group">
+              <button id="undo-btn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↩</button>
+              <button id="redo-btn" class="icon-btn" title="Redo (Ctrl+Shift+Z)" disabled>↪</button>
+            </div>
           </div>
-          <button id="add-event-btn" class="primary-btn">+ New Event</button>
-          <button id="send-availability-btn" class="icon-btn" title="Send availability" style="font-size:1.3rem;">📅</button>
+
+          <!-- Right cluster: search + quick-add + sync + availability + settings -->
+          <div class="top-bar__right">
+            <span id="sync-status" class="sync-status"></span>
+            <div class="search-container">
+              <span class="search-icon">🔍</span>
+              <input type="text" id="event-search" placeholder="Search events..." />
+              <button id="search-quick-add-btn" class="hidden" title="Quick-add this as new event">+</button>
+            </div>
+            <button id="add-event-btn" class="primary-btn">+ New Event</button>
+            <button id="send-availability-btn" class="icon-btn" title="Send availability" style="font-size:1.3rem;">📅</button>
+            <button id="settings-btn" class="icon-btn" title="Settings">⚙️</button>
+          </div>
         </header>
-        <!-- M2: Auto-schedule wellness warnings -->
-        <div id="schedule-warnings"></div>
-        <div id="calendar-container">
-          <div id='calendar-empty-overlay' class='hidden'></div>
-        </div>
-      </main>
-    </div>
+
+        <main class="main-content" id="main-content">
+          <!-- M2: Auto-schedule wellness warnings -->
+          <div id="schedule-warnings"></div>
+          <div id="calendar-container">
+            <div id="calendar-empty-overlay" class="hidden"></div>
+          </div>
+        </main>
+      </div><!-- end .main-column -->
+
+    </div><!-- end .app-layout.app-shell -->
+
+    <!-- Hidden file inputs (body-level, no layout role) -->
+    <input type="file" id="import-file-input" accept=".ics,.pdf" style="position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;">
+
+    <!-- ==========================================
+         MODALS (unchanged from v1.5)
+         ========================================== -->
 
     <div id="consent-modal" class="modal hidden">
       <div class="modal-content">
@@ -172,7 +219,7 @@
         </div>
       </div>
     </div>
-    
+
     <div id="timeline-modal" class="modal hidden">
       <div class="modal-content">
         <h2>New Timeline</h2>
@@ -190,135 +237,129 @@
         <input type="hidden" id="event-id" />
         <input type="text" id="event-title" placeholder="Event Title" class="form-input" />
 
-        <!-- H2: All-day checkbox — sits between title and recurring -->
+        <!-- H2: All-day checkbox -->
         <div style="display: flex; align-items: center; justify-content: start; gap: 8px; margin-bottom: 15px;">
-            <input type="checkbox" id="event-is-allday" style="accent-color: var(--accent);">
-            <label for="event-is-allday" style="font-size: 0.9rem;">All day</label>
+          <input type="checkbox" id="event-is-allday" style="accent-color: var(--accent);">
+          <label for="event-is-allday" style="font-size: 0.9rem;">All day</label>
         </div>
 
         <div style="display: flex; align-items: center; justify-content: start; gap: 8px; margin-bottom: 15px;">
-            <input type="checkbox" id="event-is-recurring" style="accent-color: var(--accent);">
-            <label for="event-is-recurring" style="font-size: 0.9rem;">Repeating event</label>
+          <input type="checkbox" id="event-is-recurring" style="accent-color: var(--accent);">
+          <label for="event-is-recurring" style="font-size: 0.9rem;">Repeating event</label>
         </div>
 
         <div id="single-date-fields">
-            <input type="datetime-local" id="event-start" class="form-input" />
-            <input type="datetime-local" id="event-end" class="form-input" />
+          <input type="datetime-local" id="event-start" class="form-input" />
+          <input type="datetime-local" id="event-end" class="form-input" />
         </div>
 
-        <!-- H2: All-day date pickers — hidden by default, shown when all-day is checked -->
+        <!-- H2: All-day date pickers -->
         <div id="allday-date-fields" class="hidden">
-            <input type="date" id="allday-start-date" class="form-input" placeholder="Start date" />
-            <input type="date" id="allday-end-date" class="form-input" placeholder="End date" />
+          <input type="date" id="allday-start-date" class="form-input" placeholder="Start date" />
+          <input type="date" id="allday-end-date" class="form-input" placeholder="End date" />
         </div>
 
         <p id="event-timezone-display" class="muted-text hidden" style="font-size: 0.8rem; margin-top: -10px; margin-bottom: 15px; text-align: left;"></p>
         <div id="recurrence-fields" class="hidden" style="text-align: left; margin-bottom: 15px;">
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Days of Week</p>
-            <div style="display: flex; gap: 8px; justify-content: space-between; margin-bottom: 10px;">
-                <label><input type="checkbox" class="recur-day" value="0"> S</label>
-                <label><input type="checkbox" class="recur-day" value="1"> M</label>
-                <label><input type="checkbox" class="recur-day" value="2"> T</label>
-                <label><input type="checkbox" class="recur-day" value="3"> W</label>
-                <label><input type="checkbox" class="recur-day" value="4"> T</label>
-                <label><input type="checkbox" class="recur-day" value="5"> F</label>
-                <label><input type="checkbox" class="recur-day" value="6"> S</label>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Days of Week</p>
+          <div style="display: flex; gap: 8px; justify-content: space-between; margin-bottom: 10px;">
+            <label><input type="checkbox" class="recur-day" value="0"> S</label>
+            <label><input type="checkbox" class="recur-day" value="1"> M</label>
+            <label><input type="checkbox" class="recur-day" value="2"> T</label>
+            <label><input type="checkbox" class="recur-day" value="3"> W</label>
+            <label><input type="checkbox" class="recur-day" value="4"> T</label>
+            <label><input type="checkbox" class="recur-day" value="5"> F</label>
+            <label><input type="checkbox" class="recur-day" value="6"> S</label>
+          </div>
+          <!-- H5: Single time pair -->
+          <div id="recur-single-time-fields">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Start / End Time</p>
+            <div style="display: flex; gap: 10px;">
+              <input type="time" id="recur-start-time" class="form-input" />
+              <input type="time" id="recur-end-time" class="form-input" />
             </div>
-            <!-- H5: Single time pair (hidden when per-day toggle is checked) -->
-            <div id="recur-single-time-fields">
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Start / End Time</p>
-                <div style="display: flex; gap: 10px;">
-                    <input type="time" id="recur-start-time" class="form-input" />
-                    <input type="time" id="recur-end-time" class="form-input" />
-                </div>
-            </div>
-            <!-- H5: Different times per day toggle -->
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
-                <input type="checkbox" id="recur-per-day-toggle" style="accent-color: var(--accent);">
-                <label for="recur-per-day-toggle" style="font-size: 0.8rem; color: var(--text-muted);">Different times per day</label>
-            </div>
-            <!-- H5: Per-day time grid — one row per selected recurrence day -->
-            <div id="per-day-times-grid" class="hidden" style="margin-bottom: 10px;">
-                <table style="width:100%; font-size:0.8rem; border-collapse: collapse;">
-                    <thead>
-                        <tr>
-                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Day</th>
-                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Start</th>
-                            <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">End</th>
-                        </tr>
-                    </thead>
-                    <tbody id="per-day-times-tbody"></tbody>
-                </table>
-            </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Repeat Until</p>
-            <input type="date" id="recur-end-date" class="form-input" />
-        </div>
-        
-        <div style="text-align: left; margin-bottom: 15px;">
-            <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Reminder</label>
-            <select id="event-reminder" class="form-input" style="margin-bottom: 0;">
-                <option value="">None</option>
-                <option value="5">5 minutes before</option>
-                <option value="10">10 minutes before</option>
-                <option value="15">15 minutes before</option>
-                <option value="30">30 minutes before</option>
-                <option value="60">1 hour before</option>
-                <option value="1440">1 day before</option>
-            </select>
+          </div>
+          <!-- H5: Different times per day toggle -->
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+            <input type="checkbox" id="recur-per-day-toggle" style="accent-color: var(--accent);">
+            <label for="recur-per-day-toggle" style="font-size: 0.8rem; color: var(--text-muted);">Different times per day</label>
+          </div>
+          <!-- H5: Per-day time grid -->
+          <div id="per-day-times-grid" class="hidden" style="margin-bottom: 10px;">
+            <table style="width:100%; font-size:0.8rem; border-collapse: collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Day</th>
+                  <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">Start</th>
+                  <th style="text-align:left; color:var(--text-muted); padding:4px 4px; font-weight:500;">End</th>
+                </tr>
+              </thead>
+              <tbody id="per-day-times-tbody"></tbody>
+            </table>
+          </div>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Repeat Until</p>
+          <input type="date" id="recur-end-date" class="form-input" />
         </div>
 
         <div style="text-align: left; margin-bottom: 15px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                <label style="font-size: 0.8rem; color: var(--text-muted); position: relative;">
-                    Description
-                    <span class="tooltip-icon" title="[Link Text](https://example.com) — named link&#10;https://example.com — auto-linked URL&#10;@EventName — tag another event">ⓘ</span>
-                </label>
-                <button id="toggle-desc-mode-btn" class="icon-btn" style="font-size: 0.8rem;">✏️ Edit</button>
-            </div>
-            <div id="event-description-display" class="description-display hidden"></div>
-            <textarea id="event-description" class="form-input" rows="2" placeholder="General description..."></textarea>
+          <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Reminder</label>
+          <select id="event-reminder" class="form-input" style="margin-bottom: 0;">
+            <option value="">None</option>
+            <option value="5">5 minutes before</option>
+            <option value="10">10 minutes before</option>
+            <option value="15">15 minutes before</option>
+            <option value="30">30 minutes before</option>
+            <option value="60">1 hour before</option>
+            <option value="1440">1 day before</option>
+          </select>
+        </div>
 
-            <div id="unique-desc-container" class="hidden">
-                <label style="font-size: 0.8rem; color: var(--text-muted);">Note for this occurrence</label>
-                <textarea id="event-unique-description" class="form-input" rows="2" placeholder="Specific notes..."></textarea>
-            </div>
+        <div style="text-align: left; margin-bottom: 15px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <label style="font-size: 0.8rem; color: var(--text-muted); position: relative;">
+              Description
+              <span class="tooltip-icon" title="[Link Text](https://example.com) — named link&#10;https://example.com — auto-linked URL&#10;@EventName — tag another event">ⓘ</span>
+            </label>
+            <button id="toggle-desc-mode-btn" class="icon-btn" style="font-size: 0.8rem;">✏️ Edit</button>
+          </div>
+          <div id="event-description-display" class="description-display hidden"></div>
+          <textarea id="event-description" class="form-input" rows="2" placeholder="General description..."></textarea>
+
+          <div id="unique-desc-container" class="hidden">
+            <label style="font-size: 0.8rem; color: var(--text-muted);">Note for this occurrence</label>
+            <textarea id="event-unique-description" class="form-input" rows="2" placeholder="Specific notes..."></textarea>
+          </div>
         </div>
 
         <!-- L3: Per-event task checklist -->
         <details id="checklist-section" style="text-align: left; margin-bottom: 15px;">
-            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9rem; padding: 4px 0; user-select: none;">Checklist</summary>
-            <div id="checklist-items" style="margin-top: 8px;"></div>
-            <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
-                <input type="text" id="checklist-new-item" class="form-input" placeholder="Add checklist item..." style="margin-bottom: 0;" />
-                <button id="checklist-add-btn" class="accept-btn" style="flex: 0; padding: 10px 14px; white-space: nowrap;">Add</button>
-            </div>
+          <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9rem; padding: 4px 0; user-select: none;">Checklist</summary>
+          <div id="checklist-items" style="margin-top: 8px;"></div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+            <input type="text" id="checklist-new-item" class="form-input" placeholder="Add checklist item..." style="margin-bottom: 0;" />
+            <button id="checklist-add-btn" class="accept-btn" style="flex: 0; padding: 10px 14px; white-space: nowrap;">Add</button>
+          </div>
         </details>
 
         <select id="event-timeline" class="form-input"></select>
-        
+
         <p id="event-modal-error" class="hidden" style="color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></p>
         <p id="conflict-warning" class="hidden" style="color: var(--danger); font-size: 0.85rem; margin-bottom: 10px;"></p>
-        
+
         <p id="save-template-feedback" class="hidden" style="color: #10b981; font-size: 0.85rem; margin-bottom: 6px;"></p>
         <div class="modal-actions">
           <button id="duplicate-event-btn" class="delete-btn hidden" style="background: var(--accent);">⧉ Duplicate</button>
-          <!-- M3: Save as Template — only visible when editing an existing event -->
+          <!-- M3: Save as Template -->
           <button id="save-template-btn" class="delete-btn hidden" style="background: var(--border); color: var(--text-main);">📋 Save as Template</button>
           <button id="delete-event-btn" class="delete-btn hidden">Delete</button>
-          <!-- Task Board — only visible when editing an existing event -->
-          <button id="add-to-taskboard-btn" class="delete-btn hidden"
-            style="background: var(--border);">
-            Add to Task Board
-          </button>
-          <!-- H4: Skip this occurrence — only visible on recurring events opened from a specific instance -->
+          <button id="add-to-taskboard-btn" class="delete-btn hidden" style="background: var(--border);">Add to Task Board</button>
+          <!-- H4: Skip this occurrence -->
           <button id="skip-occurrence-btn" class="delete-btn hidden" style="background: var(--border);">Skip Date</button>
           <button id="cancel-event-btn" class="delete-btn" style="background: var(--border);">Cancel</button>
           <button id="save-event-btn" class="accept-btn">Save</button>
         </div>
       </div>
     </div>
-    
-    <input type="file" id="import-file-input" accept=".ics,.pdf" style="position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;">
 
     <div id="ics-import-modal" class="modal hidden">
       <div class="modal-content">
@@ -337,27 +378,27 @@
       <div class="modal-content">
         <h2>Loom Settings</h2>
         <div class="setting-item">
-            <span>Theme</span>
-            <button id="theme-toggle" class="primary-btn">Toggle Light/Dark</button>
+          <span>Theme</span>
+          <button id="theme-toggle" class="primary-btn">Toggle Light/Dark</button>
         </div>
         <div class="setting-item">
-            <span>Onboarding</span>
-            <button id="replay-onboarding-btn" class="primary-btn">Replay</button>
+          <span>Onboarding</span>
+          <button id="replay-onboarding-btn" class="primary-btn">Replay</button>
         </div>
         <!-- M4: Daily agenda startup toggle -->
         <div class="setting-item">
-            <span>Daily Agenda on Startup</span>
-            <label class="toggle-switch">
-                <input type="checkbox" id="daily-agenda-toggle">
-                <span class="toggle-slider"></span>
-            </label>
+          <span>Daily Agenda on Startup</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="daily-agenda-toggle">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
         <div class="setting-item">
-            <span>Week Starts On</span>
-            <select id="week-start-select" class="form-input" style="margin-bottom:0;">
-                <option value="0">Sunday</option>
-                <option value="1">Monday</option>
-            </select>
+          <span>Week Starts On</span>
+          <select id="week-start-select" class="form-input" style="margin-bottom:0;">
+            <option value="0">Sunday</option>
+            <option value="1">Monday</option>
+          </select>
         </div>
         <details style="text-align:left; margin-bottom: 15px;">
           <summary style="cursor:pointer; color: var(--text-muted); font-size:0.9rem;">⌨ Keyboard Shortcuts</summary>
@@ -372,15 +413,16 @@
             <code>Ctrl+Shift+Z</code><span>Redo</span>
             <code>F</code><span>Focus mode</span>
             <code>Del/Bksp</code><span>Delete selected events</span>
+            <code>Space</code><span>Toggle task (Focus list view)</span>
           </div>
         </details>
         <div class="setting-item">
-            <span>Database Data</span>
-            <div>
-                <button id="backup-db-btn" class="primary-btn" style="margin-right: 5px;">Backup</button>
-                <button id="restore-db-btn" class="delete-btn" style="padding: 10px 16px;">Restore</button>
-                <input type="file" id="restore-file-input" accept=".sqlite3" style="display: none;">
-            </div>
+          <span>Database Data</span>
+          <div>
+            <button id="backup-db-btn" class="primary-btn" style="margin-right: 5px;">Backup</button>
+            <button id="restore-db-btn" class="delete-btn" style="padding: 10px 16px;">Restore</button>
+            <input type="file" id="restore-file-input" accept=".sqlite3" style="display: none;">
+          </div>
         </div>
         <hr style="border-color:var(--border);margin:10px 0;">
         <h3 style="font-size:0.9rem;color:var(--text-muted);margin-bottom:10px;text-align:left;">Diagnostics &amp; Logs</h3>
@@ -409,7 +451,7 @@
 
     <div id="mention-dropdown" class="hidden"></div>
     <div id="event-tooltip" class="hidden"></div>
-    
+
     <div id="onboarding-modal" class="modal hidden">
       <div class="modal-content" style="max-width:420px;">
         <div class="onboarding-step active">
@@ -438,12 +480,9 @@
         </div>
       </div>
     </div>
-    
-    <div class="fab-container">
-      <button id="settings-btn" class="fab" title="Settings">⚙️</button>
-    </div>
 
-    <!-- L2: Focus Mode fullscreen overlay (z-index 9000, below modals at 2000 is intentional — modals still appear on top) -->
+    <!-- L2: Focus Mode fullscreen overlay (kept for compat; v2.0 Focus is a destination page) -->
+    <!-- TODO v2.0 cleanup: #focus-overlay replaced by focus destination page in Phase 6 -->
     <div id="focus-overlay" class="hidden">
       <div class="focus-header">
         <h2 class="focus-title">Focus Mode</h2>
@@ -469,7 +508,6 @@
       <div class="modal-content" style="max-width:560px;min-width:340px;">
         <h2 style="margin-bottom:16px;">Send Availability</h2>
 
-        <!-- Sender name + duration -->
         <div style="display:flex;gap:10px;margin-bottom:15px;">
           <div style="flex:1;">
             <label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:5px;">Your name</label>
@@ -488,7 +526,6 @@
           </div>
         </div>
 
-        <!-- Mini calendar -->
         <label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:6px;">Select dates</label>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <button id="avail-cal-prev" class="icon-btn" style="font-size:1.1rem;padding:4px 8px;">&#8249;</button>
@@ -497,10 +534,7 @@
         </div>
         <div id="avail-mini-cal" class="avail-mini-cal"></div>
 
-        <!-- Time windows -->
         <div id="avail-time-windows" style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"></div>
-
-        <!-- Conflict warnings -->
         <div id="avail-conflicts" style="margin-top:6px;"></div>
 
         <p id="avail-modal-error" class="hidden" style="color:var(--danger);font-size:0.85rem;margin-top:10px;"></p>
@@ -518,14 +552,12 @@
         <h2 style="margin-bottom:8px;">Link Created</h2>
         <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">Share this link with your contact.</p>
 
-        <!-- Share link + copy -->
         <div style="display:flex;gap:8px;margin-bottom:16px;">
           <input type="text" id="avail-share-link" class="form-input" readonly
                  style="margin-bottom:0;font-size:0.82rem;cursor:text;flex:1;">
           <button id="avail-copy-btn" class="primary-btn" style="white-space:nowrap;flex-shrink:0;">Copy</button>
         </div>
 
-        <!-- Status display -->
         <div style="background:var(--bg-color);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.9rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span>Status: <strong id="avail-status-text">Pending</strong></span>
@@ -535,7 +567,6 @@
                style="margin-top:8px;color:#10b981;font-size:0.85rem;"></div>
         </div>
 
-        <!-- Amendment notification (hidden until status=amended) -->
         <div id="avail-amendment-section" class="hidden"
              style="background:rgba(217,119,6,0.08);border-left:3px solid var(--amber);border-radius:6px;padding:12px;margin-bottom:16px;">
           <p style="font-weight:600;font-size:0.9rem;margin-bottom:6px;">Alternative time proposed</p>
@@ -548,7 +579,6 @@
           </div>
         </div>
 
-        <!-- Counter-propose section (hidden until Counter is clicked) -->
         <div id="avail-counter-section" class="hidden" style="margin-bottom:16px;">
           <label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:6px;">Counter-propose a time</label>
           <div style="display:flex;gap:8px;margin-bottom:8px;">
