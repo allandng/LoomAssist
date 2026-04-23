@@ -781,6 +781,9 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     is_complete: bool
     note: Optional[str] = None
+    status: Optional[str] = None    # backlog | doing | done
+    priority: Optional[str] = None  # high | med | low
+    due_date: Optional[str] = None  # ISO date string
 
 @app.post("/tasks/", response_model=models.TaskRead)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
@@ -816,6 +819,9 @@ def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
             detail={"error": {"code": "task_not_found", "detail": f"Task {task_id} does not exist."}})
     db_task.is_complete = task.is_complete
     db_task.note = task.note
+    if task.status   is not None: db_task.status   = task.status
+    if task.priority is not None: db_task.priority = task.priority
+    if task.due_date is not None: db_task.due_date = task.due_date
     db.commit()
     db.refresh(db_task)
     return db_task

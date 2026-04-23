@@ -56,6 +56,22 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on event table: {e}")
 
+        # 3. Task table — v2.0 Kanban fields
+        try:
+            result = conn.execute(text("PRAGMA table_info(task)")).fetchall()
+            task_cols = [row[1] for row in result]
+            task_new = {
+                "status":   "VARCHAR DEFAULT 'backlog'",
+                "priority": "VARCHAR DEFAULT 'low'",
+                "due_date": "VARCHAR",
+            }
+            for col_name, col_type in task_new.items():
+                if col_name not in task_cols:
+                    conn.execute(text(f"ALTER TABLE task ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to task table.")
+        except Exception as e:
+            logging.error(f"Migration error on task table: {e}")
+
     logging.info("Migration check complete.")
 
 def migrate_todo_to_task():

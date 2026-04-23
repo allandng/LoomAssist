@@ -58,9 +58,25 @@
 
         <div class="context-sidebar__scroll" id="sidebar-content">
 
+          <!-- Focus sidebar (shown when destination=focus) -->
+          <div id="focus-sidebar-section" class="hidden">
+            <div class="sidebar-section">
+              <div class="section-header"><h3>Up Next</h3></div>
+              <div id="focus-upnext-list"></div>
+            </div>
+            <div class="sidebar-section" style="margin-top:12px;">
+              <div class="section-header"><h3>Pinned Tasks</h3></div>
+              <div id="focus-pinned-list"></div>
+            </div>
+            <label class="filter-row" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border);">
+              <input type="checkbox" id="focus-only-incomplete" style="accent-color:var(--accent);">
+              <span>Only incomplete</span>
+            </label>
+          </div>
+
           <p id="import-error" class="hidden" style="margin: 0 0 10px 0; color: var(--danger); font-size: 0.8rem;"></p>
 
-          <div class="sidebar-section">
+          <div class="sidebar-section" id="calendar-sidebar-section">
             <div class="section-header">
               <h3>Timelines</h3>
               <div class="header-actions" style="position: relative;">

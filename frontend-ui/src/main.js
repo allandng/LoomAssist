@@ -575,10 +575,44 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.addEventListener('loom:navigate', (e) => {
         const dest = e.detail.destination;
         localStorage.setItem('loom:destination', dest);
-        if (dest === 'focus')    openFocusMode();
-        if (dest === 'tasks')    openSidebarTaskboard();
-        if (dest === 'settings') document.getElementById('settings-modal')?.classList.remove('hidden');
-        if (dest === 'calendar') updateSidebarMode('normal');
+
+        // Toggle focus sidebar visibility
+        const focusSec = document.getElementById('focus-sidebar-section');
+        const calSec   = document.getElementById('calendar-sidebar-section');
+        if (focusSec) focusSec.classList.toggle('hidden', dest !== 'focus');
+        if (calSec)   calSec.classList.toggle('hidden',   dest === 'focus');
+        document.querySelector('.record-section')?.classList.toggle('hidden', dest === 'focus');
+        document.getElementById('sidebar-filters-section')?.classList.toggle('hidden', dest === 'focus');
+
+        if (dest === 'focus') {
+            // Clear any old interval timers before entering focus
+            focusIntervals.forEach(clearInterval);
+            focusIntervals = [];
+            renderFocusPage();
+        } else {
+            // Restore calendar main content when leaving focus
+            if (document.getElementById('focus-page')) {
+                const mainContent = document.getElementById('main-content');
+                if (mainContent) {
+                    mainContent.innerHTML = `
+                        <div id="schedule-warnings"></div>
+                        <div id="calendar-container">
+                            <div id="calendar-empty-overlay" class="hidden"></div>
+                        </div>`;
+                    // Re-render FullCalendar into the restored container
+                    const newCalEl = document.getElementById('calendar-container');
+                    if (calendarInstance && newCalEl) {
+                        calendarInstance.render();
+                        renderCalendarEvents(document.getElementById('event-search')?.value.toLowerCase() || '');
+                    }
+                }
+                focusIntervals.forEach(clearInterval);
+                focusIntervals = [];
+            }
+            if (dest === 'tasks')    openSidebarTaskboard();
+            if (dest === 'settings') document.getElementById('settings-modal')?.classList.remove('hidden');
+            if (dest === 'calendar') updateSidebarMode('normal');
+        }
     });
 
     bindTimelineDropdowns();
@@ -2408,6 +2442,480 @@ function closeFocusMode() {
 }
 
 // ==========================================
+// FOCUS MODE v2.0 — Kanban + List + Pomodoro rail
+// ==========================================
+
+let activePomodoroTask = null;   // task object currently set as "Focus on this"
+let focusViewMode = localStorage.getItem('loom:focus:view') || 'kanban';
+let pomodoroIsRunning = false;
+let pomodoroWorkSecs  = 25 * 60;  // configurable
+let pomodoroShortSecs = 5  * 60;
+let pomodoroLongSecs  = 15 * 60;
+let pomodoroRoundsBeforeLong = 4;
+let pomodoroCurrentRound = 1;
+let pomodoroPhase = 'work'; // 'work' | 'short' | 'long'
+let pomodoroSessionHistory = []; // { time, taskTitle }
+const PINNED_TASKS_KEY = 'loom:pinned-tasks';
+
+function _pinnedTaskIds() {
+    try { return new Set(JSON.parse(localStorage.getItem(PINNED_TASKS_KEY) || '[]')); }
+    catch { return new Set(); }
+}
+function _pinTask(id) {
+    const s = _pinnedTaskIds(); s.add(id);
+    localStorage.setItem(PINNED_TASKS_KEY, JSON.stringify([...s]));
+}
+function _unpinTask(id) {
+    const s = _pinnedTaskIds(); s.delete(id);
+    localStorage.setItem(PINNED_TASKS_KEY, JSON.stringify([...s]));
+}
+
+function renderFocusPage() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+
+    // Clear calendar content, inject focus page
+    mainContent.innerHTML = `
+        <div class="focus-page" id="focus-page">
+            <div class="focus-main">
+                <div class="focus-toolbar">
+                    <div class="focus-view-toggle">
+                        <button class="focus-view-btn${focusViewMode==='kanban'?' active':''}" data-fview="kanban" title="Kanban view">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="6" height="18" rx="1"/><rect x="9" y="3" width="6" height="18" rx="1"/><rect x="16" y="3" width="6" height="18" rx="1"/></svg>
+                            Kanban
+                        </button>
+                        <button class="focus-view-btn${focusViewMode==='list'?' active':''}" data-fview="list" title="List view">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                            List
+                        </button>
+                    </div>
+                    <span class="focus-task-count" id="focus-task-count"></span>
+                </div>
+                <div id="focus-board-area"></div>
+            </div>
+            <div class="pomodoro-rail" id="pomodoro-rail">
+                <div class="pomo-clock" id="pomo-clock"></div>
+                <div class="pomo-ring-wrap">
+                    <svg class="pomo-ring" viewBox="0 0 120 120">
+                        <circle class="pomo-ring-bg" cx="60" cy="60" r="54"/>
+                        <circle class="pomo-ring-fill" id="pomo-ring-fill" cx="60" cy="60" r="54"
+                            stroke-dasharray="339.3" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+                    </svg>
+                    <div class="pomo-time-display" id="pomo-time-display">25:00</div>
+                    <div class="pomo-phase-label" id="pomo-phase-label">Work</div>
+                </div>
+                <div class="pomo-controls">
+                    <button class="pomo-btn" id="pomo-play-btn" title="Pause/Resume">⏸</button>
+                    <button class="pomo-btn" id="pomo-reset-btn" title="Reset">↺</button>
+                    <button class="pomo-btn" id="pomo-settings-toggle" title="Settings">⚙</button>
+                </div>
+                <div class="pomo-rounds" id="pomo-rounds"></div>
+                <div id="pomo-settings-panel" class="pomo-settings hidden">
+                    <label class="pomo-setting-row"><span>Work</span><input type="range" id="ps-work" min="5" max="60" step="5" value="${pomodoroWorkSecs/60}"><span id="ps-work-val">${pomodoroWorkSecs/60}m</span></label>
+                    <label class="pomo-setting-row"><span>Short break</span><input type="range" id="ps-short" min="1" max="15" step="1" value="${pomodoroShortSecs/60}"><span id="ps-short-val">${pomodoroShortSecs/60}m</span></label>
+                    <label class="pomo-setting-row"><span>Long break</span><input type="range" id="ps-long" min="5" max="30" step="5" value="${pomodoroLongSecs/60}"><span id="ps-long-val">${pomodoroLongSecs/60}m</span></label>
+                </div>
+                <div class="pomo-active-task" id="pomo-active-task">
+                    <span class="pomo-active-label">No active task</span>
+                </div>
+                <div class="pomo-history" id="pomo-history"></div>
+            </div>
+        </div>`;
+
+    _renderFocusBoard();
+    _startPomodoroClock();
+    _renderPomodoRounds();
+    _renderPomodoroHistory();
+    _updatePomoTimeDisplay();
+    _renderFocusSidebar();
+
+    // View toggle
+    document.querySelectorAll('.focus-view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            focusViewMode = btn.dataset.fview;
+            localStorage.setItem('loom:focus:view', focusViewMode);
+            document.querySelectorAll('.focus-view-btn').forEach(b => b.classList.toggle('active', b.dataset.fview === focusViewMode));
+            _renderFocusBoard();
+        });
+    });
+
+    // Pomodoro controls
+    document.getElementById('pomo-play-btn')?.addEventListener('click', _togglePomodoro);
+    document.getElementById('pomo-reset-btn')?.addEventListener('click', _resetPomodoro);
+    document.getElementById('pomo-settings-toggle')?.addEventListener('click', () => {
+        document.getElementById('pomo-settings-panel')?.classList.toggle('hidden');
+    });
+
+    // Settings sliders
+    ['work','short','long'].forEach(key => {
+        const el = document.getElementById(`ps-${key}`);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            const mins = parseInt(el.value);
+            document.getElementById(`ps-${key}-val`).textContent = `${mins}m`;
+            if (key === 'work')  { pomodoroWorkSecs  = mins * 60; if (pomodoroPhase === 'work')  { pomodoroSecondsLeft = pomodoroWorkSecs; _updatePomoTimeDisplay(); } }
+            if (key === 'short') { pomodoroShortSecs = mins * 60; if (pomodoroPhase === 'short') { pomodoroSecondsLeft = pomodoroShortSecs; _updatePomoTimeDisplay(); } }
+            if (key === 'long')  { pomodoroLongSecs  = mins * 60; if (pomodoroPhase === 'long')  { pomodoroSecondsLeft = pomodoroLongSecs;  _updatePomoTimeDisplay(); } }
+        });
+    });
+
+    // Only-incomplete filter in focus sidebar
+    document.getElementById('focus-only-incomplete')?.addEventListener('change', () => _renderFocusBoard());
+}
+
+function _renderFocusSidebar() {
+    // Up next: today's events
+    const today = new Date().toISOString().split('T')[0];
+    const upNext = currentEvents
+        .filter(ev => !ev.is_recurring && ev.start_time?.startsWith(today))
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+        .slice(0, 6);
+    const upNextEl = document.getElementById('focus-upnext-list');
+    if (upNextEl) {
+        upNextEl.innerHTML = upNext.length ? upNext.map(ev => {
+            const t = new Date(ev.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const now = new Date();
+            const isNow = new Date(ev.start_time) <= now && new Date(ev.end_time) >= now;
+            return `<div class="focus-upnext-item${isNow?' now':''}">
+                ${isNow ? '<span class="focus-now-chip">NOW</span>' : `<span class="focus-upnext-time">${t}</span>`}
+                <span class="focus-upnext-title">${ev.title}</span>
+            </div>`;
+        }).join('') : '<p class="muted-text" style="font-size:0.85rem">No events today.</p>';
+    }
+
+    // Pinned tasks
+    const pinned = _pinnedTaskIds();
+    const pinnedTasks = currentTasks.filter(t => pinned.has(t.id));
+    const pinnedEl = document.getElementById('focus-pinned-list');
+    if (pinnedEl) {
+        pinnedEl.innerHTML = pinnedTasks.length ? pinnedTasks.map(t => {
+            const ev = currentEvents.find(e => e.id === t.event_id);
+            return `<div class="focus-pinned-item${t.is_complete?' done':''}">
+                <span class="focus-pin-icon">📌</span>
+                <span>${ev?.title || `Task #${t.id}`}</span>
+            </div>`;
+        }).join('') : '<p class="muted-text" style="font-size:0.85rem">No pinned tasks.</p>';
+    }
+}
+
+function _tasksForFocus() {
+    const onlyIncomplete = document.getElementById('focus-only-incomplete')?.checked;
+    return currentTasks.filter(t => !onlyIncomplete || !t.is_complete);
+}
+
+function _renderFocusBoard() {
+    const area = document.getElementById('focus-board-area');
+    if (!area) return;
+    if (focusViewMode === 'kanban') {
+        _renderKanban(area);
+    } else {
+        _renderListView(area);
+    }
+    // Update task count
+    const countEl = document.getElementById('focus-task-count');
+    if (countEl) {
+        const done = currentTasks.filter(t => t.status === 'done' || t.is_complete).length;
+        countEl.textContent = `${currentTasks.length} tasks · ${done} done today`;
+    }
+}
+
+const KANBAN_COLS = [
+    { status: 'backlog',  label: 'Backlog',     color: '#7A8FA6' },
+    { status: 'doing',    label: 'In Progress',  color: '#6366F1' },
+    { status: 'done',     label: 'Done',         color: '#10B981' },
+];
+
+function _renderKanban(container) {
+    const tasks = _tasksForFocus();
+    const pinned = _pinnedTaskIds();
+    container.innerHTML = '';
+    container.className = 'kanban-board';
+
+    KANBAN_COLS.forEach(col => {
+        const colTasks = tasks.filter(t => (t.status || 'backlog') === col.status);
+        const colEl = document.createElement('div');
+        colEl.className = 'kanban-col';
+        colEl.dataset.status = col.status;
+
+        // Allow drag-over
+        colEl.addEventListener('dragover', e => { e.preventDefault(); colEl.classList.add('drag-over'); });
+        colEl.addEventListener('dragleave', () => colEl.classList.remove('drag-over'));
+        colEl.addEventListener('drop', async e => {
+            e.preventDefault();
+            colEl.classList.remove('drag-over');
+            const taskId = parseInt(e.dataTransfer.getData('text/plain'));
+            if (!taskId) return;
+            const task = currentTasks.find(t => t.id === taskId);
+            if (!task) return;
+            await fetch(`${API_URL}/tasks/${taskId}`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ is_complete: col.status === 'done', status: col.status, note: task.note })
+            });
+            await loadTasks();
+            _renderFocusBoard();
+        });
+
+        colEl.innerHTML = `
+            <div class="kanban-col-header">
+                <span class="kanban-col-dot" style="background:${col.color}"></span>
+                <span class="kanban-col-title">${col.label}</span>
+                <span class="kanban-col-count">${colTasks.length}</span>
+            </div>`;
+
+        const cardsEl = document.createElement('div');
+        cardsEl.className = 'kanban-col-cards';
+        colTasks.forEach(task => cardsEl.appendChild(_makeKanbanCard(task, col.status, pinned)));
+        colEl.appendChild(cardsEl);
+
+        const addRow = document.createElement('div');
+        addRow.className = 'kanban-add-row';
+        addRow.innerHTML = `<input class="kanban-add-input" placeholder="Add a task…">`;
+        addRow.querySelector('input').addEventListener('keydown', async e => {
+            if (e.key !== 'Enter' || !e.target.value.trim()) return;
+            // Quick-add: find first event to link or create with event_id=-1 placeholder
+            const note = e.target.value.trim();
+            const firstTask = currentTasks[0];
+            await fetch(`${API_URL}/tasks/`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ event_id: firstTask?.event_id || 0, note, status: col.status })
+            });
+            await loadTasks();
+            _renderFocusBoard();
+        });
+        colEl.appendChild(addRow);
+        container.appendChild(colEl);
+    });
+}
+
+function _makeKanbanCard(task, colStatus, pinned) {
+    const ev = currentEvents.find(e => e.id === task.event_id);
+    const timeline = ev ? currentTimelines.find(t => t.id === ev.calendar_id) : null;
+    const isActive = activePomodoroTask?.id === task.id;
+    const isPinned = pinned.has(task.id);
+    const priorityColor = { high:'#EF4444', med:'#F59E0B', low:'#4A5568' };
+    const prio = task.priority || 'low';
+
+    const card = document.createElement('div');
+    card.className = 'kanban-card' + (isActive ? ' kanban-card--active' : '') + (task.is_complete ? ' kanban-card--done' : '');
+    card.draggable = true;
+    card.dataset.taskId = task.id;
+
+    card.innerHTML = `
+        <div class="kanban-card-header">
+            <span class="kanban-priority-dot" style="background:${priorityColor[prio]}" title="Priority: ${prio}"></span>
+            <span class="kanban-card-title">${ev?.title || `Task #${task.id}`}</span>
+            ${isActive ? '<span class="kanban-focusing-chip">● FOCUSING</span>' : ''}
+        </div>
+        ${timeline ? `<span class="kanban-timeline-chip" style="border-color:${timeline.color}">${timeline.name}</span>` : ''}
+        ${task.due_date ? `<span class="kanban-due-date">📅 ${task.due_date}</span>` : ''}
+        <div class="kanban-card-menu hidden" data-task="${task.id}">
+            <div class="kanban-menu-item focus-on-btn">● Focus on this</div>
+            ${KANBAN_COLS.filter(c=>c.status!==colStatus).map(c=>`<div class="kanban-menu-item move-to-btn" data-status="${c.status}">Move → ${c.label}</div>`).join('')}
+            <div class="kanban-menu-item pin-btn">${isPinned?'📌 Unpin':'📌 Pin'}</div>
+            <div class="kanban-menu-item delete-task-menu-btn" style="color:var(--error)">🗑 Delete</div>
+        </div>`;
+
+    card.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', task.id); card.classList.add('dragging'); });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+
+    card.addEventListener('click', e => {
+        if (e.target.closest('.kanban-card-menu')) return;
+        // Toggle menu
+        const menu = card.querySelector('.kanban-card-menu');
+        document.querySelectorAll('.kanban-card-menu:not(.hidden)').forEach(m => { if (m !== menu) m.classList.add('hidden'); });
+        menu?.classList.toggle('hidden');
+    });
+
+    card.querySelector('.focus-on-btn')?.addEventListener('click', async e => {
+        e.stopPropagation();
+        activePomodoroTask = task;
+        card.querySelector('.kanban-card-menu')?.classList.add('hidden');
+        _renderFocusBoard();
+        const activeEl = document.getElementById('pomo-active-task');
+        if (activeEl) activeEl.innerHTML = `<span class="pomo-active-label">Focusing on:</span><span class="pomo-active-title">${ev?.title || 'Task'}</span>`;
+    });
+
+    card.querySelectorAll('.move-to-btn').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            e.stopPropagation();
+            const newStatus = btn.dataset.status;
+            await fetch(`${API_URL}/tasks/${task.id}`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ is_complete: newStatus==='done', status: newStatus, note: task.note })
+            });
+            await loadTasks(); _renderFocusBoard();
+        });
+    });
+
+    card.querySelector('.pin-btn')?.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isPinned) _unpinTask(task.id); else _pinTask(task.id);
+        card.querySelector('.kanban-card-menu')?.classList.add('hidden');
+        _renderFocusSidebar();
+        _renderFocusBoard();
+    });
+
+    card.querySelector('.delete-task-menu-btn')?.addEventListener('click', async e => {
+        e.stopPropagation();
+        await fetch(`${API_URL}/tasks/${task.id}`, { method: 'DELETE' });
+        await loadTasks(); _renderFocusBoard();
+    });
+
+    return card;
+}
+
+function _renderListView(container) {
+    const tasks = _tasksForFocus();
+    container.innerHTML = '';
+    container.className = 'focus-list-view';
+    const priorityColor = { high:'#EF4444', med:'#F59E0B', low:'#4A5568' };
+
+    KANBAN_COLS.forEach(col => {
+        const group = tasks.filter(t => (t.status || 'backlog') === col.status);
+        const groupEl = document.createElement('div');
+        groupEl.className = 'list-group';
+
+        const header = document.createElement('div');
+        header.className = 'list-group-header';
+        header.innerHTML = `<span class="kanban-col-dot" style="background:${col.color}"></span><span>${col.label}</span><span class="kanban-col-count">${group.length}</span>`;
+        header.style.cursor = 'pointer';
+
+        const rowsEl = document.createElement('div');
+        rowsEl.className = 'list-group-rows';
+        group.forEach(task => {
+            const ev = currentEvents.find(e => e.id === task.event_id);
+            const timeline = ev ? currentTimelines.find(t => t.id === ev.calendar_id) : null;
+            const prio = task.priority || 'low';
+            const row = document.createElement('div');
+            row.className = 'list-task-row' + (task.is_complete ? ' done' : '');
+            row.tabIndex = 0;
+            row.dataset.taskId = task.id;
+            row.innerHTML = `
+                <input type="checkbox" class="list-task-cb" ${task.is_complete?'checked':''} style="accent-color:var(--accent)">
+                <span class="kanban-priority-dot" style="background:${priorityColor[prio]}"></span>
+                <span class="list-task-title">${ev?.title || `Task #${task.id}`}</span>
+                ${timeline ? `<span class="kanban-timeline-chip" style="border-color:${timeline.color}">${timeline.name}</span>` : ''}
+                ${task.due_date ? `<span class="kanban-due-date">${task.due_date}</span>` : ''}`;
+            row.querySelector('.list-task-cb')?.addEventListener('change', async () => {
+                const done = row.querySelector('.list-task-cb').checked;
+                await fetch(`${API_URL}/tasks/${task.id}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ is_complete: done, status: done?'done':(task.status||'backlog'), note: task.note })
+                });
+                await loadTasks(); _renderFocusBoard();
+            });
+            row.addEventListener('keydown', async e => {
+                if (e.key === ' ') {
+                    e.preventDefault();
+                    const cb = row.querySelector('.list-task-cb');
+                    cb.checked = !cb.checked;
+                    cb.dispatchEvent(new Event('change'));
+                }
+            });
+            rowsEl.appendChild(row);
+        });
+
+        header.addEventListener('click', () => rowsEl.classList.toggle('hidden'));
+        groupEl.appendChild(header);
+        groupEl.appendChild(rowsEl);
+        container.appendChild(groupEl);
+    });
+}
+
+// Pomodoro rail helpers
+function _updatePomoTimeDisplay() {
+    const m = String(Math.floor(pomodoroSecondsLeft / 60)).padStart(2, '0');
+    const s = String(pomodoroSecondsLeft % 60).padStart(2, '0');
+    const display = document.getElementById('pomo-time-display');
+    const ring    = document.getElementById('pomo-ring-fill');
+    const label   = document.getElementById('pomo-phase-label');
+    if (display) display.textContent = `${m}:${s}`;
+    if (label) {
+        const phaseLabels = { work:'Work', short:'Short Break', long:'Long Break' };
+        label.textContent = phaseLabels[pomodoroPhase] || 'Work';
+    }
+    if (ring) {
+        const total = pomodoroPhase === 'short' ? pomodoroShortSecs : pomodoroPhase === 'long' ? pomodoroLongSecs : pomodoroWorkSecs;
+        const progress = pomodoroSecondsLeft / total;
+        const circ = 339.3;
+        ring.style.strokeDashoffset = String(circ * (1 - progress));
+    }
+}
+
+function _startPomodoroClock() {
+    const clockEl = document.getElementById('pomo-clock');
+    const update = () => {
+        if (!clockEl || !document.getElementById('pomo-clock')) return;
+        const now = new Date();
+        const days = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+        const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+        clockEl.textContent = `${days[now.getDay()]} ${months[now.getMonth()]} ${now.getDate()} · ${now.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'})}`;
+    };
+    update();
+    const id = setInterval(update, 1000);
+    focusIntervals.push(id);
+}
+
+function _togglePomodoro() {
+    pomodoroIsRunning = !pomodoroIsRunning;
+    const btn = document.getElementById('pomo-play-btn');
+    if (btn) btn.textContent = pomodoroIsRunning ? '⏸' : '▶';
+    if (pomodoroIsRunning) {
+        const id = setInterval(() => {
+            if (!pomodoroIsRunning) return;
+            pomodoroSecondsLeft = Math.max(0, pomodoroSecondsLeft - 1);
+            _updatePomoTimeDisplay();
+            if (pomodoroSecondsLeft === 0) {
+                pomodoroIsRunning = false;
+                if (pomodoroPhase === 'work') {
+                    pomodoroSessionHistory.unshift({ time: new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'}), taskTitle: activePomodoroTask ? (currentEvents.find(e=>e.id===activePomodoroTask.event_id)?.title || 'Task') : '—' });
+                    pomodoroCurrentRound++;
+                    pomodoroPhase = (pomodoroCurrentRound % pomodoroRoundsBeforeLong === 1 && pomodoroCurrentRound > 1) ? 'long' : 'short';
+                    pomodoroSecondsLeft = pomodoroPhase === 'long' ? pomodoroLongSecs : pomodoroShortSecs;
+                } else {
+                    pomodoroPhase = 'work';
+                    pomodoroSecondsLeft = pomodoroWorkSecs;
+                }
+                _renderPomodoRounds();
+                _renderPomodoroHistory();
+                _updatePomoTimeDisplay();
+                if (Notification.permission === 'granted') {
+                    new Notification('Loom — Pomodoro complete!', { body: pomodoroPhase === 'work' ? 'Back to work!' : 'Time for a break.' });
+                }
+            }
+        }, 1000);
+        focusIntervals.push(id);
+    }
+}
+
+function _resetPomodoro() {
+    pomodoroIsRunning = false;
+    pomodoroPhase = 'work';
+    pomodoroSecondsLeft = pomodoroWorkSecs;
+    const btn = document.getElementById('pomo-play-btn');
+    if (btn) btn.textContent = '▶';
+    _updatePomoTimeDisplay();
+}
+
+function _renderPomodoRounds() {
+    const el = document.getElementById('pomo-rounds');
+    if (!el) return;
+    el.innerHTML = Array.from({ length: pomodoroRoundsBeforeLong }, (_, i) => {
+        const cls = i + 1 < pomodoroCurrentRound ? 'pomo-round-dot done' : i + 1 === pomodoroCurrentRound ? 'pomo-round-dot current' : 'pomo-round-dot';
+        return `<span class="${cls}"></span>`;
+    }).join('');
+}
+
+function _renderPomodoroHistory() {
+    const el = document.getElementById('pomo-history');
+    if (!el || !pomodoroSessionHistory.length) return;
+    el.innerHTML = `<div class="pomo-history-title">Today</div>` +
+        pomodoroSessionHistory.slice(0, 5).map(h =>
+            `<div class="pomo-history-row"><span class="pomo-history-time">${h.time}</span><span class="pomo-history-task">✓ ${h.taskTitle}</span></div>`
+        ).join('');
+}
+
+// ==========================================
 // BULK DELETE SELECTED EVENTS (H1)
 // ==========================================
 async function bulkDeleteSelected() {
@@ -2483,7 +2991,7 @@ function setupEventListeners() {
                 case ']': calendarInstance.next(); break;
                 case 'b': document.getElementById('sidebar-toggle').click(); break;
                 case '/': e.preventDefault(); document.getElementById('event-search').focus(); break;
-                case 'f': e.preventDefault(); openFocusMode(); break; // L2
+                case 'f': e.preventDefault(); document.dispatchEvent(new CustomEvent('loom:navigate', { detail: { destination: 'focus' } })); break;
                 // H1: bulk-delete all selected events with a single undo entry
                 case 'delete':
                 case 'backspace':

@@ -97,6 +97,10 @@ class Task(SQLModel, table=True):
     is_complete: bool = Field(default=False)
     note: Optional[str] = Field(default=None)
     added_at: Optional[str] = Field(default=None)  # ISO datetime string
+    # v2.0 Kanban fields
+    status: Optional[str] = Field(default="backlog")    # backlog | doing | done
+    priority: Optional[str] = Field(default="low")      # high | med | low
+    due_date: Optional[str] = Field(default=None)       # ISO date string, nullable
 
 class TaskRead(SQLModel):
     id: int
@@ -104,6 +108,9 @@ class TaskRead(SQLModel):
     is_complete: bool
     note: Optional[str]
     added_at: Optional[str]
+    status: Optional[str]
+    priority: Optional[str]
+    due_date: Optional[str]
 
 # --- AVAILABILITY REQUEST MODELS ---
 class AvailabilityRequest(SQLModel, table=True):
