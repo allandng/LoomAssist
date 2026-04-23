@@ -1,20 +1,129 @@
+/* ============================================================
+   v2.0 DESIGN TOKENS — translated from LA_TOKENS in shared.jsx
+   Fonts: Inter + JetBrains Mono bundled locally (privacy-first;
+   downloaded once via @fontsource during dev setup, no CDN at runtime)
+   ============================================================ */
+
+@font-face {
+  font-family: 'Inter';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/inter-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/inter-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/inter-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/inter-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-500.woff2') format('woff2');
+}
+
 :root {
-  --bg-color: #0f172a;
-  --sidebar-bg: #1e293b;
-  --card-bg: #1e293b;
-  --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
-  --danger: #ef4444;
-  --border: #334155;
+  /* --- Backgrounds --- */
+  --bg-main:     #0B1120;
+  --bg-panel:    #121B2E;
+  --bg-elevated: #1A2540;
+  --bg-subtle:   #0F172A;
+
+  /* --- Borders --- */
+  --border:        #1E2D45;
+  --border-strong: #2A3F5F;
+
+  /* --- Text --- */
+  --text-main:  #E2E8F0;
+  --text-muted: #7A8FA6;
+  --text-dim:   #4A5568;
+
+  /* --- Accent (indigo) --- */
+  --accent:      #6366F1;
+  --accent-soft: rgba(99, 102, 241, 0.15);
+  --accent-hover:#4F46E5;
+
+  /* --- Status --- */
+  --success:  #10B981;
+  --warning:  #F59E0B;
+  --error:    #EF4444;
+  --info:     #3B82F6;
+  --progress: #6366F1;
+
+  /* --- Timeline swatch defaults (overridden by per-timeline DB color) --- */
+  --tl-school:   #6B8CFF;
+  --tl-work:     #4ECDC4;
+  --tl-personal: #A78BFA;
+  --tl-health:   #6EE7B7;
+  --tl-family:   #FCA5A5;
+  --tl-errands:  #FCD34D;
+
+  /* --- Typography --- */
+  --font-ui:   'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* --- Type scale --- */
+  --text-display:      28px;
+  --text-h1:           22px;
+  --text-h2:           18px;
+  --text-h3:           15px;
+  --text-body-strong:  14px;
+  --text-body:         13px;
+  --text-small:        12px;
+  --text-label:        11px;
+
+  /* --- Border radii --- */
+  --radius-sm:  4px;
+  --radius-md:  6px;
+  --radius-lg:  8px;
+  --radius-xl:  10px;
+  --radius-2xl: 12px;
+  --radius-pill: 999px;
+
+  /* --- Shadows --- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
+
+  /* --- Legacy aliases (keep v1.5 rules working during transition) --- */
+  --bg-color:   var(--bg-main);
+  --sidebar-bg: var(--bg-panel);
+  --card-bg:    var(--bg-elevated);
+  --danger:     var(--error);
+  --amber:      var(--warning);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background-color: var(--bg-color);
+  font-family: var(--font-ui);
+  background-color: var(--bg-main);
   color: var(--text-main);
   height: 100vh;
   overflow: hidden;
