@@ -505,15 +505,76 @@ body {
 
 .primary-btn { background-color: var(--accent); color: white; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
 
-#calendar-container { flex-grow: 1; background-color: var(--card-bg); border-radius: 12px; padding: 15px; border: 1px solid var(--border); position: relative; }
+#calendar-container { flex: 1; background-color: var(--bg-main); padding: 12px; position: relative; min-height: 0; overflow: hidden; }
 
 /* FullCalendar Theme Overrides */
 .fc-theme-standard td, .fc-theme-standard th { border-color: var(--border); }
 .fc .fc-toolbar-title { font-size: 1.5rem; color: var(--text-main); }
 .fc .fc-button-primary { background-color: var(--border) !important; border: none !important; }
 .fc .fc-button-primary:hover { background-color: var(--accent) !important; }
-.fc .fc-col-header-cell-cushion, .fc .fc-daygrid-day-number { color: var(--text-main); text-decoration: none; }
+.fc .fc-col-header-cell-cushion { color: var(--text-dim); font-size: var(--text-label); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; text-decoration: none; }
+.fc .fc-daygrid-day-number { color: var(--text-main); text-decoration: none; }
 .fc-event { cursor: pointer; }
+
+/* v2.0: Hide FullCalendar's own event inner content — we render our own via eventContent */
+.fc-event .fc-event-main { overflow: hidden; padding: 0; }
+.fc-event-title-container, .fc-event-time { display: none !important; }
+
+/* v2.0: Custom event pill */
+.loom-event-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px 2px 6px;
+  border-left: 2px solid var(--ev-color, var(--accent));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  min-height: 16px;
+  box-sizing: border-box;
+}
+.loom-event-pill--allday {
+  border-left: none;
+  padding: 2px 6px;
+  background: var(--ev-color, var(--accent));
+  opacity: 0.9;
+}
+.loom-event-time {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.loom-event-title {
+  font-size: var(--text-label);
+  font-weight: 500;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.loom-event-pill--allday .loom-event-title {
+  color: #fff;
+}
+
+/* v2.0: Today date circle */
+.loom-day-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-small);
+  color: var(--text-muted);
+}
+.loom-day-num--today {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
 
 /* Modal */
 .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 1000; }
@@ -663,16 +724,16 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
 #event-tooltip {
   position: fixed;
   z-index: 5000;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
-  max-width: 320px;
-  max-height: 400px;
+  max-width: 280px;
+  max-height: 420px;
   overflow-y: auto;
   pointer-events: none;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-  font-size: 0.85rem;
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-small);
   line-height: 1.5;
 }
 .hc-title { font-weight: 600; margin-bottom: 4px; }
@@ -976,12 +1037,26 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
    ========================================== */
 :root { --amber: #D97706; }
 
+#schedule-warnings {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 340px;
+  pointer-events: auto;
+}
+
 .schedule-warning {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 14px; margin-bottom: 6px;
-  background: rgba(217,119,6,0.08);
-  border-left: 3px solid var(--amber);
-  border-radius: 6px; font-size: 0.85rem;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-small);
 }
 .schedule-warning-text { flex-grow: 1; color: var(--text-main); }
 .schedule-warning-dismiss {
@@ -1292,6 +1367,77 @@ body.app-drawer-open .app-layout {
   margin-top: 4px;
   line-height: 1.4;
 }
+
+/* ==========================================
+   v2.0 SIDEBAR FOOTER & FILTER SECTION
+   ========================================== */
+
+.sidebar-footer {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-panel);
+}
+
+.sidebar-footer-btn--primary {
+  width: 100%;
+  padding: 9px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-body);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+}
+.sidebar-footer-btn--primary:hover { background: var(--accent-hover); }
+
+.sidebar-footer-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-footer-icon-btn {
+  flex: 1;
+  padding: 7px 6px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-small);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-footer-icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Sidebar filter checkboxes */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: var(--text-body);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.filter-row:hover { color: var(--text-main); }
+.filter-row input[type="checkbox"] { flex-shrink: 0; }
+
+/* Hide the sidebar filters section when sidebar is collapsed */
+.app-layout.sidebar-hidden #sidebar-filters-section { display: none; }
 
 /* ==========================================
    NOTIFICATION BELL & PANEL

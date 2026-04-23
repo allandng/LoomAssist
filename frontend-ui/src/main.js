@@ -304,6 +304,36 @@ document.addEventListener('DOMContentLoaded', async function() {
       height: '100%',
       events: [],
 
+      // v2.0: custom event pill rendering
+      eventContent: function(arg) {
+          const ev = arg.event;
+          const color = ev.extendedProps.timelineColor || '#6366f1';
+          const isAllDay = ev.allDay;
+          const el = document.createElement('div');
+          el.className = 'loom-event-pill' + (isAllDay ? ' loom-event-pill--allday' : '');
+          el.style.setProperty('--ev-color', color);
+          if (!isAllDay && ev.start) {
+              const t = ev.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+              const timeEl = document.createElement('span');
+              timeEl.className = 'loom-event-time';
+              timeEl.textContent = t;
+              el.appendChild(timeEl);
+          }
+          const titleEl = document.createElement('span');
+          titleEl.className = 'loom-event-title';
+          titleEl.textContent = ev.title;
+          el.appendChild(titleEl);
+          return { domNodes: [el] };
+      },
+
+      // v2.0: today date circle
+      dayCellContent: function(arg) {
+          const el = document.createElement('div');
+          el.className = 'loom-day-num' + (arg.isToday ? ' loom-day-num--today' : '');
+          el.textContent = arg.date.getDate();
+          return { domNodes: [el] };
+      },
+
       // H1: drag-select across grid → open new event modal for that range
       select: function(info) {
         openEventModal(null, info.startStr);
@@ -796,6 +826,14 @@ function renderSidebar(timelines) {
 // ==========================================
 // MAP EVENT — H5: extracted so per-day-times can return an array
 // ==========================================
+function hexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.slice(0,2), 16);
+    const g = parseInt(h.slice(2,4), 16);
+    const b = parseInt(h.slice(4,6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
 function mapEvent(event) {
     const parentTimeline = currentTimelines.find(t => t.id === event.calendar_id);
     const timelineColor = (parentTimeline && parentTimeline.color) ? parentTimeline.color : "#6366f1";
@@ -824,8 +862,8 @@ function mapEvent(event) {
             id: event.id, title: displayTitle,
             start: startDate, end: endDate,
             allDay: true,
-            backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-            extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
+            backgroundColor: timelineColor, borderColor: timelineColor, textColor: '#ffffff',
+            extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description, timelineColor }
         };
     }
 
@@ -844,8 +882,8 @@ function mapEvent(event) {
                     startTime, endTime,
                     startRecur: event.start_time.split('T')[0],
                     endRecur: event.recurrence_end,
-                    backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description, parent_id: event.id }
+                    backgroundColor: hexToRgba(timelineColor, 0.15), borderColor: 'transparent', textColor: '#E2E8F0',
+                    extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description, parent_id: event.id, timelineColor }
                 }));
                 if (results.length > 0) return results;
             } catch { /* fall through to default recurring render */ }
@@ -857,8 +895,8 @@ function mapEvent(event) {
             startTime: startDate.toTimeString().substring(0, 5),
             endTime: endDate.toTimeString().substring(0, 5),
             startRecur: event.start_time.split('T')[0], endRecur: event.recurrence_end,
-            backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-            extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description }
+            backgroundColor: hexToRgba(timelineColor, 0.15), borderColor: 'transparent', textColor: '#E2E8F0',
+            extendedProps: { calendar_id: event.calendar_id, is_recurring: true, description: event.description, timelineColor }
         };
         // H4: pass skipped dates as exdate so FC omits those instances
         if (event.skipped_dates) {
@@ -872,8 +910,8 @@ function mapEvent(event) {
     // Standard single-instance event
     let evtObj = {
         id: event.id, title: displayTitle, start: event.start_time, end: event.end_time,
-        backgroundColor: timelineColor, borderColor: timelineColor, textColor: "#ffffff",
-        extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description }
+        backgroundColor: hexToRgba(timelineColor, 0.15), borderColor: 'transparent', textColor: '#E2E8F0',
+        extendedProps: { calendar_id: event.calendar_id, is_recurring: false, description: event.description, timelineColor }
     };
     if (event.timezone && event.timezone !== 'local') evtObj.timeZone = event.timezone;
     return evtObj;
@@ -884,9 +922,23 @@ function renderCalendarEvents(searchTerm = "") {
     selectedEventIds.clear(); // H1: reset selection on every re-render
     const activeTimelineIds = Array.from(document.querySelectorAll('.timeline-checkbox:checked')).map(cb => parseInt(cb.dataset.id));
 
+    // v2.0 sidebar filters
+    const filterChecklist = document.getElementById('filter-has-checklist')?.checked ?? false;
+    const filterRecurring = document.getElementById('filter-recurring')?.checked ?? false;
+    const filterThisWeek  = document.getElementById('filter-this-week')?.checked ?? false;
+    const nowWeekStart = (() => { const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - d.getDay()); return d; })();
+    const nowWeekEnd   = new Date(nowWeekStart.getTime() + 7 * 86400000);
+
     const formattedEvents = currentEvents
         .filter(event => activeTimelineIds.includes(event.calendar_id))
         .filter(event => (event.title || "").toLowerCase().includes(searchTerm))
+        .filter(event => !filterChecklist || (event.checklist && JSON.parse(event.checklist || '[]').length > 0))
+        .filter(event => !filterRecurring || event.is_recurring)
+        .filter(event => {
+            if (!filterThisWeek) return true;
+            const s = new Date(event.start_time);
+            return s >= nowWeekStart && s < nowWeekEnd;
+        })
         .flatMap(event => {
             const r = mapEvent(event);
             return Array.isArray(r) ? r : [r];
@@ -2599,6 +2651,26 @@ function setupEventListeners() {
             renderCalendarEvents(val);
         });
     }
+    // --- v2.0 Sidebar footer quick actions ---
+    document.getElementById('sidebar-new-event-btn')?.addEventListener('click', () => openEventModal());
+    document.getElementById('sidebar-avail-btn')?.addEventListener('click', () => openAvailabilityModal());
+    document.getElementById('sidebar-import-btn')?.addEventListener('click', () => {
+        document.getElementById('import-error')?.classList.add('hidden');
+        document.getElementById('import-file-input')?.click();
+    });
+    document.getElementById('sidebar-pdf-btn')?.addEventListener('click', () => {
+        document.getElementById('import-error')?.classList.add('hidden');
+        document.getElementById('import-file-input')?.click();
+    });
+
+    // --- v2.0 Sidebar filter checkboxes ---
+    ['filter-has-checklist', 'filter-recurring', 'filter-this-week'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            const searchTerm = document.getElementById('event-search')?.value.toLowerCase() || '';
+            renderCalendarEvents(searchTerm);
+        });
+    });
+
     // H6: + button inside search calls submitQuickAdd with current search text
     if (searchQABtn) {
         searchQABtn.addEventListener("click", () => {

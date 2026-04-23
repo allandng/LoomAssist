@@ -152,7 +152,38 @@
             <div id="taskboard-list"></div>
           </div>
 
+        <!-- Filters section (injected into sidebar-content, visible when in calendar mode) -->
+        <div id="sidebar-filters-section" class="sidebar-section">
+          <div class="section-header">
+            <h3>Filters</h3>
+          </div>
+          <label class="filter-row">
+            <input type="checkbox" id="filter-has-checklist" style="accent-color:var(--accent);">
+            <span>Has checklist</span>
+          </label>
+          <label class="filter-row">
+            <input type="checkbox" id="filter-recurring" style="accent-color:var(--accent);">
+            <span>Recurring only</span>
+          </label>
+          <label class="filter-row">
+            <input type="checkbox" id="filter-this-week" style="accent-color:var(--accent);">
+            <span>This week</span>
+          </label>
+        </div>
+
         </div><!-- end #sidebar-content -->
+
+        <!-- Pinned footer: always-visible quick actions -->
+        <div class="sidebar-footer" id="sidebar-footer">
+          <button class="sidebar-footer-btn sidebar-footer-btn--primary" id="sidebar-new-event-btn" title="New Event (N)">
+            + New Event
+          </button>
+          <div class="sidebar-footer-row">
+            <button class="sidebar-footer-icon-btn" id="sidebar-avail-btn" title="Send Availability">📅</button>
+            <button class="sidebar-footer-icon-btn" id="sidebar-import-btn" title="Import ICS">↑ ICS</button>
+            <button class="sidebar-footer-icon-btn" id="sidebar-pdf-btn" title="Parse Syllabus PDF">📄 PDF</button>
+          </div>
+        </div>
       </div><!-- end .context-sidebar -->
 
       <!-- Main column: top bar + content -->
