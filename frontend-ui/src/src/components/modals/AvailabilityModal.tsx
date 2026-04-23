@@ -22,7 +22,7 @@ function monthDays(year: number, month: number): (number | null)[] {
 }
 
 export function AvailabilityModal() {
-  const { close } = useModal();
+  const { close, openAvailabilityResponse } = useModal();
   const { addNotification, updateNotification } = useNotifications();
 
   const today = new Date();
@@ -98,11 +98,23 @@ export function AvailabilityModal() {
         if (req.status !== 'pending') {
           stopPolling();
           setPollStatus(req.status);
+          let amendSlotLabel = req.amendment_slot ?? '';
+          if (req.status === 'amended' && req.amendment_slot) {
+            try {
+              const s = JSON.parse(req.amendment_slot) as { date?: string; start?: string; end?: string };
+              if (s.date && s.start) amendSlotLabel = `${s.date} ${s.start}–${s.end ?? ''}`;
+            } catch { /* keep raw string */ }
+          }
           updateNotification(notifId, {
             type: req.status === 'confirmed' ? 'success' : req.status === 'amended' ? 'warning' : 'info',
             title: req.status === 'confirmed' ? 'Meeting confirmed!' : req.status === 'amended' ? 'Counter-proposal received' : 'Availability declined',
-            message: req.status === 'confirmed' ? `With ${req.receiver_name}` : req.amendment_slot ?? '',
+            message: req.status === 'confirmed' ? `With ${req.receiver_name}` : amendSlotLabel,
             progress: undefined,
+            ...(req.status === 'amended' ? {
+              actionable: true,
+              actionLabel: 'View Proposal',
+              actionFn: () => openAvailabilityResponse(t),
+            } : {}),
           });
         }
       } catch (e: unknown) {

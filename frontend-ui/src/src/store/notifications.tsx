@@ -1,5 +1,5 @@
 import {
-  createContext, useContext, useReducer, useCallback, useMemo,
+  createContext, useContext, useReducer, useCallback, useMemo, useState,
   type ReactNode,
 } from 'react';
 
@@ -42,11 +42,13 @@ function reducer(state: Notification[], action: Action): Notification[] {
 interface NotificationsContextValue {
   notifications: Notification[];
   unreadCount: number;
+  panelOpen: boolean;
   addNotification: (n: AddPayload) => string;
   updateNotification: (id: string, patch: UpdatePayload) => void;
   dismissNotification: (id: string) => void;
   clearAllNotifications: () => void;
   markAllRead: () => void;
+  togglePanel: () => void;
 }
 
 const NotificationsContext = createContext<NotificationsContextValue | null>(null);
@@ -56,6 +58,8 @@ function nextId(): string { return `notif-${++_idCounter}`; }
 
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const [notifications, dispatch] = useReducer(reducer, []);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const togglePanel = useCallback(() => setPanelOpen(v => !v), []);
 
   const addNotification = useCallback((payload: AddPayload): string => {
     const id = nextId();
@@ -91,12 +95,14 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<NotificationsContextValue>(() => ({
     notifications,
     unreadCount,
+    panelOpen,
     addNotification,
     updateNotification,
     dismissNotification,
     clearAllNotifications,
     markAllRead,
-  }), [notifications, unreadCount, addNotification, updateNotification, dismissNotification, clearAllNotifications, markAllRead]);
+    togglePanel,
+  }), [notifications, unreadCount, panelOpen, addNotification, updateNotification, dismissNotification, clearAllNotifications, markAllRead, togglePanel]);
 
   return <NotificationsContext value={value}>{children}</NotificationsContext>;
 }

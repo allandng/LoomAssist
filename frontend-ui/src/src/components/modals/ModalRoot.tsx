@@ -6,6 +6,9 @@ import { useState, useEffect } from 'react';
 import { useModal } from '../../contexts/ModalContext';
 import { EventEditorModal } from './EventEditorModal';
 import { AvailabilityModal } from './AvailabilityModal';
+import { ICSImportModal } from './ICSImportModal';
+import { SyllabusModal } from './SyllabusModal';
+import { CounterProposalModal } from './CounterProposalModal';
 import { listCalendars } from '../../api';
 import type { Calendar } from '../../types';
 
@@ -32,6 +35,12 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
       );
     case 'availability':
       return <AvailabilityModal />;
+    case 'ics-import':
+      return <ICSImportModal timelines={timelines} onSaved={onSaved} />;
+    case 'syllabus':
+      return <SyllabusModal onSaved={onSaved} />;
+    case 'availability-response':
+      return <CounterProposalModal token={modal.props.token as string} onSaved={onSaved} />;
     default:
       return null;
   }

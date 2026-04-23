@@ -129,7 +129,8 @@ export async function extractSyllabus(file: File): Promise<SyllabusEvent[]> {
   form.append('file', file);
   const res = await fetch(`${BASE}/documents/extract-syllabus/`, { method: 'POST', body: form });
   if (!res.ok) throw new Error(`extract-syllabus → ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  return data.events ?? data;
 }
 
 export const saveApprovedEvents = (

@@ -7,7 +7,7 @@ import interactionPlugin from '@fullcalendar/interaction';
 import type { EventDropArg, EventClickArg, EventHoveringArg, DateSelectArg, EventContentArg } from '@fullcalendar/core';
 import type { EventResizeDoneArg } from '@fullcalendar/interaction';
 import styles from './CalendarPage.module.css';
-import { CalendarSidebar } from '../components/calendar/CalendarSidebar';
+import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/CalendarSidebar';
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
@@ -17,12 +17,13 @@ import { useShortcuts } from '../hooks/useShortcuts';
 import { useReminders } from '../hooks/useReminders';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
 import {
-  listEvents, updateEvent, deleteEvent,
+  listEvents, createEvent, updateEvent, deleteEvent,
   listCalendars, createCalendar, updateCalendar, deleteCalendar,
   listTemplates,
   analyzeSchedule,
+  extractSyllabus,
 } from '../api';
-import type { Event, Calendar, EventTemplate } from '../types';
+import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate } from '../types';
 import { useNotifications } from '../store/notifications';
 
 // ---- FullCalendar view name map ----
@@ -49,6 +50,14 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
         color: isSpan ? 'white' : color,
         borderLeft: isSpan ? 'none' : `2px solid ${color}`,
       }}
+      draggable
+      onDragStart={e => {
+        e.dataTransfer.setData(
+          'application/loom-event',
+          JSON.stringify({ id: ev.id, title: ev.title }),
+        );
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
     >
       <span className={styles.pillTime}>{startStr}</span>
       <span className={styles.pillTitle} style={{ color: isSpan ? 'white' : 'var(--text-main)' }}>
@@ -65,7 +74,7 @@ export function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
   const nav = useCalendarNav();
   const { push: pushUndo } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport, openSyllabus } = useModal();
+  const { openEventEditor, openAvailability, openICSImport } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
@@ -89,6 +98,26 @@ export function CalendarPage() {
   // Double-click detection
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastClickedIdRef = useRef<string | null>(null);
+
+  // Sidebar collapse
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(
+    () => localStorage.getItem('loom_sidebar_open') !== 'false',
+  );
+  const toggleCalendarSidebar = useCallback(() => {
+    setSidebarOpen(prev => {
+      const next = !prev;
+      localStorage.setItem('loom_sidebar_open', next ? 'true' : 'false');
+      return next;
+    });
+  }, []);
+
+  // Scan state
+  const [scanResults, setScanResults] = useState<SyllabusEvent[] | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+
+  // Scroll-wheel zoom
+  const mainRef = useRef<HTMLDivElement>(null);
+  const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ---- Load data ----
   const loadAll = useCallback(async (isFirst = false) => {
@@ -115,6 +144,71 @@ export function CalendarPage() {
   }, []);
 
   useEffect(() => { loadAll(true); }, [loadAll]);
+
+  // ---- Scan handlers ----
+  const handleScanFile = useCallback(async (file: File) => {
+    setScanLoading(true);
+    setScanResults(null);
+    if (!sidebarOpen) {
+      setSidebarOpen(true);
+      localStorage.setItem('loom_sidebar_open', 'true');
+    }
+    try {
+      const evs = await extractSyllabus(file);
+      if (evs.length === 0) {
+        addNotification({ type: 'warning', title: 'No events found', message: 'No dates detected in the file.' });
+      } else {
+        setScanResults(evs);
+      }
+    } catch {
+      addNotification({ type: 'error', title: 'Scan failed', message: 'Could not read file.' });
+    } finally {
+      setScanLoading(false);
+    }
+  }, [sidebarOpen, addNotification]);
+
+  const handleApproveScan = useCallback(async (edit: ScanEventEdit, idx: number) => {
+    const isAllDay = !edit.startTime;
+    const start = isAllDay ? `${edit.date}T00:00:00` : `${edit.date}T${edit.startTime}:00`;
+    const end   = isAllDay
+      ? `${edit.date}T23:59:00`
+      : edit.endTime
+        ? `${edit.date}T${edit.endTime}:00`
+        : `${edit.date}T${edit.startTime.replace(/^(\d{2}):(\d{2})$/, (_, h, m) =>
+            `${String((Number(h) + 1) % 24).padStart(2, '0')}:${m}`
+          )}:00`;
+    const payload: EventCreate = {
+      title: edit.title, start_time: start, end_time: end, calendar_id: edit.calendarId,
+      is_recurring: false, recurrence_days: '', recurrence_end: '',
+      description: '', unique_description: '', reminder_minutes: 0,
+      external_uid: '', timezone: 'local', is_all_day: isAllDay,
+      skipped_dates: '', per_day_times: '', checklist: '',
+    };
+    try {
+      await createEvent(payload);
+      setScanResults(prev => {
+        if (!prev) return null;
+        const next = prev.filter((_, i) => i !== idx);
+        return next.length === 0 ? null : next;
+      });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Could not add event', message: edit.title });
+    }
+  }, [loadAll, addNotification]);
+
+  const handleDismissScan = useCallback((idx: number) => {
+    setScanResults(prev => {
+      if (!prev) return null;
+      const next = prev.filter((_, i) => i !== idx);
+      return next.length === 0 ? null : next;
+    });
+  }, []);
+
+  const handleClearScan = useCallback(() => {
+    setScanResults(null);
+    setScanLoading(false);
+  }, []);
 
   // Sync label refresh every 30 seconds
   useEffect(() => {
@@ -156,6 +250,42 @@ export function CalendarPage() {
   useEffect(() => {
     // Propagate to Shell's TopBar via context — handled by CalendarNavContext's syncStatus (Phase 3 wiring is enough)
   }, [syncLabel, syncStatus]);
+
+  // Ctrl/Cmd + scroll-wheel zoom (cycles dayGridMonth ↔ timeGridWeek ↔ timeGridDay)
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'] as const;
+    type V = typeof VIEWS[number];
+
+    const handler = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (wheelTimerRef.current) return; // debounce
+
+      const api = calRef.current?.getApi();
+      if (!api) return;
+      const raw = api.view.type;
+      const idx = VIEWS.indexOf(raw as V);
+      const safeIdx = idx === -1 ? 0 : idx;
+      const nextIdx = e.deltaY < 0
+        ? Math.min(safeIdx + 1, VIEWS.length - 1)  // zoom in → timeGridDay
+        : Math.max(safeIdx - 1, 0);                // zoom out → dayGridMonth
+
+      if (nextIdx !== safeIdx) {
+        api.changeView(VIEWS[nextIdx]);
+        nav.setDateLabel(api.view.title);
+      }
+
+      wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 150);
+    };
+
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', handler);
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+    };
+  }, [nav]);
 
   // ---- Computed FC events ----
   const fcEvents = useMemo(
@@ -209,8 +339,8 @@ export function CalendarPage() {
     const newStart  = arg.event.start!;
     const newEnd    = arg.event.end ?? new Date(newStart.getTime() + (prevEnd.getTime() - prevStart.getTime()));
 
-    const payload = { start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
-    const revert  = { start_time: prevStart.toISOString(), end_time: prevEnd.toISOString() };
+    const payload = { ...ev, start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
+    const revert  = { ...ev, start_time: prevStart.toISOString(), end_time: prevEnd.toISOString() };
 
     pushUndo({
       label: `Move "${ev.title}"`,
@@ -234,12 +364,12 @@ export function CalendarPage() {
 
     pushUndo({
       label: `Resize "${ev.title}"`,
-      undo: async () => { await updateEvent(ev.id, { end_time: prevEnd.toISOString() }); await loadAll(); },
-      redo: async () => { await updateEvent(ev.id, { end_time: newEnd.toISOString() });  await loadAll(); },
+      undo: async () => { await updateEvent(ev.id, { ...ev, end_time: prevEnd.toISOString() }); await loadAll(); },
+      redo: async () => { await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });  await loadAll(); },
     });
 
     try {
-      await updateEvent(ev.id, { end_time: newEnd.toISOString() });
+      await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });
       await loadAll();
     } catch {
       arg.revert();
@@ -387,6 +517,8 @@ export function CalendarPage() {
   return (
     <div className={styles.page}>
       <CalendarSidebar
+        open={sidebarOpen}
+        onToggle={toggleCalendarSidebar}
         timelines={timelines}
         templates={templates}
         hiddenTimelineIds={hiddenTimelineIds}
@@ -398,14 +530,19 @@ export function CalendarPage() {
         onNewEvent={() => openEventEditor(null)}
         onAvailability={openAvailability}
         onImportICS={openICSImport}
-        onParseSyllabus={openSyllabus}
+        onScanFile={handleScanFile}
+        scanLoading={scanLoading}
+        scanResults={scanResults}
+        onApproveScan={handleApproveScan}
+        onDismissScan={handleDismissScan}
+        onClearScan={handleClearScan}
         onNewTimeline={handleNewTimeline}
         onRenameTimeline={handleRenameTimeline}
         onDeleteTimeline={handleDeleteTimeline}
         onApplyTemplate={handleApplyTemplate}
       />
 
-      <div className={styles.main}>
+      <div ref={mainRef} className={styles.main}>
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
@@ -414,6 +551,9 @@ export function CalendarPage() {
           events={fcEvents}
           eventContent={eventContent}
           editable
+          droppable={true}
+          eventDurationEditable={true}
+          eventStartEditable={true}
           selectable
           selectMirror
           height="100%"

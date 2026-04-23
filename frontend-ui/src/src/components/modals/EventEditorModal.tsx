@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import styles from './EventEditorModal.module.css';
 import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
+import { MentionTextarea } from '../shared/MentionTextarea';
 import { TLDot } from '../shared/TLDot';
 import { Icon, Icons } from '../shared/Icon';
 import { Kbd } from '../shared/Kbd';
@@ -351,14 +352,11 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
 
         {/* Description */}
         <div className={styles.field}>
-          <FieldLabel>Description <span className={styles.sublabel}>· Markdown</span></FieldLabel>
-          <textarea
-            className="loom-field"
-            rows={3}
+          <FieldLabel>Description <span className={styles.sublabel}>· Markdown · @mention</span></FieldLabel>
+          <MentionTextarea
             value={description}
-            onChange={e => setDescription(e.target.value)}
+            onChange={setDescription}
             readOnly={isLocked}
-            style={{ resize: 'vertical' }}
           />
         </div>
 
