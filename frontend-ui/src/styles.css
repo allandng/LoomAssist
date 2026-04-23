@@ -725,7 +725,8 @@ select.form-input { appearance: none; cursor: pointer; }
 .mention-chip { background: rgba(99, 102, 241, 0.2); color: var(--accent); border-radius: 4px; padding: 1px 5px; font-size: 0.85rem; cursor: pointer; font-weight: 500; }
 .mention-chip:hover { background: rgba(99, 102, 241, 0.4); }
 
-.fab-container { position: fixed; bottom: 30px; right: 30px; display: flex; flex-direction: column; gap: 15px; z-index: 1001; }
+/* TODO v2.0 cleanup: .fab-container superseded — settings button moved to top bar right cluster */
+.fab-container { display: none; }
 .fab { width: 50px; height: 50px; border-radius: 50%; background-color: var(--accent); color: white; border: none; font-size: 1.5rem; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: transform 0.2s, background-color 0.2s; display: flex; align-items: center; justify-content: center; }
 .fab:hover { transform: scale(1.1); background-color: var(--accent-hover); }
 
@@ -1305,23 +1306,9 @@ body.light-mode { --bg-color: #f1f5f9; --sidebar-bg: #ffffff; --card-bg: #ffffff
   flex-shrink: 0;
 }
 
-/* ==========================================
-   APP LAYOUT SHIFT FOR DRAWER
-   ========================================== */
-
-/* Default: account for the 12px collapsed drawer strip */
-.app-layout {
-  margin-left: 12px;
-  transition: margin-left 0.25s ease;
-}
-
-/* When drawer is open: account for 12px strip + 188px panel = 200px */
-body.app-drawer-open .app-layout {
-  margin-left: 200px;
-}
-
-/* #sidebar-toggle is position:absolute inside .main-content.
-   It does not need adjustment — it moves with the layout. */
+/* TODO v2.0 cleanup: old 12px drawer strip margin — superseded by 56px persistent rail
+.app-layout { margin-left: 12px; }
+body.app-drawer-open .app-layout { margin-left: 200px; } */
 
 /* FAB container is position:fixed — it does not move with layout shifts.
    No adjustment needed. */
@@ -1453,7 +1440,8 @@ body.app-drawer-open .app-layout {
 
 .focus-page {
   display: flex;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
 }
 
@@ -1849,10 +1837,12 @@ body.app-drawer-open .app-layout {
 .taskboard-page {
   padding: 16px;
   overflow-y: auto;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  background: var(--bg-main);
 }
 
 .tb-section {}

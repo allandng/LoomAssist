@@ -587,34 +587,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         document.querySelector('.record-section')?.classList.toggle('hidden', notCal);
         document.getElementById('sidebar-filters-section')?.classList.toggle('hidden', notCal);
 
+        // Show/hide calendar container — never destroy it (FullCalendar stays mounted)
+        const calContainer = document.getElementById('calendar-container');
+        if (calContainer) calContainer.style.display = dest === 'calendar' ? '' : 'none';
+        const schedWarnings = document.getElementById('schedule-warnings');
+        if (schedWarnings) schedWarnings.style.display = dest === 'calendar' ? '' : 'none';
+
+        // Remove any existing overlay pages (focus / tasks)
+        document.getElementById('focus-page')?.remove();
+        document.getElementById('taskboard-page')?.remove();
+        focusIntervals.forEach(clearInterval);
+        focusIntervals = [];
+
         if (dest === 'focus') {
-            // Clear any old interval timers before entering focus
-            focusIntervals.forEach(clearInterval);
-            focusIntervals = [];
             renderFocusPage();
-        } else {
-            // Restore calendar main content when leaving focus
-            if (document.getElementById('focus-page')) {
-                const mainContent = document.getElementById('main-content');
-                if (mainContent) {
-                    mainContent.innerHTML = `
-                        <div id="schedule-warnings"></div>
-                        <div id="calendar-container">
-                            <div id="calendar-empty-overlay" class="hidden"></div>
-                        </div>`;
-                    // Re-render FullCalendar into the restored container
-                    const newCalEl = document.getElementById('calendar-container');
-                    if (calendarInstance && newCalEl) {
-                        calendarInstance.render();
-                        renderCalendarEvents(document.getElementById('event-search')?.value.toLowerCase() || '');
-                    }
-                }
-                focusIntervals.forEach(clearInterval);
-                focusIntervals = [];
-            }
-            if (dest === 'tasks')    renderTaskBoardPage();
-            if (dest === 'settings') document.getElementById('settings-modal')?.classList.remove('hidden');
-            if (dest === 'calendar') updateSidebarMode('normal');
+        } else if (dest === 'tasks') {
+            renderTaskBoardPage();
+        } else if (dest === 'settings') {
+            document.getElementById('settings-modal')?.classList.remove('hidden');
+        } else if (dest === 'calendar') {
+            updateSidebarMode('normal');
         }
     });
 
@@ -2243,7 +2235,10 @@ let taskBoardShow    = 'all';      // all | incomplete | completed | overdue
 function renderTaskBoardPage() {
     const mainContent = document.getElementById('main-content');
     if (!mainContent) return;
-    mainContent.innerHTML = `<div class="taskboard-page" id="taskboard-page"></div>`;
+    const page = document.createElement('div');
+    page.className = 'taskboard-page';
+    page.id = 'taskboard-page';
+    mainContent.appendChild(page);
     _renderTaskBoardContent();
     _renderTaskBoardSidebar();
 }
@@ -2278,7 +2273,7 @@ function _renderTaskBoardSidebar() {
 }
 
 function _renderTaskBoardContent() {
-    const page = document.getElementById('taskboard-page');
+    const page = document.getElementById('taskboard-page') || document.querySelector('.taskboard-page');
     if (!page) return;
     page.innerHTML = '';
 
@@ -2628,8 +2623,9 @@ function renderFocusPage() {
     const mainContent = document.getElementById('main-content');
     if (!mainContent) return;
 
-    // Clear calendar content, inject focus page
-    mainContent.innerHTML = `
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:contents';
+    wrapper.innerHTML = `
         <div class="focus-page" id="focus-page">
             <div class="focus-main">
                 <div class="focus-toolbar">
@@ -2676,6 +2672,7 @@ function renderFocusPage() {
             </div>
         </div>`;
 
+    mainContent.appendChild(wrapper);
     _renderFocusBoard();
     _startPomodoroClock();
     _renderPomodoRounds();
