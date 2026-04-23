@@ -503,7 +503,18 @@ body {
 #event-search { background: transparent; border: none; color: var(--text-main); padding: 10px; width: 100%; outline: none; font-size: 0.95rem; }
 #event-search::placeholder { color: var(--text-muted); }
 
-.primary-btn { background-color: var(--accent); color: white; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+.primary-btn {
+  background-color: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-body-strong);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.primary-btn:hover { background-color: var(--accent-hover); }
 
 #calendar-container { flex: 1; background-color: var(--bg-main); padding: 12px; position: relative; min-height: 0; overflow: hidden; }
 
@@ -576,62 +587,130 @@ body {
   font-weight: 600;
 }
 
-/* Modal */
-.modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+/* ==========================================
+   v2.0 MODAL SHELL
+   ========================================== */
+.modal {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
 #timeline-modal, #onboarding-modal { z-index: 2000 !important; }
 .hidden { display: none !important; }
-.modal-content { 
-  background: var(--card-bg); 
-  padding: 30px; 
-  border-radius: 12px; 
-  text-align: center; 
-  border: 1px solid var(--border); 
+
+.modal-content {
+  background: var(--bg-panel);
+  padding: 24px 28px 20px;
+  border-radius: var(--radius-2xl);
+  text-align: center;
+  border: 1px solid var(--border-strong);
   min-width: 320px;
-  /* Added from B1B_Modal_Scroll */
-  max-height: 90vh; 
-  overflow-y: auto; 
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-xl);
 }
-/* Custom Scrollbar for Modal Content */
-.modal-content::-webkit-scrollbar { 
-  width: 6px; 
+.modal-content h2 {
+  font-size: var(--text-h2);
+  font-weight: 600;
+  margin-bottom: 18px;
+  text-align: left;
+  color: var(--text-main);
 }
-.modal-content::-webkit-scrollbar-track { 
-  background: transparent; 
-}
+.modal-content::-webkit-scrollbar { width: 5px; }
+.modal-content::-webkit-scrollbar-track { background: transparent; }
+.modal-content::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
 
-.modal-content::-webkit-scrollbar-thumb { 
-  background: var(--border); 
-  border-radius: 3px; 
-}
-
-/* Media Query for Shorter Screens (< 800px) */
 @media (max-height: 800px) {
-  .modal-content {
-    padding: 20px;
-  }
-  .form-input {
-    padding: 8px 12px;
-    margin-bottom: 10px;
-  }
+  .modal-content { padding: 18px 22px 16px; }
+  .form-input { padding: 8px 12px; margin-bottom: 10px; }
 }
-.modal-actions { margin-top: 20px; display: flex; gap: 10px; }
-.accept-btn { background: #10b981; color: white; border: none; padding: 10px; flex: 1; border-radius: 6px; cursor: pointer; }
-.delete-btn { background: var(--danger); color: white; border: none; padding: 10px; flex: 1; border-radius: 6px; cursor: pointer; }
+
+.modal-actions { margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* v2.0 shared modal utility classes (used by JS-rendered modals) */
+.modal-field { margin-bottom: 16px; }
+.field-label {
+  display: block;
+  font-size: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.btn-primary {
+  padding: 10px 20px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-body-strong);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-ghost {
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--text-main);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-body-strong);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-ghost:hover { background: var(--bg-elevated); }
+
+/* Button aliases — keep old class names working */
+.accept-btn {
+  background: var(--success);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  flex: 1;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-weight: 600;
+  transition: opacity 0.15s;
+}
+.accept-btn:hover { opacity: 0.9; }
+.delete-btn {
+  background: var(--error);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  flex: 1;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.delete-btn:hover { opacity: 0.9; }
 
 /* ==========================================
    FORM INPUTS & DESCRIPTIONS
    ========================================== */
-.form-input { 
-  width: 100%; 
-  padding: 12px; 
-  margin-bottom: 15px; 
-  border-radius: 8px; 
-  border: 1px solid var(--border); 
-  background-color: var(--bg-color); 
-  color: var(--text-main); 
-  font-size: 1rem; 
+.form-input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-subtle);
+  color: var(--text-main);
+  font-size: var(--text-body);
+  font-family: var(--font-ui);
+  transition: border-color 0.15s;
 }
 .form-input:focus { outline: none; border-color: var(--accent); }
+.form-input::placeholder { color: var(--text-dim); }
 select.form-input { appearance: none; cursor: pointer; }
 
 .description-display { font-size: 0.9rem; line-height: 1.6; color: var(--text-main); padding: 10px; background: var(--bg-color); border-radius: 8px; border: 1px solid var(--border); white-space: pre-wrap; margin-bottom: 15px; }
