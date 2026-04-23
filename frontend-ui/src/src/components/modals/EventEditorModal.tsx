@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styles from './EventEditorModal.module.css';
 import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
 import { MentionTextarea } from '../shared/MentionTextarea';
@@ -11,9 +11,67 @@ import { useNotifications } from '../../store/notifications';
 import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
+  parseDateTime, clockEvent,
 } from '../../api';
 import type { Event, Calendar, ChecklistItem } from '../../types';
 import { parseChecklist } from '../../lib/eventUtils';
+
+function formatDT(dtLocal: string): string {
+  if (!dtLocal) return '';
+  const d = new Date(dtLocal);
+  return isNaN(d.getTime()) ? dtLocal
+    : d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function NLDateInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [text, setText] = useState(() => formatDT(value));
+  const [preview, setPreview] = useState<string | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const handleChange = useCallback((raw: string) => {
+    setText(raw);
+    setPreview(null);
+    setError(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!raw.trim()) return;
+    timerRef.current = setTimeout(async () => {
+      const native = new Date(raw);
+      if (!isNaN(native.getTime()) && native.getFullYear() > 2000) {
+        const local = toLocalDT(native.toISOString());
+        onChange(local);
+        setPreview(formatDT(local));
+        return;
+      }
+      setParsing(true);
+      try {
+        const res = await parseDateTime(raw);
+        onChange(res.iso.slice(0, 16));
+        setPreview(res.display);
+      } catch {
+        setError(true);
+      } finally {
+        setParsing(false);
+      }
+    }, 600);
+  }, [onChange]);
+
+  return (
+    <div className={styles.nlWrap}>
+      <input
+        className={`loom-field${error ? ` ${styles.nlError}` : ''}`}
+        value={text}
+        onChange={e => handleChange(e.target.value)}
+        placeholder='e.g. "next fri 2pm"'
+      />
+      {parsing && <div className={`${styles.nlPreview} ${styles.nlParsing}`}>Parsing…</div>}
+      {!parsing && preview && <div className={styles.nlPreview}>✓ {preview}</div>}
+    </div>
+  );
+}
 
 const REMINDER_OPTIONS = [
   { label: 'None', value: 0 },
@@ -41,14 +99,16 @@ function toLocalDate(iso: string): string {
 
 interface EventEditorModalProps {
   event?: Event | null;
-  date?: string;        // pre-fill date (YYYY-MM-DD)
+  date?: string;         // pre-fill date (YYYY-MM-DD)
   instanceDate?: string; // for recurring occurrences
+  startISO?: string;     // pre-fill exact start (ISO datetime, from smart scheduler)
+  endISO?: string;       // pre-fill exact end
   timelines: Calendar[];
   onSaved: () => void;
 }
 
-export function EventEditorModal({ event, date, instanceDate, timelines, onSaved }: EventEditorModalProps) {
-  const { close } = useModal();
+export function EventEditorModal({ event, date, instanceDate, startISO, endISO, timelines, onSaved }: EventEditorModalProps) {
+  const { close, openStudyBlock } = useModal();
   const { push: pushUndo } = useUndo();
   const { addNotification } = useNotifications();
 
@@ -59,15 +119,19 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
   const [title, setTitle]           = useState(event?.title ?? '');
   const [allDay, setAllDay]         = useState(event?.is_all_day ?? false);
   const [startVal, setStartVal]     = useState(
-    event ? (event.is_all_day ? toLocalDate(event.start_time) : toLocalDT(event.start_time))
-           : (date ? `${date}T09:00` : toLocalDT(new Date().toISOString()))
+    event    ? (event.is_all_day ? toLocalDate(event.start_time) : toLocalDT(event.start_time))
+    : startISO ? toLocalDT(startISO)
+    : (date  ? `${date}T09:00` : toLocalDT(new Date().toISOString()))
   );
   const [endVal, setEndVal]         = useState(
-    event ? (event.is_all_day ? toLocalDate(event.end_time) : toLocalDT(event.end_time))
-           : (date ? `${date}T10:00` : toLocalDT(new Date(Date.now() + 3_600_000).toISOString()))
+    event  ? (event.is_all_day ? toLocalDate(event.end_time) : toLocalDT(event.end_time))
+    : endISO ? toLocalDT(endISO)
+    : (date  ? `${date}T10:00` : toLocalDT(new Date(Date.now() + 3_600_000).toISOString()))
   );
   const [calendarId, setCalendarId] = useState(event?.calendar_id ?? timelines[0]?.id ?? 0);
   const [reminder, setReminder]     = useState(event?.reminder_minutes ?? 0);
+  const [location, setLocation]     = useState(event?.location ?? '');
+  const [travelTime, setTravelTime] = useState<number>(event?.travel_time_minutes ?? 0);
   const [description, setDescription] = useState(event?.description ?? '');
   const [checklist, setChecklist]   = useState<ChecklistItem[]>(parseChecklist(event?.checklist ?? ''));
 
@@ -83,9 +147,12 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
   const [isOnTaskBoard, setIsOnTaskBoard] = useState(false);
   const [taskId, setTaskId] = useState<number | null>(null);
 
-  // Conflict / double-confirm state (second click required to confirm)
-  const [conflictWarning] = useState('');
-  const [needsConfirm] = useState(false);
+  const [conflictWarning, setConflictWarning] = useState('');
+  const [needsConfirm, setNeedsConfirm] = useState(false);
+
+  // Duration tracking
+  const [actualStart, setActualStart] = useState<string | null>(event?.actual_start ?? null);
+  const [actualEnd,   setActualEnd]   = useState<string | null>(event?.actual_end   ?? null);
 
   // Load task board status for existing events
   useEffect(() => {
@@ -97,6 +164,15 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
   }, [isEdit, event]);
 
   const selectedTimeline = timelines.find(t => t.id === calendarId);
+
+  // ---- Clock-in / Clock-out ----
+  async function handleClock(action: 'in' | 'out') {
+    if (!event?.id) return;
+    const updated = await clockEvent(event.id, action);
+    setActualStart(updated.actual_start ?? null);
+    setActualEnd(updated.actual_end ?? null);
+    onSaved();
+  }
 
   // ---- Checklist helpers ----
   const addChecklistItem = useCallback(() => {
@@ -126,6 +202,8 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
       is_all_day: allDay,
       calendar_id: calendarId,
       reminder_minutes: reminder,
+      location: location || null,
+      travel_time_minutes: travelTime || null,
       description,
       checklist: JSON.stringify(checklist),
       is_recurring: recurring,
@@ -137,24 +215,29 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
       timezone: event?.timezone ?? 'local',
       per_day_times: event?.per_day_times ?? '',
     };
-  }, [title, allDay, startVal, endVal, calendarId, reminder, description, checklist,
-      recurring, recurDays, recurEnd, skipDates, event]);
+  }, [title, allDay, startVal, endVal, calendarId, reminder, location, travelTime,
+      description, checklist, recurring, recurDays, recurEnd, skipDates, event]);
 
   const handleSubmit = useCallback(async () => {
     if (!title.trim()) return;
 
     const payload = buildPayload();
+    let conflicts: Array<{ id: number; title: string }> = [];
+    let createdEvent: Event | null = null;
 
     if (isEdit && event) {
       const prev = event;
-      await updateEvent(event.id, payload);
+      const { conflicts: c } = await updateEvent(event.id, payload);
+      conflicts = c;
       pushUndo({
         label: `Edit "${prev.title}"`,
         undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
         redo: async () => { await updateEvent(event.id, payload); },
       });
     } else {
-      const created = await createEvent(payload);
+      const { event: created, conflicts: c } = await createEvent(payload);
+      conflicts = c;
+      createdEvent = created;
       pushUndo({
         label: `Create "${created.title}"`,
         undo: async () => { await deleteEvent(created.id); },
@@ -162,9 +245,27 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
       });
     }
 
+    if (conflicts.length) {
+      const names = conflicts.map(c => `"${c.title}"`).join(', ');
+      setConflictWarning(`Overlaps with: ${names}`);
+      setNeedsConfirm(true);
+      addNotification({
+        type: 'warning',
+        title: 'Schedule conflict',
+        message: `Overlaps with: ${names}`,
+        dismissible: true,
+      });
+    }
+
     onSaved();
-    close();
-  }, [title, isEdit, event, buildPayload, pushUndo, onSaved, close]);
+
+    const EXAM_KEYWORDS = /\b(exam|test|final|midterm|quiz|assignment|due)\b/i;
+    if (!isEdit && createdEvent && EXAM_KEYWORDS.test(createdEvent.title)) {
+      openStudyBlock(createdEvent, createdEvent.title.replace(EXAM_KEYWORDS, '').trim());
+    } else {
+      close();
+    }
+  }, [title, isEdit, event, buildPayload, pushUndo, onSaved, close, openStudyBlock, addNotification]);
 
   const handleDelete = useCallback(async () => {
     if (!event) return;
@@ -244,21 +345,17 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
         <div className={styles.row3}>
           <div>
             <FieldLabel>Start</FieldLabel>
-            <input
-              className="loom-field"
-              type={allDay ? 'date' : 'datetime-local'}
-              value={startVal}
-              onChange={e => setStartVal(e.target.value)}
-            />
+            {allDay
+              ? <input className="loom-field" type="date" value={startVal} onChange={e => setStartVal(e.target.value)} />
+              : <NLDateInput value={startVal} onChange={setStartVal} />
+            }
           </div>
           <div>
             <FieldLabel>End</FieldLabel>
-            <input
-              className="loom-field"
-              type={allDay ? 'date' : 'datetime-local'}
-              value={endVal}
-              onChange={e => setEndVal(e.target.value)}
-            />
+            {allDay
+              ? <input className="loom-field" type="date" value={endVal} onChange={e => setEndVal(e.target.value)} />
+              : <NLDateInput value={endVal} onChange={setEndVal} />
+            }
           </div>
           <label className={styles.alldayLabel}>
             <div
@@ -300,6 +397,28 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
               </select>
               <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
             </div>
+          </div>
+        </div>
+
+        {/* Location + Travel time */}
+        <div className={styles.locationRow}>
+          <input
+            className={`loom-field ${styles.locationInput}`}
+            placeholder="Location"
+            value={location}
+            onChange={e => setLocation(e.target.value)}
+          />
+          <div className={styles.travelWrap}>
+            <input
+              className={`loom-field ${styles.travelInput}`}
+              type="number"
+              min={0}
+              step={5}
+              placeholder="0"
+              value={travelTime || ''}
+              onChange={e => setTravelTime(Number(e.target.value))}
+            />
+            <span className={styles.travelLabel}>min travel</span>
           </div>
         </div>
 
@@ -389,6 +508,25 @@ export function EventEditorModal({ event, date, instanceDate, timelines, onSaved
           ))}
           <button className={styles.addItem} onClick={addChecklistItem}>+ Add item</button>
         </div>
+
+        {/* Clock-in / Clock-out */}
+        {isEdit && (
+          <div className={styles.clockRow}>
+            {!actualStart ? (
+              <button type="button" className={styles.clockBtn} onClick={() => handleClock('in')}>
+                ▶ Start Tracking
+              </button>
+            ) : !actualEnd ? (
+              <button type="button" className={`${styles.clockBtn} ${styles.clockBtnStop}`} onClick={() => handleClock('out')}>
+                ■ Stop Tracking
+              </button>
+            ) : (
+              <span className={styles.clockDone}>
+                Tracked: {Math.round((new Date(actualEnd).getTime() - new Date(actualStart).getTime()) / 60000)} min
+              </span>
+            )}
+          </div>
+        )}
 
         {conflictWarning && <div className={styles.conflictWarn}>{conflictWarning}</div>}
       </div>

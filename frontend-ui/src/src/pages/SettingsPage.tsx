@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import { exportLogs, clearLogs, backupDatabase, restoreDatabase } from '../api';
+import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview } from '../api';
+import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
+import { lastMonday } from '../lib/eventUtils';
+import { useModal } from '../contexts/ModalContext';
 import { useNotifications } from '../store/notifications';
 import {
   loadKeybinds, saveKeybind, resetKeybinds, formatKeyLabel, KEYBIND_DEFAULTS,
@@ -15,6 +18,7 @@ const ACTION_ORDER: KeybindAction[] = [
 
 export function SettingsPage() {
   const { addNotification } = useNotifications();
+  const { openWeeklyReview } = useModal();
 
   // ---- Appearance ----
   const [theme, setTheme] = useState<'dark' | 'light'>(
@@ -110,6 +114,22 @@ export function SettingsPage() {
     }
   }
 
+  // ---- Weekly Review ----
+  const [reviewLoading, setReviewLoading] = useState(false);
+
+  async function handleWeeklyReview() {
+    setReviewLoading(true);
+    try {
+      const weekStart = lastMonday();
+      const result = await getWeeklyReview(weekStart.toISOString());
+      openWeeklyReview(result.summary, weekStart.toISOString());
+    } catch {
+      addNotification({ type: 'error', title: 'Review failed', message: 'Could not generate weekly review. Is Ollama running?' });
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
   async function handleRestore() {
     const path = window.prompt('Enter backup file path:');
     if (!path?.trim()) return;
@@ -192,6 +212,21 @@ export function SettingsPage() {
           <button className="loom-btn-primary" onClick={handleBackup}>Backup Database</button>
           <button className="loom-btn-ghost" onClick={handleRestore}>Restore Database…</button>
         </div>
+      </section>
+
+      {/* Time Accuracy */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Time Accuracy</h2>
+        <DurationStatsPanel />
+      </section>
+
+      {/* Weekly Review */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Weekly Review</h2>
+        <p className={styles.info}>Generate an AI summary of last week and a preview of the week ahead.</p>
+        <button className="loom-btn-primary" onClick={handleWeeklyReview} disabled={reviewLoading}>
+          {reviewLoading ? 'Generating…' : 'Generate Review'}
+        </button>
       </section>
 
       {/* App Info */}

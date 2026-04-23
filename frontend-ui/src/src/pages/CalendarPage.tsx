@@ -10,6 +10,7 @@ import styles from './CalendarPage.module.css';
 import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/CalendarSidebar';
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
+import { YearView } from '../components/calendar/YearView';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
@@ -22,8 +23,13 @@ import {
   listTemplates,
   analyzeSchedule,
   extractSyllabus,
+  findFreeSlots,
+  listTimeBlockTemplates,
+  deleteTimeBlockTemplate,
+  applyTimeBlockTemplate,
 } from '../api';
-import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate } from '../types';
+import type { FreeSlot } from '../types';
+import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef } from '../types';
 import { useNotifications } from '../store/notifications';
 
 // ---- FullCalendar view name map ----
@@ -38,9 +44,26 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
   const isSpan = ev.is_all_day;
   const checklist = parseChecklist(ev.checklist);
   const doneCount = checklist.filter(c => c.done).length;
+  const isClockedIn = !!ev.actual_start && !ev.actual_end;
   const startStr = info.event.start
     ? info.event.start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '';
+
+  const now = new Date();
+  const start = info.event.start;
+  const thresholdDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+  let chipLabel = '';
+  let isUrgent = false;
+  if (start && start > now) {
+    const diffMs = start.getTime() - now.getTime();
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+    if (diffDays <= thresholdDays) {
+      isUrgent = diffDays <= 1;
+      chipLabel = diffDays < 1
+        ? `⚠ ${Math.ceil(diffMs / 3_600_000)}h`
+        : `⚠ ${Math.ceil(diffDays)}d`;
+    }
+  }
 
   return (
     <div
@@ -66,21 +89,29 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
       {checklist.length > 0 && (
         <span className={styles.pillChk}>{doneCount}/{checklist.length}</span>
       )}
+      {isClockedIn && <span className={styles.clockDot} aria-label="Tracking active" />}
+      {chipLabel && (
+        <span className={`${styles.deadlineChip}${isUrgent ? ` ${styles.deadlineChipUrgent}` : ''}`}>
+          {chipLabel}
+        </span>
+      )}
     </div>
   );
 }
 
 export function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
+  const pendingDateRef = useRef<Date | null>(null);
   const nav = useCalendarNav();
   const { push: pushUndo } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport } = useModal();
+  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
   const [events, setEvents] = useState<Event[]>([]);
   const [timelines, setTimelines] = useState<Calendar[]>([]);
   const [templates, setTemplates] = useState<EventTemplate[]>([]);
+  const [timeBlockTemplates, setTimeBlockTemplates] = useState<TimeBlockTemplate[]>([]);
   const [hiddenTimelineIds, setHiddenTimelineIds] = useState<Set<number>>(new Set());
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
@@ -122,19 +153,19 @@ export function CalendarPage() {
   // ---- Load data ----
   const loadAll = useCallback(async (isFirst = false) => {
     try {
-      const [evs, cals, tpls] = await Promise.all([listEvents(), listCalendars(), listTemplates()]);
+      const [evs, cals, tpls, tbtpls] = await Promise.all([listEvents(), listCalendars(), listTemplates(), listTimeBlockTemplates()]);
       setEvents(evs);
       setTimelines(cals);
       setTemplates(tpls);
+      setTimeBlockTemplates(tbtpls);
       setLastSync(new Date());
       setSyncStatus('ok');
 
       // Wellness analysis (debounced — run after first load)
       if (isFirst) {
-        analyzeSchedule().then(result => {
+        analyzeSchedule(evs.map(e => ({ title: e.title, start_time: e.start_time, end_time: e.end_time }))).then(result => {
           if (result.warnings?.length) {
-            const w = result.warnings[0];
-            setWellness({ date: w.date, message: w.message });
+            setWellness({ date: new Date().toISOString().slice(0, 10), message: result.warnings[0] });
           }
         }).catch(() => {});
       }
@@ -246,35 +277,87 @@ export function CalendarPage() {
     }
   }, [nav.view]);
 
+  // When leaving Year view, apply any pending date navigation
+  useEffect(() => {
+    if (nav.view === 'Year' || !pendingDateRef.current) return;
+    const api = calRef.current?.getApi();
+    if (!api) return;
+    api.gotoDate(pendingDateRef.current);
+    nav.setDateLabel(api.view.title);
+    pendingDateRef.current = null;
+  }, [nav.view]);
+
+  const handleYearDayClick = useCallback((date: Date) => {
+    pendingDateRef.current = date;
+    nav.setView('Day');
+  }, [nav]);
+
+  const handleYearMonthClick = useCallback((date: Date) => {
+    pendingDateRef.current = date;
+    nav.setView('Month');
+  }, [nav]);
+
+  const handleFindFreeSlots = useCallback(async (durationMins: number): Promise<FreeSlot[]> => {
+    const now = new Date();
+    const weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const result = await findFreeSlots({
+      window_start: now.toISOString(),
+      window_end: weekEnd.toISOString(),
+      duration_minutes: durationMins,
+    });
+    return result.slots;
+  }, []);
+
+  const handleScheduleSlot = useCallback((startISO: string, endISO: string) => {
+    openEventEditor(null, undefined, undefined, startISO, endISO);
+  }, [openEventEditor]);
+
   // Wire TopBar sync status
   useEffect(() => {
     // Propagate to Shell's TopBar via context — handled by CalendarNavContext's syncStatus (Phase 3 wiring is enough)
   }, [syncLabel, syncStatus]);
 
   // Ctrl/Cmd + scroll-wheel zoom (cycles dayGridMonth ↔ timeGridWeek ↔ timeGridDay)
+  // Plain scroll on non-time-grid views navigates prev/next period.
   useEffect(() => {
     const el = mainRef.current;
     if (!el) return;
-    const VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'] as const;
-    type V = typeof VIEWS[number];
+    const ZOOM_VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'] as const;
+    type ZV = typeof ZOOM_VIEWS[number];
+    // Views where vertical scroll is used for hours — skip plain-scroll nav there.
+    const TIME_GRID = new Set(['timeGridWeek', 'timeGridDay']);
 
     const handler = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
       if (wheelTimerRef.current) return; // debounce
 
       const api = calRef.current?.getApi();
       if (!api) return;
-      const raw = api.view.type;
-      const idx = VIEWS.indexOf(raw as V);
-      const safeIdx = idx === -1 ? 0 : idx;
-      const nextIdx = e.deltaY < 0
-        ? Math.min(safeIdx + 1, VIEWS.length - 1)  // zoom in → timeGridDay
-        : Math.max(safeIdx - 1, 0);                // zoom out → dayGridMonth
+      const viewType = api.view.type;
 
-      if (nextIdx !== safeIdx) {
-        api.changeView(VIEWS[nextIdx]);
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom: change view granularity
+        e.preventDefault();
+        const idx = ZOOM_VIEWS.indexOf(viewType as ZV);
+        const safeIdx = idx === -1 ? 0 : idx;
+        const nextIdx = e.deltaY < 0
+          ? Math.min(safeIdx + 1, ZOOM_VIEWS.length - 1)
+          : Math.max(safeIdx - 1, 0);
+        if (nextIdx !== safeIdx) {
+          api.changeView(ZOOM_VIEWS[nextIdx]);
+          nav.setDateLabel(api.view.title);
+        }
+      } else if (!TIME_GRID.has(viewType)) {
+        // Plain scroll on month/agenda/list: navigate prev/next period
+        e.preventDefault();
+        if (e.deltaY > 0) {
+          api.next();
+        } else {
+          api.prev();
+        }
         nav.setDateLabel(api.view.title);
+      } else {
+        // Time-grid views: let the browser handle native hour scrolling
+        return;
       }
 
       wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 150);
@@ -502,6 +585,63 @@ export function CalendarPage() {
     openEventEditor(null, undefined, undefined);
   }, [openEventEditor]);
 
+  // ---- Time Block Template handlers ----
+
+  const handleNewTimeBlockTemplate = useCallback(() => {
+    openTimeBlockTemplate();
+  }, [openTimeBlockTemplate]);
+
+  const handleSaveWeekAsTemplate = useCallback(() => {
+    const api = calRef.current?.getApi();
+    if (!api) return;
+    const viewStart = api.view.currentStart;
+    const monday = new Date(viewStart);
+    monday.setDate(viewStart.getDate() - ((viewStart.getDay() + 6) % 7));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 7);
+
+    const prefillBlocks: TimeBlockDef[] = events
+      .filter(e => {
+        const d = new Date(e.start_time);
+        return d >= monday && d < sunday && !e.is_all_day;
+      })
+      .map(e => {
+        const start = new Date(e.start_time);
+        const end   = new Date(e.end_time);
+        const dow   = ((start.getDay() + 6) % 7) + 1; // 1=Mon…7=Sun
+        return {
+          title:      e.title,
+          day_of_week: dow,
+          start_time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
+          end_time:   `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+          calendar_id: e.calendar_id,
+        };
+      });
+
+    openTimeBlockTemplate(prefillBlocks);
+  }, [events, calRef, openTimeBlockTemplate]);
+
+  const handleApplyTimeBlockTemplate = useCallback(async (tplId: number, weekMondayDate: string) => {
+    try {
+      const { applied_count, events: newEvents } = await applyTimeBlockTemplate(tplId, weekMondayDate);
+      const ids = newEvents.map(e => e.id);
+      pushUndo({
+        label: `Apply time block template (${applied_count} block${applied_count !== 1 ? 's' : ''})`,
+        undo: async () => { await Promise.all(ids.map(id => deleteEvent(id))); await loadAll(); },
+        redo: async () => { await applyTimeBlockTemplate(tplId, weekMondayDate); await loadAll(); },
+      });
+      await loadAll();
+      addNotification({ type: 'success', title: `${applied_count} block${applied_count !== 1 ? 's' : ''} added`, autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Apply failed', message: 'Could not stamp template onto week.', autoRemoveMs: 4000 });
+    }
+  }, [pushUndo, loadAll, addNotification]);
+
+  const handleDeleteTimeBlockTemplate = useCallback(async (id: number) => {
+    await deleteTimeBlockTemplate(id);
+    await loadAll();
+  }, [loadAll]);
+
   // ---- Keyboard shortcuts ----
   useShortcuts(useMemo(() => [
     { key: 'n', handler: () => openEventEditor(null) },
@@ -519,6 +659,8 @@ export function CalendarPage() {
       <CalendarSidebar
         open={sidebarOpen}
         onToggle={toggleCalendarSidebar}
+        onFindFreeSlots={handleFindFreeSlots}
+        onScheduleSlot={handleScheduleSlot}
         timelines={timelines}
         templates={templates}
         hiddenTimelineIds={hiddenTimelineIds}
@@ -540,9 +682,24 @@ export function CalendarPage() {
         onRenameTimeline={handleRenameTimeline}
         onDeleteTimeline={handleDeleteTimeline}
         onApplyTemplate={handleApplyTemplate}
+        timeBlockTemplates={timeBlockTemplates}
+        onNewTimeBlockTemplate={handleNewTimeBlockTemplate}
+        onApplyTimeBlockTemplate={handleApplyTimeBlockTemplate}
+        onDeleteTimeBlockTemplate={handleDeleteTimeBlockTemplate}
       />
 
       <div ref={mainRef} className={styles.main}>
+        {nav.view === 'Year' && (
+          <YearView events={events} onDayClick={handleYearDayClick} onMonthClick={handleYearMonthClick} />
+        )}
+        <div style={{ display: nav.view === 'Year' ? 'none' : undefined, height: '100%' }}>
+        {nav.view === 'Week' && (
+          <div className={styles.weekToolbar}>
+            <button className="loom-btn-ghost" onClick={handleSaveWeekAsTemplate}>
+              Save Week as Template
+            </button>
+          </div>
+        )}
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
@@ -573,6 +730,7 @@ export function CalendarPage() {
         {peek && (
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />
         )}
+        </div>
         {wellness && (
           <WellnessToast date={wellness.date} message={wellness.message} />
         )}

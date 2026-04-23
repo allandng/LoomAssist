@@ -9,8 +9,11 @@ import { AvailabilityModal } from './AvailabilityModal';
 import { ICSImportModal } from './ICSImportModal';
 import { SyllabusModal } from './SyllabusModal';
 import { CounterProposalModal } from './CounterProposalModal';
+import { WeeklyReviewModal } from './WeeklyReviewModal';
+import { StudyBlockModal } from './StudyBlockModal';
+import { TimeBlockTemplateModal } from './TimeBlockTemplateModal';
 import { listCalendars } from '../../api';
-import type { Calendar } from '../../types';
+import type { Calendar, Event, TimeBlockDef } from '../../types';
 
 export function ModalRoot({ onSaved }: { onSaved: () => void }) {
   const { modal } = useModal();
@@ -29,6 +32,8 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           event={(modal.props.event as Parameters<typeof EventEditorModal>[0]['event']) ?? null}
           date={modal.props.date as string | undefined}
           instanceDate={modal.props.instanceDate as string | undefined}
+          startISO={modal.props.startISO as string | undefined}
+          endISO={modal.props.endISO as string | undefined}
           timelines={timelines}
           onSaved={onSaved}
         />
@@ -41,6 +46,29 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
       return <SyllabusModal onSaved={onSaved} />;
     case 'availability-response':
       return <CounterProposalModal token={modal.props.token as string} onSaved={onSaved} />;
+    case 'weekly-review':
+      return (
+        <WeeklyReviewModal
+          summary={modal.props.summary as string}
+          weekStart={modal.props.weekStart as string}
+        />
+      );
+    case 'study-block':
+      return (
+        <StudyBlockModal
+          deadlineEvent={modal.props.deadlineEvent as Event}
+          subject={modal.props.subject as string}
+          onSaved={onSaved}
+        />
+      );
+    case 'time-block-template':
+      return (
+        <TimeBlockTemplateModal
+          prefillBlocks={(modal.props.prefillBlocks as TimeBlockDef[]) ?? []}
+          timelines={timelines}
+          onSaved={onSaved}
+        />
+      );
     default:
       return null;
   }

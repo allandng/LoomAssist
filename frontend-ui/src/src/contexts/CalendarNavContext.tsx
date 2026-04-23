@@ -4,13 +4,14 @@
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
 
-type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda';
+type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
 
 const FC_VIEW: Record<CalendarView, string> = {
   Month:  'dayGridMonth',
   Week:   'timeGridWeek',
   Day:    'timeGridDay',
   Agenda: 'listWeek',
+  Year:   '',
 };
 
 interface CalendarNavContextValue {
@@ -43,7 +44,8 @@ export function CalendarNavProvider({ children }: { children: ReactNode }) {
 
   const changeView = useCallback((v: CalendarView) => {
     setView(v);
-    actionsRef.current?.changeView(FC_VIEW[v]);
+    const fc = FC_VIEW[v];
+    if (fc) actionsRef.current?.changeView(fc);
   }, []);
 
   const value = useMemo<CalendarNavContextValue>(() => ({

@@ -8,6 +8,13 @@ import type {
   LogEntry, CrashFlag,
   ImportResult, SyllabusEvent,
   WellnessAnalysis,
+  FreeSlot,
+  DurationStat,
+  WeeklyReviewResult,
+  StudyBlockPreview,
+  StudyBlockRequest,
+  TimeBlockTemplate,
+  TimeBlockDef,
 } from './types';
 
 const BASE = 'http://localhost:8000';
@@ -25,13 +32,20 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 // ---- Events ----
 
+export interface ConflictInfo { id: number; title: string }
+
 export const listEvents = (): Promise<Event[]> =>
   req('GET', '/events/');
 
-export const createEvent = (payload: EventCreate): Promise<Event> =>
+export const createEvent = (
+  payload: EventCreate,
+): Promise<{ event: Event; conflicts: ConflictInfo[] }> =>
   req('POST', '/events/', payload);
 
-export const updateEvent = (id: number, payload: EventUpdate): Promise<Event> =>
+export const updateEvent = (
+  id: number,
+  payload: EventUpdate,
+): Promise<{ event: Event; conflicts: ConflictInfo[] }> =>
   req('PUT', `/events/${id}`, payload);
 
 export const deleteEvent = (id: number): Promise<void> =>
@@ -39,6 +53,15 @@ export const deleteEvent = (id: number): Promise<void> =>
 
 export const skipEventDate = (id: number, payload: SkipDatePayload): Promise<Event> =>
   req('POST', `/events/${id}/skip-date`, payload);
+
+export const clockEvent = (id: number, action: 'in' | 'out'): Promise<Event> =>
+  req('PATCH', `/events/${id}/clock`, { action });
+
+export const getDurationStats = (): Promise<{ entries: DurationStat[] }> =>
+  req('GET', '/stats/duration');
+
+export const getWeeklyReview = (weekStart: string): Promise<WeeklyReviewResult> =>
+  req('POST', '/ai/weekly-review', { week_start: weekStart });
 
 // ---- Calendars (Timelines) ----
 
@@ -78,6 +101,27 @@ export const createTemplate = (payload: TemplateCreate): Promise<EventTemplate> 
 
 export const deleteTemplate = (id: number): Promise<void> =>
   req('DELETE', `/templates/${id}`);
+
+// ---- Time Block Templates ----
+
+export const listTimeBlockTemplates = (): Promise<TimeBlockTemplate[]> =>
+  req('GET', '/templates/time-blocks');
+
+export const createTimeBlockTemplate = (
+  name: string,
+  description: string,
+  blocks: TimeBlockDef[],
+): Promise<TimeBlockTemplate> =>
+  req('POST', '/templates/time-blocks', { name, description, blocks });
+
+export const deleteTimeBlockTemplate = (id: number): Promise<void> =>
+  req('DELETE', `/templates/time-blocks/${id}`);
+
+export const applyTimeBlockTemplate = (
+  tplId: number,
+  weekMondayDate: string,
+): Promise<{ applied_count: number; events: Event[] }> =>
+  req('POST', `/templates/time-blocks/${tplId}/apply`, { week_monday_date: weekMondayDate });
 
 // ---- Availability ----
 
@@ -138,6 +182,24 @@ export const saveApprovedEvents = (
 ): Promise<{ created: number; event_ids: number[] }> =>
   req('POST', '/documents/save-approved-events/', { events });
 
+// ---- Smart Scheduling ----
+
+export const findFreeSlots = (payload: {
+  window_start: string;
+  window_end: string;
+  duration_minutes?: number;
+  working_hours_start?: number;
+  working_hours_end?: number;
+}): Promise<{ slots: FreeSlot[]; duration_minutes: number }> =>
+  req('POST', '/schedule/find-free', payload);
+
+// ---- Natural Language Datetime Parser ----
+
+export const parseDateTime = (
+  input: string,
+): Promise<{ iso: string; display: string }> =>
+  req('POST', '/parse/datetime', { input });
+
 // ---- AI / Voice ----
 
 export async function transcribeAudio(blob: Blob): Promise<{ text: string; event?: Partial<EventCreate> }> {
@@ -155,8 +217,10 @@ export const parseIntent = (
 
 // ---- Analytics ----
 
-export const analyzeSchedule = (): Promise<WellnessAnalysis> =>
-  req('POST', '/schedule/analyze', {});
+export const analyzeSchedule = (
+  events: Array<{ title: string; start_time: string; end_time: string }>
+): Promise<WellnessAnalysis> =>
+  req('POST', '/schedule/analyze', { events });
 
 // ---- Logging ----
 
@@ -179,3 +243,11 @@ export const backupDatabase = (): Promise<{ path: string }> =>
 
 export const restoreDatabase = (backupPath: string): Promise<void> =>
   req('POST', '/admin/restore', { path: backupPath });
+
+// ---- Study Block Auto-Generator ----
+
+export const getStudyBlockPreview = (body: StudyBlockRequest): Promise<StudyBlockPreview[]> =>
+  req('POST', '/study/generate-preview', body);
+
+export const confirmStudyBlocks = (blocks: StudyBlockPreview[]): Promise<{ created_count: number }> =>
+  req('POST', '/study/confirm-blocks', blocks);

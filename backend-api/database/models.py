@@ -38,6 +38,14 @@ class EventBase(SQLModel):
     # L3: Task checklist — JSON string [{"text":"...", "done":false}, ...]
     checklist: Optional[str] = Field(default=None)
 
+    # Duration analytics — actual clock-in/out timestamps
+    actual_start: Optional[str] = Field(default=None)
+    actual_end:   Optional[str] = Field(default=None)
+
+    # Location and travel time
+    location: Optional[str] = Field(default=None)
+    travel_time_minutes: Optional[int] = Field(default=None)
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")
@@ -138,3 +146,21 @@ class AvailabilityRequestRead(SQLModel):
     receiver_name: Optional[str]
     created_at: str
     expires_at: str
+
+# --- TIME BLOCK TEMPLATE MODELS ---
+class TimeBlockTemplate(SQLModel, table=True):
+    __tablename__ = "timeblockstemplate"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: str = Field(default="")
+    created_at: str = Field(default="")
+    blocks_json: str = Field(default="[]")
+    # blocks_json shape: [{"title": str, "day_of_week": int (1=Mon…7=Sun),
+    #                       "start_time": "HH:MM", "end_time": "HH:MM", "calendar_id": int}]
+
+class TimeBlockTemplateRead(SQLModel):
+    id: int
+    name: str
+    description: str
+    created_at: str
+    blocks_json: str

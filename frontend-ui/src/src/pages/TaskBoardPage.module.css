@@ -251,3 +251,7 @@
   border-radius: 2px;
   transition: width 300ms;
 }
+
+.heatmapWrap {
+  padding: 4px 10px 8px;
+}

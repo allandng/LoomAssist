@@ -24,7 +24,8 @@ import { useModal } from './contexts/ModalContext';
 import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { NotifPanel } from './components/NotifPanel';
-import { getCrashFlag, exportLogs } from './api';
+import { getCrashFlag, exportLogs, getWeeklyReview } from './api';
+import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 type Destination = 'calendar' | 'tasks' | 'focus' | 'settings';
 
@@ -105,7 +106,35 @@ function Shell() {
     navigate(DEST_TO_PATH[d]);
   }, [navigate]);
 
-  const { openEventEditor } = useModal();
+  const { openEventEditor, openWeeklyReview } = useModal();
+
+  // Monday auto-trigger: show weekly review notification once per week
+  useEffect(() => {
+    const now = new Date();
+    if (now.getDay() !== 1) return; // only on Mondays
+
+    const isoWeek = getISOWeek(now);
+    const storageKey = 'loom_last_review_week';
+    if (localStorage.getItem(storageKey) === isoWeek) return; // already shown this week
+
+    const reviewWeekStart = lastMonday(now); // the Monday 7 days ago
+    getWeeklyReview(reviewWeekStart.toISOString())
+      .then(result => {
+        addNotification({
+          type: 'info',
+          title: 'Weekly Review',
+          message: result.summary.length > 100
+            ? result.summary.slice(0, 97) + '…'
+            : result.summary,
+          actionable: true,
+          actionLabel: 'Open full review',
+          actionFn: () => openWeeklyReview(result.summary, reviewWeekStart.toISOString()),
+        });
+        localStorage.setItem(storageKey, isoWeek);
+      })
+      .catch(() => {}); // fail silently — not critical
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useShortcuts(useMemo(() => [
     { key: keybinds.sidebar_toggle.key, ctrl: keybinds.sidebar_toggle.ctrl, meta: keybinds.sidebar_toggle.meta, shift: keybinds.sidebar_toggle.shift, handler: () => toggleSidebar() },
     { key: keybinds.focus_mode.key,     ctrl: keybinds.focus_mode.ctrl,     meta: keybinds.focus_mode.meta,     shift: keybinds.focus_mode.shift,     handler: () => goTo('focus') },

@@ -5,9 +5,9 @@ import { Icon, Icons } from './Icon';
 import { Kbd } from './Kbd';
 
 type TopBarKind = 'calendar' | 'tasks' | 'focus' | 'settings';
-type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda';
+type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
 
-const VIEWS: CalendarView[] = ['Month', 'Week', 'Day', 'Agenda'];
+const VIEWS: CalendarView[] = ['Month', 'Week', 'Day', 'Year', 'Agenda'];
 const PAGE_TITLES: Record<TopBarKind, string> = {
   calendar: 'Calendar',
   tasks:    'Task Board',

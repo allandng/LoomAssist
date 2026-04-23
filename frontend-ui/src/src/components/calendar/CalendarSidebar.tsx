@@ -3,7 +3,7 @@ import styles from './CalendarSidebar.module.css';
 import { Icon, Icons } from '../shared/Icon';
 import { Kbd } from '../shared/Kbd';
 import { SectionLabel } from '../shared/SectionLabel';
-import type { Calendar, EventTemplate, SyllabusEvent } from '../../types';
+import type { Calendar, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
 
 export interface ScanEventEdit {
   title: string;
@@ -22,6 +22,8 @@ const FILTERS = [
 interface CalendarSidebarProps {
   open?: boolean;
   onToggle?: () => void;
+  onFindFreeSlots: (durationMins: number) => Promise<FreeSlot[]>;
+  onScheduleSlot: (startISO: string, endISO: string) => void;
   timelines: Calendar[];
   templates: EventTemplate[];
   hiddenTimelineIds: Set<number>;
@@ -43,6 +45,10 @@ interface CalendarSidebarProps {
   onRenameTimeline: (id: number, name: string) => void;
   onDeleteTimeline: (id: number) => void;
   onApplyTemplate: (t: EventTemplate) => void;
+  timeBlockTemplates: TimeBlockTemplate[];
+  onNewTimeBlockTemplate: () => void;
+  onApplyTimeBlockTemplate: (tplId: number, weekMondayDate: string) => void;
+  onDeleteTimeBlockTemplate: (id: number) => void;
 }
 
 // ── Scan event card ──────────────────────────────────────────────
@@ -124,6 +130,8 @@ function ScanEventCard({
 export function CalendarSidebar({
   open = true,
   onToggle,
+  onFindFreeSlots,
+  onScheduleSlot,
   timelines,
   templates,
   hiddenTimelineIds,
@@ -145,12 +153,42 @@ export function CalendarSidebar({
   onRenameTimeline,
   onDeleteTimeline,
   onApplyTemplate,
+  timeBlockTemplates,
+  onNewTimeBlockTemplate,
+  onApplyTimeBlockTemplate,
+  onDeleteTimeBlockTemplate,
 }: CalendarSidebarProps) {
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const [renamingId,  setRenamingId]  = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameRef  = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Time Block Template apply week-picker state
+  const [applyWeekFor,   setApplyWeekFor]   = useState<number | null>(null);
+  const [applyWeekValue, setApplyWeekValue] = useState('');
+
+  const [filtersOpen, setFiltersOpen] = useState(true);
+
+  // Smart Scheduler state
+  const [schedulerOpen,     setSchedulerOpen]     = useState(false);
+  const [schedulerDuration, setSchedulerDuration] = useState(60);
+  const [schedulerLoading,  setSchedulerLoading]  = useState(false);
+  const [schedulerSlots,    setSchedulerSlots]    = useState<FreeSlot[]>([]);
+  const [schedulerSearched, setSchedulerSearched] = useState(false);
+
+  const handleFindSlots = useCallback(async () => {
+    setSchedulerLoading(true);
+    setSchedulerSlots([]);
+    setSchedulerSearched(false);
+    try {
+      const slots = await onFindFreeSlots(schedulerDuration);
+      setSchedulerSlots(slots);
+    } finally {
+      setSchedulerLoading(false);
+      setSchedulerSearched(true);
+    }
+  }, [onFindFreeSlots, schedulerDuration]);
 
   const startRename = useCallback((t: Calendar) => {
     setRenamingId(t.id);
@@ -296,23 +334,35 @@ export function CalendarSidebar({
           </div>
 
           {/* Filters */}
-          <SectionLabel>Filters</SectionLabel>
-          <div className={styles.filterList}>
-            {FILTERS.map(f => {
-              const active = activeFilters.has(f.id);
-              return (
-                <button
-                  key={f.id}
-                  className={`${styles.filterChip} ${active ? styles.filterChipActive : ''}`}
-                  onClick={() => onToggleFilter(f.id)}
-                >
-                  <Icon d={f.icon} size={12} />
-                  <span>{f.label}</span>
-                  <span className={styles.filterCount}>{filterCounts[f.id] ?? 0}</span>
-                </button>
-              );
-            })}
-          </div>
+          <SectionLabel right={
+            <button
+              className={styles.miniPlus}
+              onClick={() => setFiltersOpen(o => !o)}
+              title={filtersOpen ? 'Collapse' : 'Expand'}
+            >
+              <Icon d={Icons.chevronDown} size={11} style={{ transform: filtersOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms' }} />
+            </button>
+          }>
+            Filters
+          </SectionLabel>
+          {filtersOpen && (
+            <div className={styles.filterList}>
+              {FILTERS.map(f => {
+                const active = activeFilters.has(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    className={`${styles.filterChip} ${active ? styles.filterChipActive : ''}`}
+                    onClick={() => onToggleFilter(f.id)}
+                  >
+                    <Icon d={f.icon} size={12} />
+                    <span>{f.label}</span>
+                    <span className={styles.filterCount}>{filterCounts[f.id] ?? 0}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Templates */}
           {templates.length > 0 && (
@@ -331,6 +381,134 @@ export function CalendarSidebar({
                 ))}
               </div>
             </>
+          )}
+
+          {/* Time Block Templates */}
+          <SectionLabel right={
+            <button className={styles.miniPlus} onClick={onNewTimeBlockTemplate} title="New time block template">+</button>
+          }>
+            Time Block Templates
+          </SectionLabel>
+          {timeBlockTemplates.length > 0 && (
+            <div className={styles.tbtList}>
+              {timeBlockTemplates.map(t => (
+                <div key={t.id} className={styles.tbtRow}>
+                  <span className={styles.tbtName}>{t.name}</span>
+                  <div className={styles.tbtActions}>
+                    {applyWeekFor === t.id ? (
+                      <>
+                        <input
+                          type="week"
+                          className={styles.weekPicker}
+                          value={applyWeekValue}
+                          onChange={e => setApplyWeekValue(e.target.value)}
+                        />
+                        <button
+                          className={styles.tbtApplyConfirm}
+                          disabled={!applyWeekValue}
+                          onClick={() => {
+                            if (!applyWeekValue) return;
+                            const [yearStr, weekStr] = applyWeekValue.split('-W');
+                            const year = Number(yearStr);
+                            const week = Number(weekStr);
+                            // ISO 8601: Jan 4 is always in week 1
+                            const jan4 = new Date(year, 0, 4);
+                            const dayOfWeek = jan4.getDay() || 7;
+                            const monday = new Date(jan4);
+                            monday.setDate(jan4.getDate() - (dayOfWeek - 1) + (week - 1) * 7);
+                            const mondayISO = monday.toISOString().slice(0, 10);
+                            onApplyTimeBlockTemplate(t.id, mondayISO);
+                            setApplyWeekFor(null);
+                            setApplyWeekValue('');
+                          }}
+                        >
+                          Apply
+                        </button>
+                        <button
+                          className={styles.tbtCancel}
+                          onClick={() => { setApplyWeekFor(null); setApplyWeekValue(''); }}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className={styles.tbtApplyBtn}
+                        onClick={() => setApplyWeekFor(t.id)}
+                        title="Apply to week"
+                      >
+                        Apply ▶
+                      </button>
+                    )}
+                    <button
+                      className={styles.tbtDeleteBtn}
+                      onClick={() => onDeleteTimeBlockTemplate(t.id)}
+                      title="Delete template"
+                    >
+                      🗑
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Smart Scheduler */}
+          <SectionLabel right={
+            <button
+              className={styles.miniPlus}
+              onClick={() => setSchedulerOpen(o => !o)}
+              title={schedulerOpen ? 'Collapse' : 'Expand'}
+            >
+              <Icon d={Icons.chevronDown} size={11} style={{ transform: schedulerOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms' }} />
+            </button>
+          }>
+            Find Free Time
+          </SectionLabel>
+
+          {schedulerOpen && (
+            <div className={styles.schedulerPanel}>
+              <div className={styles.schedulerRow}>
+                <select
+                  className={styles.schedulerSelect}
+                  value={schedulerDuration}
+                  onChange={e => setSchedulerDuration(Number(e.target.value))}
+                >
+                  <option value={30}>30 min</option>
+                  <option value={60}>1 hour</option>
+                  <option value={90}>90 min</option>
+                  <option value={120}>2 hours</option>
+                </select>
+                <button
+                  className={styles.schedulerFindBtn}
+                  onClick={handleFindSlots}
+                  disabled={schedulerLoading}
+                >
+                  {schedulerLoading ? '…' : 'Search'}
+                </button>
+              </div>
+
+              {schedulerSlots.map((slot, i) => {
+                const s = new Date(slot.start);
+                const e = new Date(slot.end);
+                const dateStr = s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+                const timeStr = `${s.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+                return (
+                  <button
+                    key={i}
+                    className={styles.schedulerSlot}
+                    onClick={() => onScheduleSlot(slot.start, slot.end)}
+                  >
+                    <span className={styles.schedulerSlotDate}>{dateStr}</span>
+                    <span className={styles.schedulerSlotTime}>{timeStr}</span>
+                  </button>
+                );
+              })}
+
+              {schedulerSearched && !schedulerLoading && schedulerSlots.length === 0 && (
+                <p className={styles.schedulerEmpty}>No free slots found this week.</p>
+              )}
+            </div>
           )}
         </div>
       )}

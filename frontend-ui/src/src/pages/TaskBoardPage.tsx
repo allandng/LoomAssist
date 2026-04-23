@@ -4,6 +4,7 @@ import { Icon, Icons } from '../components/shared/Icon';
 import { TLDot } from '../components/shared/TLDot';
 import { SectionLabel } from '../components/shared/SectionLabel';
 import { listTasks, listCalendars, listEvents, updateTask, deleteTask } from '../api';
+import { DensityHeatmap } from '../components/shared/DensityHeatmap';
 import type { Task, Calendar, Event } from '../types';
 import { parseChecklist } from '../lib/eventUtils';
 
@@ -190,6 +191,11 @@ export function TaskBoardPage() {
                 <span className={styles.showCount}>{filterCounts[f]}</span>
               </button>
             ))}
+          </div>
+
+          <SectionLabel>Activity</SectionLabel>
+          <div className={styles.heatmapWrap}>
+            <DensityHeatmap events={events} />
           </div>
         </div>
       </div>

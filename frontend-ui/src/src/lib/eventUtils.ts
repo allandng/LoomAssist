@@ -192,3 +192,23 @@ export function relativeTime(since: Date): string {
   const hrs = Math.floor(mins / 60);
   return `${hrs}h ago`;
 }
+
+/** ISO week string "YYYY-Www" for a given date — used to deduplicate the Monday review trigger. */
+export function getISOWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/** Return the most recent Monday at midnight local time. */
+export function lastMonday(from: Date = new Date()): Date {
+  const d = new Date(from);
+  const dow = d.getDay(); // 0=Sun, 1=Mon, …
+  // days since last Monday (if today is Mon, go back 7 to get the *previous* Mon)
+  const daysBack = dow === 1 ? 7 : (dow + 6) % 7;
+  d.setDate(d.getDate() - daysBack);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}

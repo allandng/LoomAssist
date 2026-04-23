@@ -55,17 +55,9 @@
 }
 
 :global(.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number) {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-:global(.fc .fc-daygrid-day-top) {
-  flex-direction: row;
-}
-
-:global(.fc-daygrid-day.fc-day-today .fc-daygrid-day-number) {
   background: var(--accent);
   color: white;
+  font-weight: 700;
   border-radius: 50%;
   width: 22px;
   height: 22px;
@@ -73,6 +65,10 @@
   place-items: center;
   padding: 0;
   margin: 4px;
+}
+
+:global(.fc .fc-daygrid-day-top) {
+  flex-direction: row;
 }
 
 :global(.fc .fc-timegrid-slot-label-cushion) {
@@ -146,4 +142,52 @@
   border-radius: 3px;
   font-family: var(--font-mono);
   flex-shrink: 0;
+}
+
+.deadlineChip {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  background: #f59e0b;
+  color: #000;
+  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
+}
+
+.deadlineChipUrgent {
+  background: #ef4444;
+  color: #fff;
+  animation: chipPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes chipPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+.clockDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-left: 4px;
+  flex-shrink: 0;
+  animation: clockPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes clockPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+
+.weekToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 6px 12px 2px;
+  gap: 8px;
 }

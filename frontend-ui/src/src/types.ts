@@ -25,6 +25,10 @@ export interface Event {
   skipped_dates: string;    // comma-sep YYYY-MM-DD exceptions
   per_day_times: string;    // JSON {"1":{"start":"09:00","end":"17:00"}, ...}
   checklist: string;        // JSON [{"text":"...","done":false}, ...]
+  actual_start?: string | null;
+  actual_end?:   string | null;
+  location?: string | null;
+  travel_time_minutes?: number | null;
 }
 
 export interface EventTemplate {
@@ -47,6 +51,39 @@ export interface Task {
   status: 'backlog' | 'doing' | 'done';
   priority: 'high' | 'med' | 'low';
   due_date: string;   // ISO date, nullable
+}
+
+export interface DurationStat {
+  id: number;
+  title: string;
+  calendar_id: number;
+  planned_minutes: number;
+  actual_minutes: number;
+  delta_minutes: number;
+}
+
+export interface WeeklyReviewResult {
+  summary: string;
+  past_count: number;
+  upcoming_count: number;
+}
+
+export interface StudyBlockPreview {
+  title: string;
+  start_time: string;
+  end_time: string;
+  description: string;
+  calendar_id: number;
+}
+
+export interface StudyBlockRequest {
+  subject: string;
+  deadline_date: string;
+  calendar_id: number;
+  num_sessions?: number;
+  session_duration_minutes?: number;
+  preferred_hour?: number;
+  skip_weekends?: boolean;
 }
 
 export interface AvailabilityRequest {
@@ -102,7 +139,7 @@ export interface PerDayTime {
 }
 
 export interface WellnessAnalysis {
-  warnings: Array<{ date: string; message: string }>;
+  warnings: string[];
 }
 
 export interface LogEntry {
@@ -123,10 +160,31 @@ export interface ImportResult {
   event_ids: number[];
 }
 
+export interface FreeSlot {
+  start: string; // ISO datetime
+  end: string;   // ISO datetime
+}
+
 export interface SyllabusEvent {
   title: string;
   date: string;      // YYYY-MM-DD
   start_time?: string;
   end_time?: string;
   calendar_id?: number;
+}
+
+export interface TimeBlockDef {
+  title: string;
+  day_of_week: number;  // 1=Mon … 7=Sun
+  start_time: string;   // "HH:MM"
+  end_time: string;
+  calendar_id: number;
+}
+
+export interface TimeBlockTemplate {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+  blocks_json: string;  // JSON string — parse to TimeBlockDef[]
 }

@@ -234,6 +234,27 @@
   padding: 0;
 }
 
+/* Natural language date input */
+.nlWrap {
+  position: relative;
+}
+
+.nlPreview {
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 3px;
+  min-height: 1.3em;
+}
+
+.nlParsing {
+  opacity: 0.5;
+  color: var(--text-muted);
+}
+
+.nlError {
+  border-color: var(--error) !important;
+}
+
 /* Conflict warning */
 .conflictWarn {
   padding: 8px 12px;
@@ -271,4 +292,72 @@
 .deleteBtn:hover {
   background: rgba(239,68,68,0.1);
   border-color: var(--error);
+}
+
+/* Duration tracking */
+.clockRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clockBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.clockBtn:hover {
+  background: rgba(99,102,241,0.1);
+}
+
+.clockBtnStop {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+.clockBtnStop:hover {
+  background: rgba(239,68,68,0.1);
+}
+
+.clockDone {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.locationRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.locationInput {
+  flex: 1;
+}
+
+.travelWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.travelInput {
+  width: 64px;
+  text-align: right;
+}
+
+.travelLabel {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
