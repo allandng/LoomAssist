@@ -201,10 +201,10 @@ function _updateBadge(count) {
   }
 }
 
-function _positionPanel(panel, bellBtn) {
-  const rect = bellBtn.getBoundingClientRect();
-  panel.style.top  = `${rect.bottom + 8}px`;
-  panel.style.right = `${window.innerWidth - rect.right}px`;
+function _positionPanel(panel, _bellBtn) {
+  // v2.0: anchor below the 56px top bar + 8px gap at the right edge
+  panel.style.top   = '64px';
+  panel.style.right = '16px';
 }
 
 function _openPanel(panel, bellBtn) {
