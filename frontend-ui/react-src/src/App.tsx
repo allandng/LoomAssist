@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -22,6 +22,8 @@ import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavConte
 import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { NotifPanel } from './components/NotifPanel';
+import { getCrashFlag, exportLogs } from './api';
+import { logger } from './lib/logger';
 
 type Destination = 'calendar' | 'tasks' | 'focus' | 'settings';
 
@@ -41,12 +43,42 @@ function Shell() {
   const navigate   = useNavigate();
   const location   = useLocation();
   const nav        = useCalendarNav();
-  const { unreadCount } = useNotifications();
+  const { unreadCount, addNotification } = useNotifications();
 
   const dest: Destination = PATH_TO_DEST[location.pathname] ?? 'calendar';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [bellOpen, setBellOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+
+  // Crash recovery on boot
+  useEffect(() => {
+    const crashHandler = () => {
+      addNotification({
+        type: 'error',
+        title: 'LoomAssist crashed last session',
+        message: 'Click to export logs for debugging.',
+        actionable: true,
+        actionLabel: 'Export logs',
+        actionFn: async () => {
+          const text = await exportLogs();
+          const blob = new Blob([text], { type: 'text/plain' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `loom-crash-${Date.now()}.log`;
+          a.click();
+        },
+      });
+    };
+    window.__loomCrashHandler = crashHandler;
+
+    if (localStorage.getItem('loom_crash_reports_enabled') !== 'false') {
+      getCrashFlag().then(flag => {
+        if (flag.crashed) crashHandler();
+      }).catch(() => {});
+    }
+
+    return () => { delete window.__loomCrashHandler; };
+  }, [addNotification]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
