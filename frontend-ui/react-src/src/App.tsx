@@ -16,22 +16,18 @@ import { TaskBoardPage, TaskBoardSidebarContent } from './pages/TaskBoardPage';
 import { FocusPage, FocusSidebarContent } from './pages/FocusPage';
 import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
 import { useShortcuts } from './hooks/useShortcuts';
+import { UndoProvider } from './contexts/UndoContext';
+import { ModalProvider } from './contexts/ModalContext';
+import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavContext';
+import { NotificationsProvider, useNotifications } from './store/notifications';
 
 type Destination = 'calendar' | 'tasks' | 'focus' | 'settings';
-type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda';
 
 const DEST_TO_PATH: Record<Destination, string> = {
-  calendar: '/calendar',
-  tasks:    '/tasks',
-  focus:    '/focus',
-  settings: '/settings',
+  calendar: '/calendar', tasks: '/tasks', focus: '/focus', settings: '/settings',
 };
-
 const PATH_TO_DEST: Record<string, Destination> = {
-  '/calendar': 'calendar',
-  '/tasks':    'tasks',
-  '/focus':    'focus',
-  '/settings': 'settings',
+  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/settings': 'settings',
 };
 
 function readSidebarCollapsed(): boolean {
@@ -40,13 +36,13 @@ function readSidebarCollapsed(): boolean {
 }
 
 function Shell() {
-  const navigate = useNavigate();
-  const location = useLocation();
+  const navigate   = useNavigate();
+  const location   = useLocation();
+  const nav        = useCalendarNav();
+  const { unreadCount } = useNotifications();
 
   const dest: Destination = PATH_TO_DEST[location.pathname] ?? 'calendar';
-
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
-  const [calView, setCalView] = useState<CalendarView>('Month');
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
@@ -61,36 +57,42 @@ function Shell() {
     navigate(DEST_TO_PATH[d]);
   }, [navigate]);
 
-  const shortcuts = useMemo(() => [
+  useShortcuts(useMemo(() => [
     { key: 'b', handler: () => toggleSidebar() },
     { key: 'f', handler: () => goTo('focus') },
-    { key: '1', handler: () => { if (dest === 'calendar') setCalView('Month'); else goTo('calendar'); } },
-    { key: '2', handler: () => { if (dest === 'calendar') setCalView('Week');  } },
-    { key: '3', handler: () => { if (dest === 'calendar') setCalView('Day');   } },
-    { key: '4', handler: () => { if (dest === 'calendar') setCalView('Agenda');} },
-    // Ctrl+Z / Shift+Z are force-wired — handled by the undo context (Phase 4)
-  ], [toggleSidebar, goTo, dest]);
+    { key: '1', handler: () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar') },
+    { key: '2', handler: () => dest === 'calendar' ? nav.setView('Week')   : undefined },
+    { key: '3', handler: () => dest === 'calendar' ? nav.setView('Day')    : undefined },
+    { key: '4', handler: () => dest === 'calendar' ? nav.setView('Agenda') : undefined },
+  ], [toggleSidebar, goTo, dest, nav]));
 
-  useShortcuts(shortcuts);
+  const topBarKind = (dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
-  const topBarKind = dest === 'calendar' ? 'calendar' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : 'settings';
+  // Calendar sidebar is rendered inside CalendarPage itself; other routes use ContextSidebar
+  const showContextSidebar = dest !== 'calendar';
 
   return (
     <div className={styles.shell}>
       <AppDrawer active={dest} onNavigate={goTo} />
 
-      <ContextSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar}>
-        {dest === 'calendar' && <CalendarSidebarContent />}
-        {dest === 'tasks'    && <TaskBoardSidebarContent />}
-        {dest === 'focus'    && <FocusSidebarContent />}
-        {dest === 'settings' && <SettingsSidebarContent />}
-      </ContextSidebar>
+      {showContextSidebar && (
+        <ContextSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar}>
+          {dest === 'tasks'    && <TaskBoardSidebarContent />}
+          {dest === 'focus'    && <FocusSidebarContent />}
+          {dest === 'settings' && <SettingsSidebarContent />}
+        </ContextSidebar>
+      )}
 
       <div className={styles.main}>
         <TopBar
           kind={topBarKind}
-          view={calView}
-          onView={v => setCalView(v as CalendarView)}
+          view={nav.view}
+          dateLabel={nav.dateLabel}
+          onView={nav.setView}
+          onPrev={nav.goPrev}
+          onToday={nav.goToday}
+          onNext={nav.goNext}
+          unread={unreadCount}
         />
         <div className={styles.content}>
           <Routes>
@@ -109,7 +111,15 @@ function Shell() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Shell />
+      <NotificationsProvider>
+        <UndoProvider>
+          <ModalProvider>
+            <CalendarNavProvider>
+              <Shell />
+            </CalendarNavProvider>
+          </ModalProvider>
+        </UndoProvider>
+      </NotificationsProvider>
     </BrowserRouter>
   );
 }
