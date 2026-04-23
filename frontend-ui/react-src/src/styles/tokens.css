@@ -1,0 +1,41 @@
+/* Design tokens — ported 1:1 from LA_TOKENS in design-wireframes/shared.jsx */
+:root {
+  /* Backgrounds */
+  --bg-main:     #0B1120;
+  --bg-panel:    #121B2E;
+  --bg-elevated: #1A2540;
+  --bg-subtle:   #0F172A;
+
+  /* Borders */
+  --border:        #1F2A44;
+  --border-strong: #2B3A5C;
+
+  /* Text */
+  --text-main:  #F1F5FA;
+  --text-muted: #8A97B2;
+  --text-dim:   #5D6B86;
+
+  /* Accent (indigo) */
+  --accent:       #6366F1;
+  --accent-soft:  rgba(99, 102, 241, 0.14);
+  --accent-hover: #818CF8;
+
+  /* Semantic */
+  --success:  #10B981;
+  --warning:  #D97706;
+  --error:    #EF4444;
+  --info:     #3B82F6;
+  --progress: #6366F1;
+
+  /* Timeline swatches */
+  --tl-school:   #6366F1;
+  --tl-work:     #10B981;
+  --tl-personal: #F59E0B;
+  --tl-health:   #EC4899;
+  --tl-family:   #06B6D4;
+  --tl-errands:  #8B5CF6;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
