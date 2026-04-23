@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LoomAssist v2.0 — Wireframe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #0B1120; color: #F1F5FA;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  button { font-family: inherit; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  @keyframes notif-shimmer {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #1F2A44; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="calendar.jsx"></script>
+<script type="text/babel" src="focus.jsx"></script>
+<script type="text/babel" src="pages-modals.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+function App() {
+  return (
+    <DesignCanvas title="LoomAssist v2.0 — Frontend Redesign">
+      <DCSection id="overview" title="01 · Tokens & rationale">
+        <DCArtboard id="tokens" label="Design tokens" width={1180} height={1200}>
+          <DesignTokensArtboard />
+        </DCArtboard>
+        <DCArtboard id="rationale" label="Sidebar redesign rationale" width={1100} height={1200}>
+          <SidebarRationaleArtboard />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="calendar" title="02 · Calendar (main)">
+        <DCArtboard id="cal-main" label="Calendar · Month view · sidebar expanded" width={1440} height={900}>
+          <CalendarPage />
+        </DCArtboard>
+        <DCArtboard id="cal-peek" label="Calendar · Quick-Peek hover card" width={1440} height={900}>
+          <CalendarPage showPeek />
+        </DCArtboard>
+        <DCArtboard id="cal-collapsed" label="Calendar · Context sidebar collapsed" width={1280} height={900}>
+          <CalendarPage sidebarCollapsed />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="focus" title="03 · Focus Mode (redesigned)">
+        <DCArtboard id="focus-kanban" label="Focus · Kanban display mode" width={1440} height={900}>
+          <FocusPage mode="kanban" />
+        </DCArtboard>
+        <DCArtboard id="focus-list" label="Focus · List display mode" width={1440} height={900}>
+          <FocusPage mode="list" />
+        </DCArtboard>
+        <DCArtboard id="focus-pomo" label="Focus · Pomodoro settings open" width={1440} height={980}>
+          <FocusPage mode="kanban" pomoEditing />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="tasks" title="04 · Task Board">
+        <DCArtboard id="taskboard" label="Task Board · grouped by Timeline" width={1440} height={900}>
+          <TaskBoardPage />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="modals" title="05 · Modals & overlays">
+        <DCArtboard id="event-editor" label="Event Editor (recurring · checklist)" width={620} height={920}>
+          <EventEditorModal />
+        </DCArtboard>
+        <DCArtboard id="availability" label="Availability Sender" width={680} height={720}>
+          <AvailabilityModal />
+        </DCArtboard>
+        <DCArtboard id="notifs" label="Notification panel open" width={1440} height={900}>
+          <NotificationPanelArtboard />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

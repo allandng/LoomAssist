@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.loom.app",
   "build": {
-    "frontendDist": "../src"
+    "beforeDevCommand": "npm --prefix src run dev",
+    "beforeBuildCommand": "npm --prefix src run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../src/dist"
   },
   "app": {
     "withGlobalTauri": true,

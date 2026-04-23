@@ -1,0 +1,294 @@
+.panel {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.clock {
+  text-align: center;
+}
+
+.clockDate {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.clockTime {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.clockSecs {
+  color: var(--text-dim);
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Ring */
+.ringWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.ringWrap > svg {
+  display: block;
+}
+
+.ringCenter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ringMode {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+.ringTime {
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ringRound {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Controls */
+.controls {
+  display: flex;
+  gap: 8px;
+}
+
+.pauseBtn {
+  flex: 2;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 100ms;
+}
+
+.pauseBtn:hover { background: var(--accent-hover); }
+
+.iconCtrl {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 100ms;
+}
+
+.iconCtrl:hover { border-color: var(--border-strong); }
+
+.iconCtrlActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Round dots */
+.roundDots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.roundDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Active task */
+.activeTask {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
+.activeLabel {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+.activeTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+/* Inline settings */
+.settingsBox {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(99,102,241,0.4);
+}
+
+.settingsTitle {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.settingRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.settingLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px;
+}
+
+.stepper button {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stepper span {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 28px;
+  text-align: center;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+}
+
+.settingUnit {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  width: 22px;
+}
+
+.toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 10px;
+  background: var(--border-strong);
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: background 150ms;
+  flex-shrink: 0;
+}
+
+.toggle::after {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: left 150ms;
+}
+
+.toggleOn { background: var(--accent); }
+.toggleOn::after { left: 14px; }
+
+/* Session history */
+.history {}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.historyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.historyTime {
+  font-family: var(--font-mono);
+  width: 36px;
+  flex-shrink: 0;
+}
+
+.historyTask {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-main);
+}

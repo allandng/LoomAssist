@@ -1,0 +1,729 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  transition: width 200ms ease;
+}
+
+.collapsed {
+  width: 48px;
+  overflow: hidden;
+}
+
+.toggleBtn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  flex-shrink: 0;
+}
+
+.toggleBtn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 0;
+}
+
+/* Timelines */
+.tlList {
+  padding: 0 6px;
+  margin-bottom: 18px;
+}
+
+.tlRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+}
+
+.tlRow:hover {
+  background: var(--bg-elevated);
+}
+
+.tlRow:hover .moreBtn {
+  opacity: 1;
+}
+
+.tlCheckbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-strong);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+}
+
+.tlName {
+  font-size: 12.5px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tlCount {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.moreBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 80ms, background 80ms;
+  flex-shrink: 0;
+}
+
+.moreBtn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.tlMenu {
+  position: absolute;
+  right: 4px;
+  top: calc(100% + 2px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 100;
+  min-width: 120px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.tlMenu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-main);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.tlMenu button:hover {
+  background: var(--bg-subtle);
+}
+
+.renameInput {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--text-main);
+  background: var(--bg-subtle);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.miniPlus {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+/* Filters */
+.filterList {
+  padding: 0 10px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filterChip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 100ms, color 100ms;
+}
+
+.filterChip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-main);
+}
+
+.filterChipActive {
+  border-color: var(--accent);
+  color: var(--text-main);
+  background: var(--accent-soft);
+}
+
+.filterCount {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* Templates */
+.tplCount {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.tplList {
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tplCard {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 100ms;
+}
+
+.tplCard:hover {
+  border-color: var(--border-strong);
+}
+
+.tplName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 2px;
+}
+
+.tplMeta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Footer */
+.footer {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.quickBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: var(--bg-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 100ms;
+}
+
+.quickBtn:hover {
+  border-color: var(--border-strong);
+}
+
+.quickBtnPrimary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  grid-column: 1 / 3;
+}
+
+.quickBtnPrimary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.quickBtnFull {
+  grid-column: 1 / 3;
+}
+
+/* ── Scan mode ─────────────────────────────────────────────────── */
+.scanHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  flex-shrink: 0;
+}
+
+.scanTitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent);
+}
+
+.scanClear {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 3px 8px;
+  transition: border-color 100ms, color 100ms;
+}
+
+.scanClear:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.scanList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scanCard {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.scanField {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-main);
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.scanField:focus {
+  border-color: var(--accent);
+}
+
+.scanTimeRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 5px;
+}
+
+.scanCardActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.scanApproveBtn {
+  flex: 1;
+  font-size: 11.5px;
+  padding: 5px 0;
+  border-radius: 5px;
+  border: 1px solid var(--success);
+  background: transparent;
+  color: var(--success);
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 100ms;
+}
+
+.scanApproveBtn:hover {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.scanDismissBtn {
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 100ms, color 100ms;
+}
+
+.scanDismissBtn:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.scanLoading {
+  padding: 32px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.scanSpinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: scanSpin 0.7s linear infinite;
+}
+
+@keyframes scanSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Smart Scheduler ───────────────────────────────────────────── */
+.schedulerPanel {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedulerRow {
+  display: flex;
+  gap: 6px;
+}
+
+.schedulerSelect {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-main);
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.schedulerFindBtn {
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 100ms;
+  white-space: nowrap;
+}
+
+.schedulerFindBtn:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.schedulerFindBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.schedulerSlot {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 100ms, background 100ms;
+}
+
+.schedulerSlot:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.schedulerSlotDate {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.schedulerSlotTime {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.schedulerEmpty {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 6px 0;
+  margin: 0;
+}
+
+/* ── Density heatmap ───────────────────────────────────────────── */
+.heatmap {
+  padding: 0 10px 14px;
+}
+
+.heatmapHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.heatmapMonth {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.heatmapNav {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.heatmapNav:hover {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.heatmapGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.heatmapDow {
+  font-size: 8.5px;
+  color: var(--text-dim);
+  text-align: center;
+  padding-bottom: 2px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.heatmapEmpty {
+  aspect-ratio: 1;
+}
+
+.heatmapCell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  transition: transform 80ms;
+}
+
+.heatmapCell:hover {
+  transform: scale(1.2);
+}
+
+.heatmapToday {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.hmL0 { background: var(--bg-elevated);                                        color: var(--text-dim); }
+.hmL1 { background: color-mix(in srgb, var(--accent) 18%, transparent);        color: var(--text-main); }
+.hmL2 { background: color-mix(in srgb, var(--accent) 38%, transparent);        color: var(--text-main); }
+.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; }
+.hmL4 { background: var(--accent);                                              color: #fff; font-weight: 700; }
+
+/* ── Time Block Templates ── */
+
+.tbtList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.tbtRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  gap: 6px;
+  border-radius: 5px;
+}
+
+.tbtRow:hover {
+  background: var(--bg-elevated);
+}
+
+.tbtName {
+  font-size: 13px;
+  color: var(--text-main);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tbtActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tbtApplyBtn {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tbtApplyBtn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tbtDeleteBtn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.4;
+  padding: 2px 4px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 3px;
+}
+
+.tbtDeleteBtn:hover {
+  opacity: 1;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.weekPicker {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg-elevated));
+  color: var(--text-main);
+  width: 130px;
+}
+
+.tbtApplyConfirm {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tbtApplyConfirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tbtCancel {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.tbtCancel:hover {
+  background: var(--bg-elevated);
+}

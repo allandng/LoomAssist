@@ -1,0 +1,81 @@
+.rail {
+  width: 56px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 0;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #A78BFA);
+  display: grid;
+  place-items: center;
+  color: white;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.navBtn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  border: none;
+  transition: background 120ms, color 120ms;
+}
+
+.navBtn:hover {
+  color: var(--text-main);
+  background: var(--bg-elevated);
+}
+
+.navBtnActive {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.navBtnActive:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.activeBar {
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+}

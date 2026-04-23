@@ -1,0 +1,43 @@
+@import './fonts.css';
+@import './tokens.css';
+@import './reset.css';
+
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-main);
+  background: var(--bg-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* Thin dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Light mode overrides */
+body.light-mode {
+  --bg-main:     #F8FAFC;
+  --bg-panel:    #F1F5F9;
+  --bg-elevated: #FFFFFF;
+  --bg-subtle:   #E2E8F0;
+  --border:      #CBD5E1;
+  --border-strong: #94A3B8;
+  --text-main:   #0F172A;
+  --text-muted:  #475569;
+  --text-dim:    #94A3B8;
+}

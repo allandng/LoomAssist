@@ -1,0 +1,253 @@
+import type {
+  Event, EventCreate, EventUpdate,
+  Calendar, CalendarCreate, CalendarUpdate,
+  Task, TaskCreate, TaskUpdate,
+  EventTemplate, TemplateCreate,
+  AvailabilityRequest, AvailabilityCreate, AmendmentResponse,
+  SkipDatePayload,
+  LogEntry, CrashFlag,
+  ImportResult, SyllabusEvent,
+  WellnessAnalysis,
+  FreeSlot,
+  DurationStat,
+  WeeklyReviewResult,
+  StudyBlockPreview,
+  StudyBlockRequest,
+  TimeBlockTemplate,
+  TimeBlockDef,
+} from './types';
+
+const BASE = 'http://localhost:8000';
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw Object.assign(new Error(`${method} ${path} → ${res.status}`), { status: res.status });
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+// ---- Events ----
+
+export interface ConflictInfo { id: number; title: string }
+
+export const listEvents = (): Promise<Event[]> =>
+  req('GET', '/events/');
+
+export const createEvent = (
+  payload: EventCreate,
+): Promise<{ event: Event; conflicts: ConflictInfo[] }> =>
+  req('POST', '/events/', payload);
+
+export const updateEvent = (
+  id: number,
+  payload: EventUpdate,
+): Promise<{ event: Event; conflicts: ConflictInfo[] }> =>
+  req('PUT', `/events/${id}`, payload);
+
+export const deleteEvent = (id: number): Promise<void> =>
+  req('DELETE', `/events/${id}`);
+
+export const skipEventDate = (id: number, payload: SkipDatePayload): Promise<Event> =>
+  req('POST', `/events/${id}/skip-date`, payload);
+
+export const clockEvent = (id: number, action: 'in' | 'out'): Promise<Event> =>
+  req('PATCH', `/events/${id}/clock`, { action });
+
+export const getDurationStats = (): Promise<{ entries: DurationStat[] }> =>
+  req('GET', '/stats/duration');
+
+export const getWeeklyReview = (weekStart: string): Promise<WeeklyReviewResult> =>
+  req('POST', '/ai/weekly-review', { week_start: weekStart });
+
+// ---- Calendars (Timelines) ----
+
+export const listCalendars = (): Promise<Calendar[]> =>
+  req('GET', '/calendars/');
+
+export const createCalendar = (payload: CalendarCreate): Promise<Calendar> =>
+  req('POST', '/calendars/', payload);
+
+export const updateCalendar = (id: number, payload: CalendarUpdate): Promise<Calendar> =>
+  req('PUT', `/calendars/${id}`, payload);
+
+export const deleteCalendar = (id: number): Promise<void> =>
+  req('DELETE', `/calendars/${id}`);
+
+// ---- Tasks ----
+
+export const listTasks = (): Promise<Task[]> =>
+  req('GET', '/tasks/');
+
+export const createTask = (payload: TaskCreate): Promise<Task> =>
+  req('POST', '/tasks/', payload);
+
+export const updateTask = (id: number, payload: TaskUpdate): Promise<Task> =>
+  req('PUT', `/tasks/${id}`, payload);
+
+export const deleteTask = (id: number): Promise<void> =>
+  req('DELETE', `/tasks/${id}`);
+
+// ---- Templates ----
+
+export const listTemplates = (): Promise<EventTemplate[]> =>
+  req('GET', '/templates/');
+
+export const createTemplate = (payload: TemplateCreate): Promise<EventTemplate> =>
+  req('POST', '/templates/', payload);
+
+export const deleteTemplate = (id: number): Promise<void> =>
+  req('DELETE', `/templates/${id}`);
+
+// ---- Time Block Templates ----
+
+export const listTimeBlockTemplates = (): Promise<TimeBlockTemplate[]> =>
+  req('GET', '/templates/time-blocks');
+
+export const createTimeBlockTemplate = (
+  name: string,
+  description: string,
+  blocks: TimeBlockDef[],
+): Promise<TimeBlockTemplate> =>
+  req('POST', '/templates/time-blocks', { name, description, blocks });
+
+export const deleteTimeBlockTemplate = (id: number): Promise<void> =>
+  req('DELETE', `/templates/time-blocks/${id}`);
+
+export const applyTimeBlockTemplate = (
+  tplId: number,
+  weekMondayDate: string,
+): Promise<{ applied_count: number; events: Event[] }> =>
+  req('POST', `/templates/time-blocks/${tplId}/apply`, { week_monday_date: weekMondayDate });
+
+// ---- Availability ----
+
+export const createAvailability = (
+  payload: AvailabilityCreate,
+): Promise<{ token: string; share_url: string }> =>
+  req('POST', '/availability', payload);
+
+export const getAvailability = (token: string): Promise<AvailabilityRequest> =>
+  req('GET', `/availability/${token}`);
+
+export const confirmAvailability = (
+  token: string,
+  payload: { slot: { date: string; start: string; end: string } },
+): Promise<AvailabilityRequest> =>
+  req('POST', `/availability/${token}/confirm`, payload);
+
+export const amendAvailability = (
+  token: string,
+  payload: { slot: { date: string; start: string; end: string } },
+): Promise<AvailabilityRequest> =>
+  req('POST', `/availability/${token}/amend`, payload);
+
+export const respondAmendment = (
+  token: string,
+  payload: AmendmentResponse,
+): Promise<AvailabilityRequest> =>
+  req('POST', `/availability/${token}/respond-amendment`, payload);
+
+// ---- Import / Export ----
+
+export async function importICS(
+  file: File,
+  calendarId: number,
+): Promise<ImportResult> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('calendar_id', String(calendarId));
+  const res = await fetch(`${BASE}/integrations/import-ics-file/`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`import-ics → ${res.status}`);
+  return res.json();
+}
+
+export const exportTimelines = (): Promise<Blob> =>
+  fetch(`${BASE}/export/timelines/`).then(r => r.blob());
+
+export async function extractSyllabus(file: File): Promise<SyllabusEvent[]> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BASE}/documents/extract-syllabus/`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`extract-syllabus → ${res.status}`);
+  const data = await res.json();
+  return data.events ?? data;
+}
+
+export const saveApprovedEvents = (
+  events: SyllabusEvent[],
+): Promise<{ created: number; event_ids: number[] }> =>
+  req('POST', '/documents/save-approved-events/', { events });
+
+// ---- Smart Scheduling ----
+
+export const findFreeSlots = (payload: {
+  window_start: string;
+  window_end: string;
+  duration_minutes?: number;
+  working_hours_start?: number;
+  working_hours_end?: number;
+}): Promise<{ slots: FreeSlot[]; duration_minutes: number }> =>
+  req('POST', '/schedule/find-free', payload);
+
+// ---- Natural Language Datetime Parser ----
+
+export const parseDateTime = (
+  input: string,
+): Promise<{ iso: string; display: string }> =>
+  req('POST', '/parse/datetime', { input });
+
+// ---- AI / Voice ----
+
+export async function transcribeAudio(blob: Blob): Promise<{ text: string; event?: Partial<EventCreate> }> {
+  const form = new FormData();
+  form.append('audio', blob, 'recording.webm');
+  const res = await fetch(`${BASE}/transcribe`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`transcribe → ${res.status}`);
+  return res.json();
+}
+
+export const parseIntent = (
+  text: string,
+): Promise<{ event?: Partial<EventCreate>; action?: string }> =>
+  req('POST', '/intent', { text });
+
+// ---- Analytics ----
+
+export const analyzeSchedule = (
+  events: Array<{ title: string; start_time: string; end_time: string }>
+): Promise<WellnessAnalysis> =>
+  req('POST', '/schedule/analyze', { events });
+
+// ---- Logging ----
+
+export const sendLog = (entry: LogEntry): Promise<void> =>
+  req('POST', '/api/logs', entry);
+
+export const getCrashFlag = (): Promise<CrashFlag> =>
+  req('GET', '/api/logs/crash-flag');
+
+export const exportLogs = (): Promise<string> =>
+  fetch(`${BASE}/api/logs/export`).then(r => r.text());
+
+export const clearLogs = (): Promise<void> =>
+  req('DELETE', '/api/logs');
+
+// ---- Admin ----
+
+export const backupDatabase = (): Promise<{ path: string }> =>
+  req('POST', '/admin/backup', {});
+
+export const restoreDatabase = (backupPath: string): Promise<void> =>
+  req('POST', '/admin/restore', { path: backupPath });
+
+// ---- Study Block Auto-Generator ----
+
+export const getStudyBlockPreview = (body: StudyBlockRequest): Promise<StudyBlockPreview[]> =>
+  req('POST', '/study/generate-preview', body);
+
+export const confirmStudyBlocks = (blocks: StudyBlockPreview[]): Promise<{ created_count: number }> =>
+  req('POST', '/study/confirm-blocks', blocks);

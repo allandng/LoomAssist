@@ -1,0 +1,112 @@
+.heatmap {
+  padding: 0 0 14px;
+}
+
+.heatmapHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.heatmapMonth {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.heatmapNav {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.heatmapNav:hover {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.heatmapGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.heatmapDow {
+  font-size: 8.5px;
+  color: var(--text-dim);
+  text-align: center;
+  padding-bottom: 2px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.heatmapEmpty {
+  aspect-ratio: 1;
+}
+
+.heatmapCell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  transition: transform 80ms;
+}
+
+.heatmapCell:hover {
+  transform: scale(1.2);
+}
+
+.heatmapToday {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.hmL0 { background: var(--bg-elevated);                                        color: var(--text-dim); }
+.hmL1 { background: color-mix(in srgb, var(--accent) 18%, transparent);        color: var(--text-main); }
+.hmL2 { background: color-mix(in srgb, var(--accent) 38%, transparent);        color: var(--text-main); }
+.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; }
+.hmL4 { background: var(--accent);                                              color: #fff; font-weight: 700; }
+
+/* Legend bar */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.legendLabel {
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.legendSwatches {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+
+.legendSwatch {
+  flex: 1;
+  height: 10px;
+  border-radius: 2px;
+}

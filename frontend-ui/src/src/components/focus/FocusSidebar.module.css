@@ -1,0 +1,157 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 0;
+}
+
+.todayLabel {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.upNextList {
+  padding: 0 10px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.upNextCard {
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upNextNow {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.upNextBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.upNextTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.upNextTime {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.pinnedList {
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pinnedItem {
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pinIcon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.pinnedTitle {
+  color: var(--text-main);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unpinBtn {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.pinnedItem:hover .unpinBtn {
+  opacity: 1;
+}
+
+.footer {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.filterToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 100ms;
+}
+
+.filterToggleOn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.filterCheckbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--border-strong);
+  flex-shrink: 0;
+}

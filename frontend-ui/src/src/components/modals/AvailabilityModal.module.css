@@ -1,0 +1,214 @@
+.grid {
+  padding: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.miniCal {
+  padding: 12px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.calNav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.calTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.calNavBtn {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.calGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.calDow {
+  text-align: center;
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 4px 0;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.calDay {
+  text-align: center;
+  padding: 6px 0;
+  font-size: 11px;
+  border-radius: 5px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-main);
+  transition: background 80ms;
+}
+
+.calDay:hover:not(:disabled) {
+  background: var(--bg-elevated);
+}
+
+.calDaySel {
+  background: var(--accent) !important;
+  color: white !important;
+}
+
+.calDayPast {
+  color: var(--text-dim);
+  opacity: 0.4;
+  cursor: default;
+}
+
+.calDayToday {
+  border-color: var(--accent) !important;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.selHint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+/* Slots */
+.slotList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.slotRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
+.timeInput {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+  width: 76px;
+}
+
+.arrow {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.removeSlot {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.conflictWarn {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(217,119,6,0.08);
+  border-left: 3px solid var(--warning);
+  font-size: 11px;
+  color: var(--text-main);
+  margin-bottom: 10px;
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.shareLinkBox {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid rgba(99,102,241,0.4);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  margin-bottom: 6px;
+}
+
+.shareCode {
+  font-size: 11px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  padding: 6px 8px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copyBtn {
+  padding: 6px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.pollStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.pollDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.pollDotPulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

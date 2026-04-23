@@ -107,6 +107,31 @@ def validate_calendar_exists(calendar_id: int, db: Session):
             detail={'error': {'code': 'calendar_not_found',
                               'detail': f'Calendar {calendar_id} does not exist.'}})
 
+def get_conflicts(
+    start: str, end: str, calendar_id: int,
+    exclude_event_id: int | None,
+    db: Session,
+) -> list:
+    """Return events on the same calendar that overlap [start, end]."""
+    try:
+        start_dt = datetime.fromisoformat(start)
+        end_dt   = datetime.fromisoformat(end)
+    except ValueError:
+        return []
+    candidates = db.query(models.Event).filter(models.Event.calendar_id == calendar_id).all()
+    conflicts = []
+    for ev in candidates:
+        if exclude_event_id and ev.id == exclude_event_id:
+            continue
+        try:
+            ev_start = datetime.fromisoformat(ev.start_time)
+            ev_end   = datetime.fromisoformat(ev.end_time)
+        except ValueError:
+            continue
+        if not (ev_end <= start_dt or ev_start >= end_dt):
+            conflicts.append(ev)
+    return conflicts
+
 # ==========================================
 # LOG RATE LIMITER
 # ==========================================
@@ -236,38 +261,60 @@ def delete_calendar(calendar_id: int, db: Session = Depends(get_db)):
 # EVENT ROUTES
 # ==========================================
 
-@app.post("/events/", response_model=models.EventRead)
+class ConflictCheckRequest(BaseModel):
+    start_time: str
+    end_time: str
+    calendar_id: int
+    exclude_event_id: int | None = None
+
+@app.post("/events/check-conflicts")
+def check_conflicts(payload: ConflictCheckRequest, db: Session = Depends(get_db)):
+    conflicts = get_conflicts(
+        payload.start_time, payload.end_time,
+        payload.calendar_id, payload.exclude_event_id, db,
+    )
+    return {"conflicts": [{"id": c.id, "title": c.title} for c in conflicts]}
+
+@app.post("/events/")
 def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     validate_calendar_exists(event.calendar_id, db)
     validate_event_times(event.start_time, event.end_time)
-    
+
     db_event = models.Event.model_validate(event)
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
-    return db_event
+    conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
+    return {
+        "event": db_event,
+        "conflicts": [{"id": c.id, "title": c.title} for c in conflicts],
+    }
 
 @app.get("/events/", response_model=list[models.EventRead])
 def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.query(models.Event).offset(skip).limit(limit).all()
 
-@app.put("/events/{event_id}", response_model=models.EventRead)
+@app.put("/events/{event_id}")
 def update_event(event_id: int, event: models.EventBase, db: Session = Depends(get_db)):
     db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
     if not db_event:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail={"error": {"code": "not_found", "detail": "Event not found"}}
         )
-    
+
     validate_event_times(event.start_time, event.end_time)
-    
+
     for key, value in event.model_dump().items():
         setattr(db_event, key, value)
-        
+
     db.commit()
     db.refresh(db_event)
-    return db_event
+    conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
+    return {
+        "event": db_event,
+        "conflicts": [{"id": c.id, "title": c.title} for c in conflicts],
+    }
 
 @app.delete("/events/{event_id}")
 def delete_event(event_id: int, db: Session = Depends(get_db)):
@@ -645,6 +692,38 @@ async def restore_database(file: UploadFile = File(...)):
     
     return {'status': 'success', 'message': 'Database restored. Reload your data.'}
 # ==========================================
+# NATURAL LANGUAGE DATETIME PARSER
+# ==========================================
+
+class DatetimeParseRequest(BaseModel):
+    input: str
+
+@app.post("/parse/datetime")
+async def parse_datetime_nl(req: DatetimeParseRequest):
+    now_str = datetime.now().isoformat()
+    prompt = (
+        f'Today is {now_str}.\n'
+        f'The user typed: "{req.input}"\n\n'
+        'Parse this into an ISO 8601 datetime string (YYYY-MM-DDTHH:MM:SS).\n'
+        'If no time is specified, use 09:00:00.\n'
+        '"afternoon" = 14:00, "morning" = 09:00, "evening" = 18:00, "night" = 20:00.\n'
+        'Respond with ONLY the ISO datetime string. No explanation.'
+    )
+    try:
+        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+        raw = response['message']['content'].strip()
+        parsed = datetime.fromisoformat(raw)
+        display = parsed.strftime("%a %b %d, %Y at %I:%M %p")
+        return {"iso": parsed.isoformat(), "display": display}
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=422,
+            detail={"error": {"code": "parse_failed", "detail": f"Could not parse: {req.input!r}"}})
+    except Exception as e:
+        logger.warning(f"NL datetime parse error: {e}")
+        raise HTTPException(status_code=422,
+            detail={"error": {"code": "llm_unavailable", "detail": "LLM returned an invalid response."}})
+
+# ==========================================
 # INTENT ENGINE
 # ==========================================
 def extract_intent(sentence: str):
@@ -728,6 +807,158 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 # ==========================================
+# TIME BLOCK TEMPLATES
+# ==========================================
+
+class TimeBlockDef(BaseModel):
+    title: str
+    day_of_week: int    # 1=Mon … 7=Sun
+    start_time: str     # "HH:MM"
+    end_time: str       # "HH:MM"
+    calendar_id: int
+
+class TimeBlockTemplateCreate(BaseModel):
+    name: str
+    description: str = ""
+    blocks: list[TimeBlockDef]
+
+class ApplyTemplateRequest(BaseModel):
+    week_monday_date: str   # ISO YYYY-MM-DD
+
+@app.get("/templates/time-blocks", response_model=list[models.TimeBlockTemplateRead])
+def list_time_block_templates(db: Session = Depends(get_db)):
+    return db.query(models.TimeBlockTemplate).all()
+
+@app.post("/templates/time-blocks", response_model=models.TimeBlockTemplateRead)
+def create_time_block_template(payload: TimeBlockTemplateCreate, db: Session = Depends(get_db)):
+    try:
+        tpl = models.TimeBlockTemplate(
+            name=payload.name,
+            description=payload.description,
+            created_at=datetime.now().isoformat(),
+            blocks_json=json.dumps([b.model_dump() for b in payload.blocks]),
+        )
+        db.add(tpl)
+        db.commit()
+        db.refresh(tpl)
+        return tpl
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "tbt_create_failed", "detail": str(e)}})
+
+@app.delete("/templates/time-blocks/{tpl_id}", status_code=204)
+def delete_time_block_template(tpl_id: int, db: Session = Depends(get_db)):
+    tpl = db.query(models.TimeBlockTemplate).filter(models.TimeBlockTemplate.id == tpl_id).first()
+    if not tpl:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "tbt_not_found", "detail": f"Template {tpl_id} does not exist."}})
+    db.delete(tpl)
+    db.commit()
+    return Response(status_code=204)
+
+@app.post("/templates/time-blocks/{tpl_id}/apply")
+def apply_time_block_template(tpl_id: int, req: ApplyTemplateRequest, db: Session = Depends(get_db)):
+    tpl = db.query(models.TimeBlockTemplate).filter(models.TimeBlockTemplate.id == tpl_id).first()
+    if not tpl:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "tbt_not_found", "detail": f"Template {tpl_id} does not exist."}})
+    try:
+        monday = datetime.fromisoformat(req.week_monday_date)
+    except ValueError:
+        raise HTTPException(status_code=422,
+            detail={"error": {"code": "invalid_date", "detail": "week_monday_date must be ISO YYYY-MM-DD."}})
+    try:
+        blocks = json.loads(tpl.blocks_json)
+    except Exception:
+        blocks = []
+    pending = []
+    for block in blocks:
+        dow = int(block["day_of_week"])
+        day_date = monday + timedelta(days=dow - 1)
+        start_iso = f"{day_date.strftime('%Y-%m-%d')}T{block['start_time']}:00"
+        end_iso   = f"{day_date.strftime('%Y-%m-%d')}T{block['end_time']}:00"
+        event = models.Event(
+            title=block["title"],
+            start_time=start_iso,
+            end_time=end_iso,
+            calendar_id=int(block["calendar_id"]),
+        )
+        db.add(event)
+        pending.append(event)
+    if not pending:
+        return {"applied_count": 0, "events": []}
+    db.flush()   # assigns IDs without committing
+    ids = [e.id for e in pending]
+    db.commit()
+    created = db.query(models.Event).filter(models.Event.id.in_(ids)).all()
+    return {"applied_count": len(created), "events": created}
+
+# ==========================================
+# SMART SCHEDULING — FREE SLOT FINDER
+# ==========================================
+
+class FindFreeRequest(BaseModel):
+    window_start: str           # ISO datetime
+    window_end: str             # ISO datetime
+    duration_minutes: int = 60
+    working_hours_start: int = 9
+    working_hours_end: int = 18
+
+@app.post("/schedule/find-free")
+def find_free_slots(req: FindFreeRequest, db: Session = Depends(get_db)):
+    """Return up to 5 free slots of duration_minutes within the search window."""
+    try:
+        search_start = datetime.fromisoformat(req.window_start)
+        search_end   = datetime.fromisoformat(req.window_end)
+    except ValueError:
+        raise HTTPException(status_code=422,
+            detail={"error": {"code": "invalid_window",
+                              "detail": "window_start and window_end must be ISO datetimes."}})
+
+    duration     = timedelta(minutes=req.duration_minutes)
+    work_start_h = req.working_hours_start
+    work_end_h   = req.working_hours_end
+
+    events = db.query(models.Event).all()
+    busy = []
+    for ev in events:
+        try:
+            ev_s = datetime.fromisoformat(ev.start_time)
+            ev_e = datetime.fromisoformat(ev.end_time)
+        except ValueError:
+            continue
+        if ev_s < search_end and ev_e > search_start:
+            travel = timedelta(minutes=ev.travel_time_minutes or 0)
+            busy.append((ev_s - travel, ev_e))
+    busy.sort()
+
+    free_slots = []
+    cursor = search_start.replace(hour=work_start_h, minute=0, second=0, microsecond=0)
+    if cursor < search_start:
+        cursor = search_start
+
+    # Snap cursor to next 15-minute boundary (:00, :15, :30, :45)
+    remainder = cursor.minute % 15
+    if remainder != 0:
+        cursor += timedelta(minutes=(15 - remainder))
+    cursor = cursor.replace(second=0, microsecond=0)
+
+    while cursor + duration <= search_end and len(free_slots) < 5:
+        slot_end = cursor + duration
+        if cursor.hour < work_start_h or slot_end.hour > work_end_h:
+            cursor += timedelta(minutes=15)
+            continue
+        overlaps = any(b_s < slot_end and b_e > cursor for b_s, b_e in busy)
+        if not overlaps:
+            free_slots.append({"start": cursor.isoformat(), "end": slot_end.isoformat()})
+            cursor = slot_end
+        else:
+            cursor += timedelta(minutes=15)
+
+    return {"slots": free_slots, "duration_minutes": req.duration_minutes}
+
+# ==========================================
 # SCHEDULE WELLNESS ANALYSIS (M2)
 # ==========================================
 
@@ -781,6 +1012,9 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     is_complete: bool
     note: Optional[str] = None
+    status: Optional[str] = None    # backlog | doing | done
+    priority: Optional[str] = None  # high | med | low
+    due_date: Optional[str] = None  # ISO date string
 
 @app.post("/tasks/", response_model=models.TaskRead)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
@@ -816,6 +1050,9 @@ def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
             detail={"error": {"code": "task_not_found", "detail": f"Task {task_id} does not exist."}})
     db_task.is_complete = task.is_complete
     db_task.note = task.note
+    if task.status   is not None: db_task.status   = task.status
+    if task.priority is not None: db_task.priority = task.priority
+    if task.due_date is not None: db_task.due_date = task.due_date
     db.commit()
     db.refresh(db_task)
     return db_task
@@ -829,6 +1066,172 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(db_task)
     db.commit()
     return {"status": "success"}
+
+# ==========================================
+# WEEKLY REVIEW ROUTE
+# ==========================================
+
+class WeeklyReviewRequest(BaseModel):
+    week_start: str  # ISO datetime — the Monday 00:00:00 of the week to review
+
+@app.post("/ai/weekly-review")
+async def weekly_review(req: WeeklyReviewRequest, db: Session = Depends(get_db)):
+    week_start = datetime.fromisoformat(req.week_start)
+    week_end   = week_start + timedelta(days=7)
+    next_end   = week_end   + timedelta(days=7)
+
+    past_events = db.query(models.Event).filter(
+        models.Event.start_time >= week_start.isoformat(),
+        models.Event.start_time <  week_end.isoformat(),
+    ).all()
+
+    upcoming_events = db.query(models.Event).filter(
+        models.Event.start_time >= week_end.isoformat(),
+        models.Event.start_time <  next_end.isoformat(),
+    ).all()
+
+    past_summary     = [{"title": e.title, "start": e.start_time} for e in past_events]
+    upcoming_summary = [{"title": e.title, "start": e.start_time} for e in upcoming_events]
+
+    prompt = f"""You are a friendly productivity assistant for a student/developer using a local calendar app.
+
+Last week's events:
+{json.dumps(past_summary, indent=2)}
+
+Upcoming week's events:
+{json.dumps(upcoming_summary, indent=2)}
+
+Write a SHORT weekly review (3-5 sentences max). Include:
+1. One sentence summarising what last week looked like (themes, workload).
+2. One observation — e.g. busiest day, a recurring topic, or if it was light.
+3. One sentence previewing the week ahead with a practical focus tip.
+
+Keep the tone warm and motivating. Do not list every event. Plain text only, no markdown."""
+
+    try:
+        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+        summary = response['message']['content'].strip()
+        return {
+            "summary": summary,
+            "past_count": len(past_events),
+            "upcoming_count": len(upcoming_events),
+        }
+    except Exception as e:
+        logger.warning(f"Weekly review LLM error: {e}")
+        raise HTTPException(status_code=503,
+            detail={"error": {"code": "llm_unavailable", "detail": "Could not generate weekly review."}})
+
+# ==========================================
+# DURATION ANALYTICS ROUTES
+# ==========================================
+
+class ClockPayload(BaseModel):
+    action: str  # "in" | "out"
+
+@app.patch("/events/{event_id}/clock")
+def clock_event(event_id: int, payload: ClockPayload, db: Session = Depends(get_db)):
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "event_not_found", "detail": f"Event {event_id} does not exist."}})
+    if payload.action == "in":
+        event.actual_start = datetime.now().isoformat()
+    elif payload.action == "out":
+        event.actual_end = datetime.now().isoformat()
+    else:
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "invalid_action", "detail": "action must be 'in' or 'out'"}})
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+@app.get("/stats/duration")
+def duration_stats(db: Session = Depends(get_db)):
+    events = db.query(models.Event).filter(models.Event.actual_end != None).all()
+    stats = []
+    for e in events:
+        if not e.actual_start or not e.actual_end:
+            continue
+        planned = (datetime.fromisoformat(e.end_time) -
+                   datetime.fromisoformat(e.start_time)).seconds / 60
+        actual  = (datetime.fromisoformat(e.actual_end) -
+                   datetime.fromisoformat(e.actual_start)).seconds / 60
+        stats.append({
+            "id": e.id, "title": e.title,
+            "calendar_id": e.calendar_id,
+            "planned_minutes": round(planned),
+            "actual_minutes":  round(actual),
+            "delta_minutes":   round(actual - planned),
+        })
+    return {"entries": stats}
+
+# ==========================================
+# STUDY BLOCK AUTO-GENERATOR ROUTES
+# ==========================================
+
+class StudyBlockRequest(BaseModel):
+    subject: str
+    deadline_date: str           # ISO date YYYY-MM-DD
+    calendar_id: int
+    num_sessions: int = 5
+    session_duration_minutes: int = 90
+    preferred_hour: int = 18
+    skip_weekends: bool = True
+
+class StudyBlockPreview(BaseModel):
+    title: str
+    start_time: str
+    end_time: str
+    description: str
+    calendar_id: int
+
+@app.post("/study/generate-preview", response_model=list[StudyBlockPreview])
+def generate_study_preview(req: StudyBlockRequest):
+    deadline = datetime.strptime(req.deadline_date, "%Y-%m-%d")
+    now      = datetime.now()
+    days_avail = (deadline - now).days
+
+    if days_avail <= 0:
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "past_deadline", "detail": "Deadline has already passed."}})
+
+    interval = max(1, days_avail // max(req.num_sessions, 1))
+    cursor   = now.replace(hour=req.preferred_hour, minute=0, second=0, microsecond=0)
+    if cursor <= now:
+        cursor += timedelta(days=1)
+
+    blocks = []
+    for i in range(req.num_sessions):
+        if cursor >= deadline:
+            break
+        if req.skip_weekends and cursor.weekday() >= 5:
+            cursor += timedelta(days=7 - cursor.weekday())
+        if cursor >= deadline:
+            break
+        label = "Final Review" if i == req.num_sessions - 1 else f"Study Session {i + 1}"
+        end_cursor = cursor + timedelta(minutes=req.session_duration_minutes)
+        blocks.append(StudyBlockPreview(
+            title=f"{req.subject} — {label}",
+            start_time=cursor.isoformat(),
+            end_time=end_cursor.isoformat(),
+            description=f"Auto-generated study block. Deadline: {req.deadline_date}",
+            calendar_id=req.calendar_id,
+        ))
+        cursor += timedelta(days=interval)
+
+    return blocks
+
+@app.post("/study/confirm-blocks")
+def confirm_study_blocks(blocks: list[StudyBlockPreview], db: Session = Depends(get_db)):
+    created = []
+    for b in blocks:
+        event = models.Event(**b.model_dump())
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+        created.append(event)
+    return {"created_count": len(created), "events": created}
 
 # ==========================================
 # TRANSCRIPTION ROUTE

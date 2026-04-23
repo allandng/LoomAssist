@@ -4,14 +4,15 @@ __pycache__/
 *$py.class
 backend-api/venv/
 .env
+.pytest_cache/
 
 # OS ignores
 .DS_Store
 Thumbs.db
 
-# Local AI context file
-CLAUDE_CONTEXT.md
-
 # Log files
 *.log
 .last_crash
+
+# SQLite database
+backend-api/loom.sqlite3

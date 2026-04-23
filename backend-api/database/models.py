@@ -38,6 +38,14 @@ class EventBase(SQLModel):
     # L3: Task checklist — JSON string [{"text":"...", "done":false}, ...]
     checklist: Optional[str] = Field(default=None)
 
+    # Duration analytics — actual clock-in/out timestamps
+    actual_start: Optional[str] = Field(default=None)
+    actual_end:   Optional[str] = Field(default=None)
+
+    # Location and travel time
+    location: Optional[str] = Field(default=None)
+    travel_time_minutes: Optional[int] = Field(default=None)
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")
@@ -97,6 +105,10 @@ class Task(SQLModel, table=True):
     is_complete: bool = Field(default=False)
     note: Optional[str] = Field(default=None)
     added_at: Optional[str] = Field(default=None)  # ISO datetime string
+    # v2.0 Kanban fields
+    status: Optional[str] = Field(default="backlog")    # backlog | doing | done
+    priority: Optional[str] = Field(default="low")      # high | med | low
+    due_date: Optional[str] = Field(default=None)       # ISO date string, nullable
 
 class TaskRead(SQLModel):
     id: int
@@ -104,6 +116,9 @@ class TaskRead(SQLModel):
     is_complete: bool
     note: Optional[str]
     added_at: Optional[str]
+    status: Optional[str]
+    priority: Optional[str]
+    due_date: Optional[str]
 
 # --- AVAILABILITY REQUEST MODELS ---
 class AvailabilityRequest(SQLModel, table=True):
@@ -131,3 +146,21 @@ class AvailabilityRequestRead(SQLModel):
     receiver_name: Optional[str]
     created_at: str
     expires_at: str
+
+# --- TIME BLOCK TEMPLATE MODELS ---
+class TimeBlockTemplate(SQLModel, table=True):
+    __tablename__ = "timeblockstemplate"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: str = Field(default="")
+    created_at: str = Field(default="")
+    blocks_json: str = Field(default="[]")
+    # blocks_json shape: [{"title": str, "day_of_week": int (1=Mon…7=Sun),
+    #                       "start_time": "HH:MM", "end_time": "HH:MM", "calendar_id": int}]
+
+class TimeBlockTemplateRead(SQLModel):
+    id: int
+    name: str
+    description: str
+    created_at: str
+    blocks_json: str
