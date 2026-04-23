@@ -1,0 +1,274 @@
+.form {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field { display: flex; flex-direction: column; }
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.row3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.alldayLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding-bottom: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--border-strong);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: background 100ms, border-color 100ms;
+  cursor: pointer;
+}
+
+/* Timeline select */
+.timelineSelect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+  position: relative;
+}
+
+.selectInline {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12.5px;
+  color: var(--text-main);
+  font-family: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+.selectChevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+/* Recurrence */
+.recurBox {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
+.recurBoxActive {
+  border-color: var(--border-strong);
+}
+
+.recurHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.recurIcon { color: var(--text-muted); }
+.recurIconActive { color: var(--accent); }
+
+.recurLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  flex: 1;
+}
+
+.toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 10px;
+  background: var(--border-strong);
+  border: none;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 150ms;
+}
+
+.toggle::after {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: left 150ms;
+}
+
+.toggleOn {
+  background: var(--accent);
+}
+
+.toggleOn::after {
+  left: 14px;
+}
+
+.toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dowRow {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0;
+}
+
+.dowBtn {
+  flex: 1;
+  padding: 6px 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: background 100ms, color 100ms;
+}
+
+.dowBtnOn {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.sublabel {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Checklist */
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+.checkBtn {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.checkInput {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-main);
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+
+.checkRemove {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 80ms;
+}
+
+.checkRow:hover .checkRemove {
+  opacity: 1;
+}
+
+.addItem {
+  font-size: 11.5px;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  margin-top: 4px;
+  text-align: left;
+  padding: 0;
+}
+
+/* Conflict warning */
+.conflictWarn {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(217,119,6,0.08);
+  border-left: 3px solid var(--warning);
+  font-size: 11.5px;
+  color: var(--text-main);
+}
+
+.lockedBanner {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--accent);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.deleteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--error);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+}
+
+.deleteBtn:hover {
+  background: rgba(239,68,68,0.1);
+  border-color: var(--error);
+}

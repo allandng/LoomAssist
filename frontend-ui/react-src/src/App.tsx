@@ -20,6 +20,8 @@ import { UndoProvider } from './contexts/UndoContext';
 import { ModalProvider } from './contexts/ModalContext';
 import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavContext';
 import { NotificationsProvider, useNotifications } from './store/notifications';
+import { ModalRoot } from './components/modals/ModalRoot';
+import { NotifPanel } from './components/NotifPanel';
 
 type Destination = 'calendar' | 'tasks' | 'focus' | 'settings';
 
@@ -43,6 +45,8 @@ function Shell() {
 
   const dest: Destination = PATH_TO_DEST[location.pathname] ?? 'calendar';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
@@ -93,15 +97,18 @@ function Shell() {
           onToday={nav.goToday}
           onNext={nav.goNext}
           unread={unreadCount}
+          onBell={() => setBellOpen(v => !v)}
         />
+        {bellOpen && <NotifPanel onClose={() => setBellOpen(false)} />
         <div className={styles.content}>
           <Routes>
-            <Route path="/calendar"  element={<CalendarPage />} />
+            <Route path="/calendar"  element={<CalendarPage key={reloadKey} />} />
             <Route path="/tasks"     element={<TaskBoardPage />} />
             <Route path="/focus"     element={<FocusPage />} />
             <Route path="/settings"  element={<SettingsPage />} />
             <Route path="*"          element={<Navigate to="/calendar" replace />} />
           </Routes>
+          <ModalRoot onSaved={() => setReloadKey(k => k + 1)} />
         </div>
       </div>
     </div>
