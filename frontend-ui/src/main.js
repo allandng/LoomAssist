@@ -576,13 +576,16 @@ document.addEventListener('DOMContentLoaded', async function() {
         const dest = e.detail.destination;
         localStorage.setItem('loom:destination', dest);
 
-        // Toggle focus sidebar visibility
+        // Toggle sidebar sections by destination
         const focusSec = document.getElementById('focus-sidebar-section');
         const calSec   = document.getElementById('calendar-sidebar-section');
+        const tasksSec = document.getElementById('tasks-sidebar-section');
+        const notCal = dest !== 'calendar';
         if (focusSec) focusSec.classList.toggle('hidden', dest !== 'focus');
-        if (calSec)   calSec.classList.toggle('hidden',   dest === 'focus');
-        document.querySelector('.record-section')?.classList.toggle('hidden', dest === 'focus');
-        document.getElementById('sidebar-filters-section')?.classList.toggle('hidden', dest === 'focus');
+        if (calSec)   calSec.classList.toggle('hidden',   notCal);
+        if (tasksSec) tasksSec.classList.toggle('hidden', dest !== 'tasks');
+        document.querySelector('.record-section')?.classList.toggle('hidden', notCal);
+        document.getElementById('sidebar-filters-section')?.classList.toggle('hidden', notCal);
 
         if (dest === 'focus') {
             // Clear any old interval timers before entering focus
@@ -609,7 +612,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 focusIntervals.forEach(clearInterval);
                 focusIntervals = [];
             }
-            if (dest === 'tasks')    openSidebarTaskboard();
+            if (dest === 'tasks')    renderTaskBoardPage();
             if (dest === 'settings') document.getElementById('settings-modal')?.classList.remove('hidden');
             if (dest === 'calendar') updateSidebarMode('normal');
         }
@@ -2231,6 +2234,157 @@ function openSidebarTaskboard() {
     }
     updateSidebarMode("taskboard");
     loadTasks();
+}
+
+// v2.0 full-page Task Board
+let taskBoardGroupBy = 'timeline'; // timeline | due | priority | status
+let taskBoardShow    = 'all';      // all | incomplete | completed | overdue
+
+function renderTaskBoardPage() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    mainContent.innerHTML = `<div class="taskboard-page" id="taskboard-page"></div>`;
+    _renderTaskBoardContent();
+    _renderTaskBoardSidebar();
+}
+
+function _renderTaskBoardSidebar() {
+    const sbSec = document.getElementById('tasks-sidebar-section');
+    if (!sbSec) return;
+    sbSec.innerHTML = `
+        <div class="sidebar-section">
+            <div class="section-header"><h3>Group By</h3></div>
+            ${['timeline','due','priority','status'].map(g => `
+                <label class="filter-row">
+                    <input type="radio" name="tb-group" value="${g}" ${taskBoardGroupBy===g?'checked':''} style="accent-color:var(--accent);">
+                    <span>${g.charAt(0).toUpperCase()+g.slice(1)}</span>
+                </label>`).join('')}
+        </div>
+        <div class="sidebar-section" style="margin-top:12px;">
+            <div class="section-header"><h3>Show</h3></div>
+            ${['all','incomplete','completed','overdue'].map(s => `
+                <label class="filter-row">
+                    <input type="radio" name="tb-show" value="${s}" ${taskBoardShow===s?'checked':''} style="accent-color:var(--accent);">
+                    <span>${s.charAt(0).toUpperCase()+s.slice(1)}</span>
+                </label>`).join('')}
+        </div>`;
+
+    sbSec.querySelectorAll('input[name="tb-group"]').forEach(r => {
+        r.addEventListener('change', () => { taskBoardGroupBy = r.value; _renderTaskBoardContent(); });
+    });
+    sbSec.querySelectorAll('input[name="tb-show"]').forEach(r => {
+        r.addEventListener('change', () => { taskBoardShow = r.value; _renderTaskBoardContent(); });
+    });
+}
+
+function _renderTaskBoardContent() {
+    const page = document.getElementById('taskboard-page');
+    if (!page) return;
+    page.innerHTML = '';
+
+    const now = new Date();
+    let tasks = [...currentTasks];
+    if (taskBoardShow === 'incomplete') tasks = tasks.filter(t => !t.is_complete);
+    else if (taskBoardShow === 'completed') tasks = tasks.filter(t => t.is_complete);
+    else if (taskBoardShow === 'overdue')  tasks = tasks.filter(t => !t.is_complete && t.due_date && new Date(t.due_date) < now);
+
+    // Build groups
+    const groups = new Map();
+    tasks.forEach(task => {
+        const ev = currentEvents.find(e => e.id === task.event_id);
+        const timeline = ev ? currentTimelines.find(tl => tl.id === ev.calendar_id) : null;
+        let key, label, color;
+        if (taskBoardGroupBy === 'timeline') {
+            key = timeline?.id || '__none__';
+            label = timeline?.name || 'No timeline';
+            color = timeline?.color || 'var(--text-muted)';
+        } else if (taskBoardGroupBy === 'priority') {
+            key = task.priority || 'low';
+            const pColors = { high:'#EF4444', med:'#F59E0B', low:'#4A5568' };
+            label = (task.priority || 'low').charAt(0).toUpperCase() + (task.priority || 'low').slice(1) + ' Priority';
+            color = pColors[task.priority || 'low'];
+        } else if (taskBoardGroupBy === 'status') {
+            key = task.status || 'backlog';
+            const sColors = { backlog:'#7A8FA6', doing:'#6366F1', done:'#10B981' };
+            const sLabels = { backlog:'Backlog', doing:'In Progress', done:'Done' };
+            label = sLabels[task.status || 'backlog'];
+            color = sColors[task.status || 'backlog'];
+        } else { // due
+            const d = task.due_date ? new Date(task.due_date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : 'No due date';
+            key = task.due_date || '__none__';
+            label = d;
+            color = 'var(--text-muted)';
+        }
+        if (!groups.has(key)) groups.set(key, { label, color, tasks: [] });
+        groups.get(key).tasks.push({ task, ev, timeline });
+    });
+
+    if (!groups.size) {
+        page.innerHTML = '<p class="muted-text" style="padding:24px;font-size:0.9rem">No tasks. Open an event and click Add to Task Board.</p>';
+        return;
+    }
+
+    groups.forEach(({ label, color, tasks: groupTasks }) => {
+        const section = document.createElement('div');
+        section.className = 'tb-section';
+        const totalOpen = groupTasks.filter(({task}) => !task.is_complete).length;
+        section.innerHTML = `
+            <div class="tb-section-header">
+                <span class="tb-tl-dot" style="background:${color}"></span>
+                <span class="tb-tl-name">${label}</span>
+                <span class="tb-tl-count">${totalOpen} open · ${groupTasks.length} total</span>
+            </div>
+            <div class="tb-cards-grid"></div>`;
+
+        const grid = section.querySelector('.tb-cards-grid');
+        groupTasks.forEach(({ task, ev, timeline }) => {
+            const tlColor = timeline?.color || 'var(--text-muted)';
+            const pColors = { high:'#EF4444', med:'#F59E0B', low:'#4A5568' };
+            const prio = task.priority || 'low';
+            let checklistBar = '';
+            if (ev?.checklist) {
+                try {
+                    const items = JSON.parse(ev.checklist);
+                    if (items.length) {
+                        const done = items.filter(i => i.done).length;
+                        const pct = Math.round(done / items.length * 100);
+                        checklistBar = `<div class="tb-checklist-bar"><div class="tb-checklist-fill" style="width:${pct}%;background:${tlColor}"></div></div><span class="tb-checklist-ratio">${done}/${items.length}</span>`;
+                    }
+                } catch {}
+            }
+            const isOverdue = !task.is_complete && task.due_date && new Date(task.due_date) < now;
+
+            const card = document.createElement('div');
+            card.className = 'tb-card' + (task.is_complete ? ' tb-card--done' : '');
+            card.innerHTML = `
+                <div class="tb-card-top">
+                    <input type="checkbox" class="tb-cb" ${task.is_complete?'checked':''} style="accent-color:var(--accent)">
+                    <span class="tb-card-title">${ev?.title || `Task #${task.id}`}</span>
+                    <span class="kanban-priority-dot" style="background:${pColors[prio]}" title="Priority: ${prio}"></span>
+                </div>
+                ${ev ? `<span class="tb-event-chip">🗓 ${new Date(ev.start_time).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>` : ''}
+                ${isOverdue ? '<span class="tb-overdue-badge">Overdue</span>' : ''}
+                ${checklistBar ? `<div class="tb-checklist-row">${checklistBar}</div>` : ''}`;
+
+            card.querySelector('.tb-cb')?.addEventListener('change', async () => {
+                const done = card.querySelector('.tb-cb').checked;
+                await fetch(`${API_URL}/tasks/${task.id}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ is_complete: done, status: done?'done':(task.status||'backlog'), note: task.note })
+                });
+                await loadTasks();
+                _renderTaskBoardContent();
+            });
+
+            card.querySelector('.tb-event-chip')?.addEventListener('click', () => {
+                const rawEv = currentEvents.find(e => e.id === task.event_id);
+                if (rawEv) openEventModal(rawEv);
+            });
+
+            grid.appendChild(card);
+        });
+        page.appendChild(section);
+    });
 }
 
 function renderTaskBoard(filter = currentTaskFilter) {
