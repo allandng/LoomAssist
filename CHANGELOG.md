@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.0 — React Frontend (2026-04-23)
+
+### Architecture
+- **Frontend rewritten from scratch**: vanilla JS (4 400 lines, `main.js`) replaced with React 19 + TypeScript + Vite 8.
+- CSS Modules throughout — all design tokens as CSS custom properties on `:root`.
+- React Router v7: four routes (`/calendar`, `/tasks`, `/focus`, `/settings`).
+- State: React built-ins only (useState / useReducer / useContext). No Redux, no Zustand.
+- `src/api.ts`: all backend calls in one typed file. `BASE = 'http://localhost:8000'` hardcoded (desktop-only app, no env-var indirection).
+- `src/types.ts`: TypeScript interfaces matching all five SQLModel tables.
+- `legacy-vanilla` branch preserved on origin as rollback point.
+
+### Calendar
+- FullCalendar installed via npm (was CDN). Event pills rendered via `eventContent` render prop.
+- Recurring events expanded client-side in `lib/eventUtils.ts` (per-day times, skipped dates, recurrence end).
+- Undo/Redo: 50-step `useReducer`-based stack in `UndoContext`; every mutating action pushes an entry. `Ctrl+Z` / `Shift+Z` wired force-through (bypass typing guard).
+- QuickPeek: 150ms debounce, viewport-clamped, renders markdown + @mention highlighting.
+- WellnessToast: amber left-border card, auto-dismissed on X click.
+
+### Modals
+- `ReactDOM.createPortal` — all modals render outside the main tree.
+- `EventEditorModal`: full form (title, start/end/all-day, timeline, reminder, recurrence weekday picker + end date + skip dates, description, checklist add/check/remove), locked-description banner for availability-created events, save-as-template, add/remove task board link, skip-date for recurring occurrences.
+- `AvailabilityModal`: mini calendar, per-date time windows, conflict detection (live check against events), 10s polling loop, copy link, amendment status.
+
+### Notifications
+- `NotificationsProvider`: `useReducer`-based store with auto-dismiss support.
+- `NotifPanel`: portal, dimmed backdrop, tab-trap, Escape close, progress bar with shimmer animation.
+- Logger (`lib/logger.ts`): 200-entry queue, 10s flush, immediate flush on error, `POST /api/logs`.
+
+### Crash Recovery
+- Boot check: `GET /api/logs/crash-flag` → actionable notification with "Export logs" link.
+- `@tauri-apps/api/event` dynamically imported (no-ops in non-Tauri browser dev).
+- `window.onerror` and `window.onunhandledrejection` route to the logger.
+
+### Focus Mode
+- `KanbanBoard`: native HTML5 drag-and-drop across Backlog / In Progress / Done columns.
+- `ListView`: grouped by status, Space key wired via `useShortcuts`.
+- `PomodoroPanel`: SVG ring with 1s linear CSS transition, inline settings (no modal), session history.
+- FocusPage fullscreen toggle (F key + button); Kanban/List toggle persisted to localStorage.
+
+### Task Board
+- `TaskBoardPage`: Group by + Show filters, 2-col task card grid, checklist progress bar tinted in timeline color.
+
 ## v2.0 — UI Overhaul (2026-04-23)
 
 ### Layout
