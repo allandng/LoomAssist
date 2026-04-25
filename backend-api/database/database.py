@@ -50,6 +50,7 @@ def run_migrations():
                 "actual_end":   "TEXT",
                 "location": "TEXT",
                 "travel_time_minutes": "INTEGER",
+                "reminder_source": "TEXT DEFAULT 'none'",
             }
             
             for col_name, col_type in new_columns.items():

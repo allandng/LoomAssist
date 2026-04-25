@@ -63,6 +63,12 @@ export const getDurationStats = (): Promise<{ entries: DurationStat[] }> =>
 export const getWeeklyReview = (weekStart: string): Promise<WeeklyReviewResult> =>
   req('POST', '/ai/weekly-review', { week_start: weekStart });
 
+export const inferReminder = (
+  title: string,
+  description: string | null,
+): Promise<{ minutes: number; rationale: string }> =>
+  req('POST', '/ai/infer-reminder', { title, description });
+
 // ---- Calendars (Timelines) ----
 
 export const listCalendars = (): Promise<Calendar[]> =>

@@ -130,6 +130,9 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   );
   const [calendarId, setCalendarId] = useState(event?.calendar_id ?? timelines[0]?.id ?? 0);
   const [reminder, setReminder]     = useState(event?.reminder_minutes ?? 0);
+  const [reminderSource, setReminderSource] = useState<'user' | 'inferred' | 'none'>(
+    event?.reminder_source === 'inferred' ? 'inferred' : event?.reminder_source === 'user' ? 'user' : 'none'
+  );
   const [location, setLocation]     = useState(event?.location ?? '');
   const [travelTime, setTravelTime] = useState<number>(event?.travel_time_minutes ?? 0);
   const [description, setDescription] = useState(event?.description ?? '');
@@ -202,6 +205,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       is_all_day: allDay,
       calendar_id: calendarId,
       reminder_minutes: reminder,
+      reminder_source: reminderSource,
       location: location || null,
       travel_time_minutes: travelTime || null,
       description,
@@ -386,12 +390,25 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             </div>
           </div>
           <div>
-            <FieldLabel>Reminder</FieldLabel>
+            <FieldLabel>
+              Reminder
+              {reminderSource === 'inferred' && (
+                <span style={{
+                  marginLeft: 6, fontSize: 10, fontWeight: 600,
+                  background: 'var(--accent)', color: '#fff',
+                  borderRadius: 99, padding: '1px 7px', verticalAlign: 'middle',
+                  cursor: 'default',
+                }} title="AI-suggested based on event title">Suggested</span>
+              )}
+            </FieldLabel>
             <div className={styles.timelineSelect}>
               <select
                 className={styles.selectInline}
                 value={reminder}
-                onChange={e => setReminder(Number(e.target.value))}
+                onChange={e => {
+                  setReminder(Number(e.target.value));
+                  setReminderSource('user');
+                }}
               >
                 {REMINDER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>

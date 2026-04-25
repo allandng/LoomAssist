@@ -46,6 +46,9 @@ class EventBase(SQLModel):
     location: Optional[str] = Field(default=None)
     travel_time_minutes: Optional[int] = Field(default=None)
 
+    # Phase 1: Adaptive Reminders — tracks whether reminder was user-set or inferred
+    reminder_source: Optional[str] = Field(default="none")  # "user" | "inferred" | "none"
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")

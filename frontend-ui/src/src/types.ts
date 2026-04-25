@@ -29,6 +29,7 @@ export interface Event {
   actual_end?:   string | null;
   location?: string | null;
   travel_time_minutes?: number | null;
+  reminder_source?: 'user' | 'inferred' | 'none' | null;
 }
 
 export interface EventTemplate {

@@ -280,6 +280,17 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     validate_calendar_exists(event.calendar_id, db)
     validate_event_times(event.start_time, event.end_time)
 
+    if event.reminder_minutes is None:
+        try:
+            inferred = _infer_reminder(event.title, event.description)
+            event.reminder_minutes = inferred["minutes"]
+            event.reminder_source = "inferred"
+        except Exception as e:
+            logger.warning(f"Reminder inference failed, skipping: {e}")
+            event.reminder_source = "none"
+    else:
+        event.reminder_source = "user"
+
     db_event = models.Event.model_validate(event)
     db.add(db_event)
     db.commit()
@@ -304,6 +315,17 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
         )
 
     validate_event_times(event.start_time, event.end_time)
+
+    if event.reminder_minutes is None and event.reminder_source != "user":
+        try:
+            inferred = _infer_reminder(event.title, event.description)
+            event.reminder_minutes = inferred["minutes"]
+            event.reminder_source = "inferred"
+        except Exception as e:
+            logger.warning(f"Reminder inference failed on update, skipping: {e}")
+            event.reminder_source = "none"
+    elif event.reminder_minutes is not None and event.reminder_source not in ("user", "inferred"):
+        event.reminder_source = "user"
 
     for key, value in event.model_dump().items():
         setattr(db_event, key, value)
@@ -1070,6 +1092,51 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
 # ==========================================
 # WEEKLY REVIEW ROUTE
 # ==========================================
+
+# ── Phase 1: Adaptive Reminders ──────────────────────────────────────────────
+
+class InferReminderRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+class InferReminderResponse(BaseModel):
+    minutes: int
+    rationale: str
+
+_REMINDER_ALLOWED = {0, 5, 10, 15, 30, 60, 1440}
+
+def _infer_reminder(title: str, description: Optional[str]) -> dict:
+    """Call Ollama to suggest a reminder lead time. Returns {minutes, rationale}."""
+    desc_part = f" Description: {description}" if description else ""
+    prompt = (
+        f"Given an event titled '{title}'.{desc_part} "
+        "Suggest a reminder lead time in minutes from this fixed list: "
+        "0, 5, 10, 15, 30, 60, 1440. "
+        'Respond ONLY as JSON {"minutes": <int>, "rationale": "<one sentence>"}. '
+        "No markdown, no extra text."
+    )
+    response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+    content = response['message']['content'].strip()
+    match = re.search(r'\{.*?\}', content, re.DOTALL)
+    if not match:
+        return {"minutes": 15, "rationale": "Default reminder"}
+    data = json.loads(match.group(0))
+    minutes = int(data.get("minutes", 15))
+    if minutes not in _REMINDER_ALLOWED:
+        # Snap to nearest allowed value
+        minutes = min(_REMINDER_ALLOWED, key=lambda x: abs(x - minutes))
+    return {"minutes": minutes, "rationale": data.get("rationale", "")}
+
+@app.post("/ai/infer-reminder", response_model=InferReminderResponse)
+def infer_reminder(req: InferReminderRequest):
+    try:
+        result = _infer_reminder(req.title, req.description)
+        return InferReminderResponse(**result)
+    except Exception as e:
+        logger.error(f"infer-reminder error: {e}")
+        return InferReminderResponse(minutes=15, rationale="Default reminder")
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 class WeeklyReviewRequest(BaseModel):
     week_start: str  # ISO datetime — the Monday 00:00:00 of the week to review
