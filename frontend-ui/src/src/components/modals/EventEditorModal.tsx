@@ -11,9 +11,10 @@ import { useNotifications } from '../../store/notifications';
 import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
-  parseDateTime, clockEvent,
+  parseDateTime, clockEvent, resolveConflict,
 } from '../../api';
-import type { Event, Calendar, ChecklistItem } from '../../types';
+import type { Event, Calendar, ChecklistItem, ConflictSuggestion } from '../../types';
+import { SuggestionChip } from '../shared/SuggestionChip';
 import { parseChecklist } from '../../lib/eventUtils';
 
 function formatDT(dtLocal: string): string {
@@ -152,6 +153,8 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const [conflictWarning, setConflictWarning] = useState('');
   const [needsConfirm, setNeedsConfirm] = useState(false);
+  const [suggestions, setSuggestions] = useState<ConflictSuggestion[]>([]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 
   // Duration tracking
   const [actualStart, setActualStart] = useState<string | null>(event?.actual_start ?? null);
@@ -253,12 +256,25 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       const names = conflicts.map(c => `"${c.title}"`).join(', ');
       setConflictWarning(`Overlaps with: ${names}`);
       setNeedsConfirm(true);
+      setSuggestions([]);
+      setSuggestionsOpen(false);
       addNotification({
         type: 'warning',
         title: 'Schedule conflict',
         message: `Overlaps with: ${names}`,
         dismissible: true,
       });
+      // Fetch LLM suggestions asynchronously — never block the save flow
+      const p = buildPayload();
+      resolveConflict({
+        event: { title: p.title, start_time: p.start_time, end_time: p.end_time, calendar_id: p.calendar_id },
+        conflicts,
+      }).then(res => {
+        if (res.suggestions.length) {
+          setSuggestions(res.suggestions);
+          setSuggestionsOpen(true);
+        }
+      }).catch(() => { /* silently ignore */ });
     }
 
     onSaved();
@@ -545,7 +561,50 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           </div>
         )}
 
-        {conflictWarning && <div className={styles.conflictWarn}>{conflictWarning}</div>}
+        {conflictWarning && (
+          <div>
+            <div className={styles.conflictWarn}>{conflictWarning}</div>
+            {suggestionsOpen && suggestions.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  Suggested alternatives
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {suggestions.map((s, i) => (
+                    <SuggestionChip
+                      key={i}
+                      suggestion={s}
+                      onClick={async (sug) => {
+                        const p = buildPayload();
+                        const updated = { ...p, start_time: sug.start, end_time: sug.end };
+                        if (isEdit && event) {
+                          const prev = event;
+                          await updateEvent(event.id, updated);
+                          pushUndo({
+                            label: `Reschedule "${prev.title}"`,
+                            undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
+                            redo: async () => { await updateEvent(event.id, updated); },
+                          });
+                        } else {
+                          const { event: created } = await createEvent(updated);
+                          pushUndo({
+                            label: `Create "${created.title}"`,
+                            undo: async () => { await deleteEvent(created.id); },
+                            redo: async () => {},
+                          });
+                        }
+                        setSuggestionsOpen(false);
+                        setConflictWarning('');
+                        onSaved();
+                        close();
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <ModalFooter>

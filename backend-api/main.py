@@ -980,6 +980,119 @@ def find_free_slots(req: FindFreeRequest, db: Session = Depends(get_db)):
 
     return {"slots": free_slots, "duration_minutes": req.duration_minutes}
 
+
+def _find_free_slots_internal(
+    db: Session,
+    window_start: datetime,
+    window_end: datetime,
+    duration_minutes: int,
+    working_hours_start: int,
+    working_hours_end: int,
+) -> list[dict]:
+    """Shared free-slot finder used by both the public endpoint and conflict resolver."""
+    duration = timedelta(minutes=duration_minutes)
+    events   = db.query(models.Event).all()
+    busy: list[tuple[datetime, datetime]] = []
+    for ev in events:
+        try:
+            ev_s = datetime.fromisoformat(ev.start_time)
+            ev_e = datetime.fromisoformat(ev.end_time)
+        except ValueError:
+            continue
+        if ev_s < window_end and ev_e > window_start:
+            travel = timedelta(minutes=ev.travel_time_minutes or 0)
+            busy.append((ev_s - travel, ev_e))
+    busy.sort()
+
+    free_slots: list[dict] = []
+    cursor = window_start.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
+    if cursor < window_start:
+        cursor = window_start
+    remainder = cursor.minute % 15
+    if remainder:
+        cursor += timedelta(minutes=(15 - remainder))
+    cursor = cursor.replace(second=0, microsecond=0)
+
+    while cursor + duration <= window_end and len(free_slots) < 5:
+        slot_end = cursor + duration
+        if cursor.hour < working_hours_start or slot_end.hour > working_hours_end:
+            cursor += timedelta(minutes=15)
+            continue
+        if not any(b_s < slot_end and b_e > cursor for b_s, b_e in busy):
+            free_slots.append({"start": cursor.isoformat(), "end": slot_end.isoformat()})
+            cursor = slot_end
+        else:
+            cursor += timedelta(minutes=15)
+    return free_slots
+
+
+# ── Phase 3: Smart Conflict Resolution ───────────────────────────────────────
+
+class ConflictResolutionRequest(BaseModel):
+    event: dict              # {title, start_time, end_time, calendar_id}
+    conflicts: list[dict]    # [{id, title}, ...]
+    working_hours_start: int = 9
+    working_hours_end: int = 18
+
+class Suggestion(BaseModel):
+    start: str
+    end: str
+    rationale: str
+
+class ConflictResolutionResponse(BaseModel):
+    suggestions: list[Suggestion]
+
+@app.post("/schedule/resolve-conflict", response_model=ConflictResolutionResponse)
+def resolve_conflict(req: ConflictResolutionRequest, db: Session = Depends(get_db)):
+    try:
+        event_start = datetime.fromisoformat(req.event.get("start_time", ""))
+        event_end   = datetime.fromisoformat(req.event.get("end_time", ""))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail={"error": {"code": "invalid_event_time"}})
+
+    duration_minutes = int((event_end - event_start).total_seconds() / 60)
+    window_start     = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    window_end       = window_start + timedelta(days=14)
+
+    candidates = _find_free_slots_internal(
+        db, window_start, window_end, duration_minutes,
+        req.working_hours_start, req.working_hours_end,
+    )
+
+    if not candidates:
+        return ConflictResolutionResponse(suggestions=[])
+
+    conflict_titles = ", ".join(c.get("title", "?") for c in req.conflicts)
+    event_title     = req.event.get("title", "this event")
+    slots_text      = "\n".join(
+        f'{i+1}. {s["start"]} — {s["end"]}' for i, s in enumerate(candidates[:5])
+    )
+    prompt = (
+        f'Event "{event_title}" conflicts with: {conflict_titles}.\n'
+        f"Pick the best 3 alternatives from these free slots and explain each in one sentence:\n"
+        f"{slots_text}\n"
+        'Respond ONLY as JSON array: [{"start":"ISO","end":"ISO","rationale":"..."},...]. '
+        "No markdown, no extra text. Limit to 3 items."
+    )
+
+    try:
+        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+        content  = response['message']['content'].strip()
+        match    = re.search(r'\[.*\]', content, re.DOTALL)
+        if not match:
+            raise ValueError("no JSON array in response")
+        raw = json.loads(match.group(0))
+        suggestions = [Suggestion(**item) for item in raw[:3] if "start" in item and "end" in item]
+    except Exception as e:
+        logger.warning(f"resolve-conflict LLM error, falling back to top slots: {e}")
+        suggestions = [Suggestion(start=s["start"], end=s["end"], rationale="Available slot")
+                       for s in candidates[:3]]
+
+    return ConflictResolutionResponse(suggestions=suggestions)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 # ==========================================
 # SCHEDULE WELLNESS ANALYSIS (M2)
 # ==========================================

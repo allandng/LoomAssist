@@ -189,3 +189,9 @@ export interface TimeBlockTemplate {
   created_at: string;
   blocks_json: string;  // JSON string — parse to TimeBlockDef[]
 }
+
+export interface ConflictSuggestion {
+  start: string;
+  end: string;
+  rationale: string;
+}

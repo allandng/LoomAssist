@@ -69,6 +69,14 @@ export const inferReminder = (
 ): Promise<{ minutes: number; rationale: string }> =>
   req('POST', '/ai/infer-reminder', { title, description });
 
+export const resolveConflict = (payload: {
+  event: { title: string; start_time: string; end_time: string; calendar_id: number };
+  conflicts: Array<{ id: number; title: string }>;
+  working_hours_start?: number;
+  working_hours_end?: number;
+}): Promise<{ suggestions: import('./types').ConflictSuggestion[] }> =>
+  req('POST', '/schedule/resolve-conflict', payload);
+
 // ---- Calendars (Timelines) ----
 
 export const listCalendars = (): Promise<Calendar[]> =>
