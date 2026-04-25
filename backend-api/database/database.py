@@ -91,6 +91,22 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on timeblockstemplate table: {e}")
 
+        # 5. InboxItem table (Phase 4)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS inboxitem (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    proposed_start TEXT,
+                    proposed_duration INTEGER,
+                    scheduled_event_id INTEGER,
+                    archived INTEGER NOT NULL DEFAULT 0
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on inboxitem table: {e}")
+
     logging.info("Migration check complete.")
 
 def migrate_todo_to_task():

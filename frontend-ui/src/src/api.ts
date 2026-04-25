@@ -15,6 +15,7 @@ import type {
   StudyBlockRequest,
   TimeBlockTemplate,
   TimeBlockDef,
+  InboxItem,
 } from './types';
 
 const BASE = 'http://localhost:8000';
@@ -265,3 +266,27 @@ export const getStudyBlockPreview = (body: StudyBlockRequest): Promise<StudyBloc
 
 export const confirmStudyBlocks = (blocks: StudyBlockPreview[]): Promise<{ created_count: number }> =>
   req('POST', '/study/confirm-blocks', blocks);
+
+// ---- Inbox (Phase 4) ----
+
+export const listInbox = (): Promise<InboxItem[]> =>
+  req('GET', '/inbox');
+
+export const createInboxItem = (text: string): Promise<InboxItem> =>
+  req('POST', '/inbox', { text });
+
+export const proposeInboxItem = (
+  id: number,
+): Promise<{ proposed_start: string | null; proposed_duration: number | null; rationale: string }> =>
+  req('POST', `/inbox/${id}/propose`);
+
+export const scheduleInboxItem = (
+  id: number,
+  start: string,
+  end: string,
+  calendar_id: number,
+): Promise<InboxItem> =>
+  req('POST', `/inbox/${id}/schedule`, { start, end, calendar_id });
+
+export const deleteInboxItem = (id: number): Promise<InboxItem> =>
+  req('DELETE', `/inbox/${id}`);

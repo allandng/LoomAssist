@@ -150,6 +150,25 @@ class AvailabilityRequestRead(SQLModel):
     created_at: str
     expires_at: str
 
+# --- INBOX ITEM MODELS (Phase 4) ---
+class InboxItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    text: str
+    created_at: str                          # ISO datetime
+    proposed_start: Optional[str] = None    # ISO datetime
+    proposed_duration: Optional[int] = None  # minutes
+    scheduled_event_id: Optional[int] = None
+    archived: bool = Field(default=False)
+
+class InboxItemRead(SQLModel):
+    id: int
+    text: str
+    created_at: str
+    proposed_start: Optional[str]
+    proposed_duration: Optional[int]
+    scheduled_event_id: Optional[int]
+    archived: bool
+
 # --- TIME BLOCK TEMPLATE MODELS ---
 class TimeBlockTemplate(SQLModel, table=True):
     __tablename__ = "timeblockstemplate"

@@ -8,13 +8,16 @@ import {
   useLocation,
 } from 'react-router-dom';
 import styles from './App.module.css';
-import { AppDrawer } from './components/shared/AppDrawer';
+import { AppDrawer, type Destination } from './components/shared/AppDrawer';
 import { TopBar } from './components/shared/TopBar';
 import { ContextSidebar } from './components/sidebar/ContextSidebar';
 import { CalendarPage } from './pages/CalendarPage';
 import { TaskBoardPage, TaskBoardSidebarContent } from './pages/TaskBoardPage';
 import { FocusPage, FocusSidebarContent } from './pages/FocusPage';
 import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
+import { InboxPage, InboxSidebarContent } from './pages/InboxPage';
+import { InboxPanel } from './components/inbox/InboxPanel';
+import { listCalendars, listInbox } from './api';
 import { useShortcuts } from './hooks/useShortcuts';
 import { loadKeybinds } from './lib/keybindConfig';
 import { UndoProvider } from './contexts/UndoContext';
@@ -27,13 +30,11 @@ import { NotifPanel } from './components/NotifPanel';
 import { getCrashFlag, exportLogs, getWeeklyReview } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
-type Destination = 'calendar' | 'tasks' | 'focus' | 'settings';
-
 const DEST_TO_PATH: Record<Destination, string> = {
-  calendar: '/calendar', tasks: '/tasks', focus: '/focus', settings: '/settings',
+  calendar: '/calendar', tasks: '/tasks', focus: '/focus', inbox: '/inbox', settings: '/settings',
 };
 const PATH_TO_DEST: Record<string, Destination> = {
-  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/settings': 'settings',
+  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/settings': 'settings',
 };
 
 // Apply saved theme before first render to avoid flash
@@ -56,6 +57,19 @@ function Shell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [reloadKey, setReloadKey] = useState(0);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
+
+  // Inbox panel state (Phase 4)
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
+  const [appTimelines, setAppTimelines] = useState<import('./types').Calendar[]>([]);
+
+  useEffect(() => {
+    listCalendars().then(setAppTimelines).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    listInbox().then(items => setInboxCount(items.length)).catch(() => {});
+  }, [inboxOpen]);
 
   useEffect(() => {
     const onChanged = () => setKeybinds(loadKeybinds());
@@ -144,7 +158,8 @@ function Shell() {
     { key: keybinds.view_agenda.key,    ctrl: keybinds.view_agenda.ctrl,    meta: keybinds.view_agenda.meta,    shift: keybinds.view_agenda.shift,    handler: () => dest === 'calendar' ? nav.setView('Agenda') : undefined },
     { key: keybinds.new_event.key,      ctrl: keybinds.new_event.ctrl,      meta: keybinds.new_event.meta,      shift: keybinds.new_event.shift,      handler: () => openEventEditor() },
     { key: keybinds.today.key,          ctrl: keybinds.today.ctrl,          meta: keybinds.today.meta,          shift: keybinds.today.shift,          handler: () => nav.goToday() },
-  ], [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor]));
+    { key: 'i', ctrl: false, meta: false, shift: false, handler: () => setInboxOpen(o => !o) },
+  ], [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
 
   const topBarKind = (dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
@@ -153,12 +168,13 @@ function Shell() {
 
   return (
     <div className={styles.shell}>
-      <AppDrawer active={dest} onNavigate={goTo} />
+      <AppDrawer active={dest} onNavigate={goTo} inboxCount={inboxCount} />
 
       {showContextSidebar && (
         <ContextSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar}>
           {dest === 'tasks'    && <TaskBoardSidebarContent />}
           {dest === 'focus'    && <FocusSidebarContent />}
+          {dest === 'inbox'    && <InboxSidebarContent />}
           {dest === 'settings' && <SettingsSidebarContent />}
         </ContextSidebar>
       )}
@@ -177,11 +193,13 @@ function Shell() {
           onBell={togglePanel}
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
+        {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
           <Routes>
             <Route path="/calendar"  element={<CalendarPage key={reloadKey} />} />
             <Route path="/tasks"     element={<TaskBoardPage />} />
             <Route path="/focus"     element={<FocusPage />} />
+            <Route path="/inbox"     element={<InboxPage />} />
             <Route path="/settings"  element={<SettingsPage />} />
             <Route path="*"          element={<Navigate to="/calendar" replace />} />
           </Routes>

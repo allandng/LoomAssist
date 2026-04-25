@@ -1659,3 +1659,132 @@ def view_availability(token: str, db: Session = Depends(get_db)):
     html_path = Path(__file__).parent / "availability_receiver.html"
     html = html_path.read_text(encoding="utf-8").replace("{{ token }}", token)
     return HTMLResponse(content=html)
+
+
+# ── Phase 4: Quick-Capture Inbox ─────────────────────────────────────────────
+
+class InboxCreateRequest(BaseModel):
+    text: str
+
+class InboxProposeResponse(BaseModel):
+    proposed_start: Optional[str]
+    proposed_duration: Optional[int]
+    rationale: str
+
+class InboxScheduleRequest(BaseModel):
+    start: str
+    end: str
+    calendar_id: int
+
+@app.get("/inbox", response_model=list[models.InboxItemRead])
+def list_inbox(db: Session = Depends(get_db)):
+    return (
+        db.query(models.InboxItem)
+        .filter(models.InboxItem.archived == False)  # noqa: E712
+        .order_by(models.InboxItem.id.desc())
+        .all()
+    )
+
+@app.post("/inbox", response_model=models.InboxItemRead)
+def create_inbox_item(body: InboxCreateRequest, db: Session = Depends(get_db)):
+    item = models.InboxItem(
+        text=body.text,
+        created_at=datetime.now().isoformat(),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+@app.post("/inbox/{item_id}/propose", response_model=InboxProposeResponse)
+def propose_inbox_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(models.InboxItem).filter(models.InboxItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+
+    # Use find-free to get candidate slots
+    now = datetime.now()
+    window_end = now + timedelta(days=7)
+    candidates = _find_free_slots_internal(db, now, window_end, 60, 9, 18)
+
+    slots_text = "\n".join(f'{i+1}. {s["start"]}' for i, s in enumerate(candidates[:3])) if candidates else "no candidates"
+    prompt = (
+        f'Schedule this task: "{item.text}"\n'
+        f"Available slots (next 7 days, during working hours):\n{slots_text}\n"
+        'Pick the most appropriate slot and estimate duration. '
+        'Respond ONLY as JSON: {"proposed_start":"ISO","proposed_duration":60,"rationale":"one sentence"}. '
+        "No markdown."
+    )
+
+    try:
+        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
+        content  = response['message']['content'].strip()
+        match    = re.search(r'\{.*?\}', content, re.DOTALL)
+        if not match:
+            raise ValueError("no JSON in response")
+        data = json.loads(match.group(0))
+        proposed_start    = data.get("proposed_start") or (candidates[0]["start"] if candidates else None)
+        proposed_duration = int(data.get("proposed_duration") or 60)
+        rationale         = data.get("rationale", "Best available slot")
+    except Exception as e:
+        logger.warning(f"inbox propose LLM error: {e}")
+        proposed_start    = candidates[0]["start"] if candidates else None
+        proposed_duration = 60
+        rationale         = "First available slot"
+
+    item.proposed_start    = proposed_start
+    item.proposed_duration = proposed_duration
+    db.commit()
+    return InboxProposeResponse(
+        proposed_start=proposed_start,
+        proposed_duration=proposed_duration,
+        rationale=rationale,
+    )
+
+@app.post("/inbox/{item_id}/schedule", response_model=models.InboxItemRead)
+def schedule_inbox_item(item_id: int, body: InboxScheduleRequest, db: Session = Depends(get_db)):
+    item = db.query(models.InboxItem).filter(models.InboxItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+
+    validate_calendar_exists(body.calendar_id, db)
+    validate_event_times(body.start, body.end)
+
+    # Infer reminder for the new event
+    try:
+        inferred = _infer_reminder(item.text, None)
+        reminder_minutes = inferred["minutes"]
+        reminder_source  = "inferred"
+    except Exception:
+        reminder_minutes = None
+        reminder_source  = "none"
+
+    db_event = models.Event(
+        title=item.text,
+        start_time=body.start,
+        end_time=body.end,
+        calendar_id=body.calendar_id,
+        reminder_minutes=reminder_minutes,
+        reminder_source=reminder_source,
+    )
+    db.add(db_event)
+    db.commit()
+    db.refresh(db_event)
+
+    item.scheduled_event_id = db_event.id
+    item.archived = True
+    db.commit()
+    db.refresh(item)
+    return item
+
+@app.delete("/inbox/{item_id}", response_model=models.InboxItemRead)
+def delete_inbox_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(models.InboxItem).filter(models.InboxItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    item.archived = True
+    db.commit()
+    db.refresh(item)
+    return item
+
+# ─────────────────────────────────────────────────────────────────────────────

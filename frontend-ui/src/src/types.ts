@@ -195,3 +195,13 @@ export interface ConflictSuggestion {
   end: string;
   rationale: string;
 }
+
+export interface InboxItem {
+  id: number;
+  text: string;
+  created_at: string;
+  proposed_start: string | null;
+  proposed_duration: number | null;
+  scheduled_event_id: number | null;
+  archived: boolean;
+}
