@@ -46,6 +46,34 @@ app = FastAPI(title="Loom Backend API")
 logger = get_logger("main")
 
 
+@app.on_event("startup")
+async def start_subscription_refresher():
+    """Background loop: refresh iCal subscriptions on schedule (Phase 9)."""
+    async def _loop():
+        import asyncio as _asyncio
+        while True:
+            await _asyncio.sleep(60)  # check every minute
+            try:
+                with SessionLocal() as db:
+                    subs = db.query(models.Subscription).filter(models.Subscription.enabled == True).all()  # noqa: E712
+                    for sub in subs:
+                        if not sub.last_synced:
+                            should_refresh = True
+                        else:
+                            try:
+                                last = datetime.fromisoformat(sub.last_synced)
+                                should_refresh = (datetime.now() - last).total_seconds() >= sub.refresh_minutes * 60
+                            except ValueError:
+                                should_refresh = True
+                        if should_refresh:
+                            await _refresh_subscription(sub, db)
+            except Exception as e:
+                logger.error(f"Subscription refresher loop error: {e}")
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_loop())
+
+
 class CrashMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         try:
@@ -1957,6 +1985,137 @@ def view_availability(token: str, db: Session = Depends(get_db)):
     html_path = Path(__file__).parent / "availability_receiver.html"
     html = html_path.read_text(encoding="utf-8").replace("{{ token }}", token)
     return HTMLResponse(content=html)
+
+
+# ── Phase 9: iCal Subscription URLs ──────────────────────────────────────────
+
+import hashlib as _hashlib
+
+class SubscriptionCreate(BaseModel):
+    name: str
+    url: str
+    timeline_id: int
+    refresh_minutes: int = 360
+    enabled: bool = True
+
+def _ical_uid(url: str, uid: str) -> str:
+    """Stable external_uid for subscription events: sub-<url_hash>-<uid>."""
+    url_hash = _hashlib.md5(url.encode()).hexdigest()[:8]
+    return f"sub-{url_hash}-{uid}"
+
+async def _refresh_subscription(sub: models.Subscription, db: Session) -> None:
+    """Fetch + upsert events from a subscription URL. Updates last_synced / last_error."""
+    import httpx as _httpx
+    from icalendar import Calendar as ICalCalendar
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(sub.url)
+            resp.raise_for_status()
+
+        cal = ICalCalendar.from_ical(resp.content)
+        upserted = 0
+        for component in cal.walk():
+            if component.name != "VEVENT":
+                continue
+            uid      = str(component.get("UID", ""))
+            summary  = str(component.get("SUMMARY", "Imported Event"))
+            dtstart  = component.get("DTSTART")
+            dtend    = component.get("DTEND") or component.get("DTSTART")
+            if not dtstart:
+                continue
+            try:
+                start_dt = dtstart.dt
+                end_dt   = dtend.dt
+                if hasattr(start_dt, "isoformat"):
+                    start_iso = start_dt.isoformat()
+                    end_iso   = end_dt.isoformat()
+                else:
+                    # all-day date
+                    from datetime import datetime as _dt
+                    start_iso = _dt.combine(start_dt, _dt.min.time()).isoformat()
+                    end_iso   = _dt.combine(end_dt,   _dt.min.time()).isoformat()
+            except Exception:
+                continue
+
+            ext_uid = _ical_uid(sub.url, uid or summary + start_iso)
+            existing = db.query(models.Event).filter(models.Event.external_uid == ext_uid).first()
+            if existing:
+                existing.title      = summary
+                existing.start_time = start_iso
+                existing.end_time   = end_iso
+            else:
+                ev = models.Event(
+                    title=summary,
+                    start_time=start_iso,
+                    end_time=end_iso,
+                    calendar_id=sub.timeline_id,
+                    external_uid=ext_uid,
+                    reminder_source="none",
+                )
+                db.add(ev)
+            upserted += 1
+
+        db.commit()
+        sub.last_synced = datetime.now().isoformat()
+        sub.last_error  = None
+        db.commit()
+        logger.info(f"Subscription {sub.id} synced: {upserted} events")
+    except Exception as e:
+        sub.last_error  = str(e)[:500]
+        sub.last_synced = datetime.now().isoformat()
+        try:
+            db.commit()
+        except Exception:
+            pass
+        logger.warning(f"Subscription {sub.id} sync error: {e}")
+
+
+@app.get("/subscriptions", response_model=list[models.SubscriptionRead])
+def list_subscriptions(db: Session = Depends(get_db)):
+    return db.query(models.Subscription).all()
+
+@app.post("/subscriptions", response_model=models.SubscriptionRead)
+def create_subscription(body: SubscriptionCreate, db: Session = Depends(get_db)):
+    sub = models.Subscription(**body.model_dump())
+    db.add(sub)
+    db.commit()
+    db.refresh(sub)
+    return sub
+
+@app.put("/subscriptions/{sub_id}", response_model=models.SubscriptionRead)
+def update_subscription(sub_id: int, body: SubscriptionCreate, db: Session = Depends(get_db)):
+    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    for k, v in body.model_dump().items():
+        setattr(sub, k, v)
+    db.commit()
+    db.refresh(sub)
+    return sub
+
+@app.delete("/subscriptions/{sub_id}")
+def delete_subscription(sub_id: int, db: Session = Depends(get_db)):
+    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    # Delete events from this feed (keyed by external_uid prefix)
+    url_hash = _hashlib.md5(sub.url.encode()).hexdigest()[:8]
+    prefix   = f"sub-{url_hash}-"
+    db.query(models.Event).filter(models.Event.external_uid.like(f"{prefix}%")).delete(synchronize_session=False)
+    db.delete(sub)
+    db.commit()
+    return {"status": "deleted"}
+
+@app.post("/subscriptions/{sub_id}/refresh", response_model=models.SubscriptionRead)
+async def refresh_subscription(sub_id: int, db: Session = Depends(get_db)):
+    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    await _refresh_subscription(sub, db)
+    db.refresh(sub)
+    return sub
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Phase 8: Course Concept ──────────────────────────────────────────────────

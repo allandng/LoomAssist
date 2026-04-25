@@ -310,6 +310,23 @@ export const deleteInboxItem = (id: number): Promise<InboxItem> =>
 
 // ---- Autopilot (Phase 7) ----
 
+// ---- Subscriptions (Phase 9) ----
+
+export const listSubscriptions = (): Promise<import('./types').Subscription[]> =>
+  req('GET', '/subscriptions');
+
+export const createSubscription = (payload: Omit<import('./types').Subscription, 'id' | 'last_synced' | 'last_error'>): Promise<import('./types').Subscription> =>
+  req('POST', '/subscriptions', payload);
+
+export const updateSubscription = (id: number, payload: Omit<import('./types').Subscription, 'id' | 'last_synced' | 'last_error'>): Promise<import('./types').Subscription> =>
+  req('PUT', `/subscriptions/${id}`, payload);
+
+export const deleteSubscription = (id: number): Promise<void> =>
+  req('DELETE', `/subscriptions/${id}`);
+
+export const refreshSubscription = (id: number): Promise<import('./types').Subscription> =>
+  req('POST', `/subscriptions/${id}/refresh`);
+
 // ---- Courses + Assignments (Phase 8) ----
 
 export const listCourses = (): Promise<import('./types').Course[]> =>

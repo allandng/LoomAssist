@@ -56,6 +56,17 @@ export interface Task {
   deadline?: string | null;
 }
 
+export interface Subscription {
+  id: number;
+  name: string;
+  url: string;
+  timeline_id: number;
+  refresh_minutes: number;
+  last_synced: string | null;
+  last_error: string | null;
+  enabled: boolean;
+}
+
 export interface GradeWeight {
   name: string;
   weight: number;

@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview, reindexSearch } from '../api';
+import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview, reindexSearch,
+  listSubscriptions, createSubscription, deleteSubscription, refreshSubscription,
+  listCalendars as listCalendarsForSubs,
+} from '../api';
+import type { Subscription, Calendar as CalendarType } from '../types';
 import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
 import { lastMonday } from '../lib/eventUtils';
 import { useModal } from '../contexts/ModalContext';
@@ -29,6 +33,52 @@ export function SettingsPage() {
     document.body.classList.toggle('light-mode', theme === 'light');
     localStorage.setItem('loom-theme', theme);
   }, [theme]);
+
+  // ---- Subscriptions (Phase 9) ----
+  const [subs, setSubs]           = useState<Subscription[]>([]);
+  const [subTimelines, setSubTLs] = useState<CalendarType[]>([]);
+  const [newSubName, setNewSubName] = useState('');
+  const [newSubUrl, setNewSubUrl]   = useState('');
+  const [newSubTlId, setNewSubTlId] = useState<number | null>(null);
+  const [newSubMin, setNewSubMin]   = useState(360);
+  const [addingSub, setAddingSub]   = useState(false);
+
+  const loadSubs = useCallback(() => { listSubscriptions().then(setSubs).catch(() => {}); }, []);
+  useEffect(() => {
+    loadSubs();
+    listCalendarsForSubs().then(cs => { setSubTLs(cs); if (cs[0]) setNewSubTlId(cs[0].id); }).catch(() => {});
+  }, [loadSubs]);
+
+  async function handleAddSub() {
+    if (!newSubUrl.trim() || !newSubTlId) return;
+    await createSubscription({ name: newSubName.trim() || newSubUrl.trim(), url: newSubUrl.trim(), timeline_id: newSubTlId, refresh_minutes: newSubMin, enabled: true });
+    setNewSubName(''); setNewSubUrl(''); setAddingSub(false);
+    loadSubs();
+  }
+
+  async function handleDeleteSub(id: number) {
+    await deleteSubscription(id);
+    loadSubs();
+  }
+
+  async function handleRefreshSub(id: number) {
+    try {
+      await refreshSubscription(id);
+      addNotification({ type: 'success', title: 'Refreshed', autoRemoveMs: 3000 });
+      loadSubs();
+    } catch {
+      addNotification({ type: 'error', title: 'Refresh failed' });
+    }
+  }
+
+  function subStatus(sub: Subscription): string {
+    if (sub.last_error) return `Error: ${sub.last_error.slice(0, 60)}`;
+    if (sub.last_synced) {
+      const mins = Math.round((Date.now() - new Date(sub.last_synced).getTime()) / 60_000);
+      return `Synced ${mins < 1 ? 'just now' : `${mins} min ago`}`;
+    }
+    return 'Never synced';
+  }
 
   // ---- Crash reports ----
   const [crashReports, setCrashReports] = useState<boolean>(
@@ -222,6 +272,49 @@ export function SettingsPage() {
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
         </label>
+      </section>
+
+      {/* Subscriptions */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>
+          iCal Subscriptions
+          <button onClick={() => setAddingSub(a => !a)} style={{ marginLeft: 10, fontSize: 11, padding: '2px 8px' }} className="loom-btn-ghost">
+            {addingSub ? 'Cancel' : '+ Add'}
+          </button>
+        </h2>
+
+        {addingSub && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <input className="loom-field" placeholder="Name" value={newSubName} onChange={e => setNewSubName(e.target.value)} style={{ fontSize: 12 }} />
+            <input className="loom-field" placeholder="URL (https://…)" value={newSubUrl} onChange={e => setNewSubUrl(e.target.value)} style={{ fontSize: 12 }} />
+            <select className="loom-field" value={newSubTlId ?? ''} onChange={e => setNewSubTlId(Number(e.target.value))} style={{ fontSize: 12 }}>
+              {subTimelines.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+              Refresh every
+              <input type="number" min={5} className="loom-field" value={newSubMin} onChange={e => setNewSubMin(Number(e.target.value))} style={{ width: 70, fontSize: 12 }} />
+              minutes
+            </div>
+            <button className="loom-btn-primary" onClick={handleAddSub} style={{ alignSelf: 'flex-start', fontSize: 12 }}>Subscribe</button>
+          </div>
+        )}
+
+        {subs.length === 0 && !addingSub && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No subscriptions. Add a URL to a public .ics calendar.</div>
+        )}
+
+        {subs.map(sub => (
+          <div key={sub.id} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-main)' }}>{sub.name}</div>
+              <div style={{ fontSize: 11, color: sub.last_error ? 'var(--error)' : 'var(--text-muted)' }}>{subStatus(sub)}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="loom-btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => handleRefreshSub(sub.id)}>Refresh</button>
+              <button className="loom-btn-ghost" style={{ fontSize: 11, padding: '2px 8px', color: 'var(--error)' }} onClick={() => handleDeleteSub(sub.id)}>Delete</button>
+            </div>
+          </div>
+        ))}
       </section>
 
       {/* Search */}

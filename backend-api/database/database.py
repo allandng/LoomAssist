@@ -91,6 +91,23 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on timeblockstemplate table: {e}")
 
+        # Phase 9: Subscription table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS subscription (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    timeline_id INTEGER NOT NULL,
+                    refresh_minutes INTEGER NOT NULL DEFAULT 360,
+                    last_synced TEXT,
+                    last_error TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on subscription table: {e}")
+
         # Phase 8: Course + Assignment tables
         try:
             conn.execute(text("""

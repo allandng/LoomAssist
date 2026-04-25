@@ -155,6 +155,27 @@ class AvailabilityRequestRead(SQLModel):
     created_at: str
     expires_at: str
 
+# --- SUBSCRIPTION MODELS (Phase 9) ---
+class Subscription(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    url: str
+    timeline_id: int
+    refresh_minutes: int = Field(default=360)
+    last_synced: Optional[str] = None
+    last_error: Optional[str] = None
+    enabled: bool = Field(default=True)
+
+class SubscriptionRead(SQLModel):
+    id: int
+    name: str
+    url: str
+    timeline_id: int
+    refresh_minutes: int
+    last_synced: Optional[str]
+    last_error: Optional[str]
+    enabled: bool
+
 # --- COURSE MODELS (Phase 8) ---
 class Course(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
