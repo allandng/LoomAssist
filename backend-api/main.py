@@ -1143,8 +1143,14 @@ def _find_free_slots_internal(
 
     while cursor + duration <= window_end and len(free_slots) < 5:
         slot_end = cursor + duration
-        if cursor.hour < working_hours_start or slot_end.hour > working_hours_end:
-            cursor += timedelta(minutes=15)
+        day_end = cursor.replace(hour=working_hours_end, minute=0, second=0, microsecond=0)
+        if cursor.hour < working_hours_start:
+            cursor = cursor.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
+            continue
+        if cursor >= day_end or slot_end > day_end:
+            # Past working hours — jump to next day's start
+            next_day = cursor + timedelta(days=1)
+            cursor = next_day.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
             continue
         if not any(b_s < slot_end and b_e > cursor for b_s, b_e in busy):
             free_slots.append({"start": cursor.isoformat(), "end": slot_end.isoformat()})
@@ -1152,6 +1158,117 @@ def _find_free_slots_internal(
         else:
             cursor += timedelta(minutes=15)
     return free_slots
+
+
+# ── Phase 7: Time-Blocking Autopilot ─────────────────────────────────────────
+
+_PRIORITY_ORDER = {"high": 0, "med": 1, "low": 2}
+
+class AutopilotRequest(BaseModel):
+    window_start: str
+    window_end: str
+    working_hours_start: int = 9
+    working_hours_end: int = 18
+
+class AutopilotProposal(BaseModel):
+    task_id: int
+    task_title: str
+    start: str
+    end: str
+    rationale: str
+
+class AutopilotOverflow(BaseModel):
+    task_id: int
+    task_title: str
+    reason: str
+
+class AutopilotResponse(BaseModel):
+    proposals: list[AutopilotProposal]
+    overflow: list[AutopilotOverflow]
+
+@app.post("/schedule/autopilot", response_model=AutopilotResponse)
+def run_autopilot(req: AutopilotRequest, db: Session = Depends(get_db)):
+    try:
+        window_start = datetime.fromisoformat(req.window_start)
+        window_end   = datetime.fromisoformat(req.window_end)
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"error": {"code": "invalid_window"}})
+
+    # Tasks with estimated_minutes, not complete, sorted by deadline then priority
+    tasks = (
+        db.query(models.Task)
+        .filter(models.Task.estimated_minutes != None, models.Task.is_complete == False)  # noqa: E711
+        .all()
+    )
+    tasks.sort(key=lambda t: (
+        t.deadline or "9999-12-31",
+        _PRIORITY_ORDER.get(t.priority or "low", 2),
+    ))
+
+    proposals: list[AutopilotProposal] = []
+    overflow:  list[AutopilotOverflow]  = []
+
+    # Local busy list — includes proposals already made (so tasks don't overlap each other)
+    local_busy: list[tuple[datetime, datetime]] = []
+
+    for task in tasks:
+        dur = task.estimated_minutes or 60
+
+        # Build busy list from DB events + already-proposed slots
+        db_events = db.query(models.Event).all()
+        busy: list[tuple[datetime, datetime]] = []
+        for ev in db_events:
+            try:
+                ev_s = datetime.fromisoformat(ev.start_time)
+                ev_e = datetime.fromisoformat(ev.end_time)
+            except ValueError:
+                continue
+            if ev_s < window_end and ev_e > window_start:
+                busy.append((ev_s, ev_e))
+        busy.extend(local_busy)
+        busy.sort()
+
+        slots = _find_free_slots_internal(
+            db, window_start, window_end, dur,
+            req.working_hours_start, req.working_hours_end,
+        )
+        # Override busy list: _find_free_slots_internal queries the DB; we need to
+        # also exclude local_busy — re-filter its results manually
+        valid_slots = []
+        duration_td = timedelta(minutes=dur)
+        for s in slots:
+            slot_start = datetime.fromisoformat(s["start"])
+            slot_end   = slot_start + duration_td
+            if not any(b_s < slot_end and b_e > slot_start for b_s, b_e in local_busy):
+                valid_slots.append(s)
+
+        if not valid_slots:
+            reason = "no free slot found in window"
+            if task.deadline and datetime.fromisoformat(task.deadline + "T23:59:59") < window_end:
+                reason = f"cannot fit before deadline {task.deadline}"
+            overflow.append(AutopilotOverflow(
+                task_id=task.id,
+                task_title=task.note or f"Task {task.id}",
+                reason=reason,
+            ))
+            continue
+
+        chosen = valid_slots[0]
+        chosen_start = datetime.fromisoformat(chosen["start"])
+        chosen_end   = datetime.fromisoformat(chosen["end"])
+        local_busy.append((chosen_start, chosen_end))
+
+        proposals.append(AutopilotProposal(
+            task_id=task.id,
+            task_title=task.note or f"Task {task.id}",
+            start=chosen["start"],
+            end=chosen["end"],
+            rationale=f"Earliest free {dur}-min slot",
+        ))
+
+    return AutopilotResponse(proposals=proposals, overflow=overflow)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Phase 3: Smart Conflict Resolution ───────────────────────────────────────
@@ -1271,6 +1388,11 @@ def analyze_schedule(request: ScheduleAnalyzeRequest):
 class TaskCreate(BaseModel):
     event_id: int
     note: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    is_complete: bool = False
+    estimated_minutes: Optional[int] = None
+    deadline: Optional[str] = None
 
 class TaskUpdate(BaseModel):
     is_complete: bool
@@ -1278,6 +1400,8 @@ class TaskUpdate(BaseModel):
     status: Optional[str] = None    # backlog | doing | done
     priority: Optional[str] = None  # high | med | low
     due_date: Optional[str] = None  # ISO date string
+    estimated_minutes: Optional[int] = None
+    deadline: Optional[str] = None
 
 @app.post("/tasks/", response_model=models.TaskRead)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
@@ -1289,8 +1413,12 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
         db_task = models.Task(
             event_id=task.event_id,
             note=task.note,
-            is_complete=False,
-            added_at=datetime.now().isoformat()
+            is_complete=task.is_complete,
+            status=task.status or "backlog",
+            priority=task.priority or "low",
+            estimated_minutes=task.estimated_minutes,
+            deadline=task.deadline,
+            added_at=datetime.now().isoformat(),
         )
         db.add(db_task)
         db.commit()
@@ -1313,9 +1441,11 @@ def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
             detail={"error": {"code": "task_not_found", "detail": f"Task {task_id} does not exist."}})
     db_task.is_complete = task.is_complete
     db_task.note = task.note
-    if task.status   is not None: db_task.status   = task.status
-    if task.priority is not None: db_task.priority = task.priority
-    if task.due_date is not None: db_task.due_date = task.due_date
+    if task.status             is not None: db_task.status             = task.status
+    if task.priority           is not None: db_task.priority           = task.priority
+    if task.due_date           is not None: db_task.due_date           = task.due_date
+    if task.estimated_minutes  is not None: db_task.estimated_minutes  = task.estimated_minutes
+    if task.deadline           is not None: db_task.deadline           = task.deadline
     db.commit()
     db.refresh(db_task)
     return db_task

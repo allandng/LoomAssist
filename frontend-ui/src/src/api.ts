@@ -306,3 +306,16 @@ export const scheduleInboxItem = (
 
 export const deleteInboxItem = (id: number): Promise<InboxItem> =>
   req('DELETE', `/inbox/${id}`);
+
+// ---- Autopilot (Phase 7) ----
+
+export const runAutopilot = (payload: {
+  window_start: string;
+  window_end: string;
+  working_hours_start?: number;
+  working_hours_end?: number;
+}): Promise<{
+  proposals: import('./types').AutopilotProposal[];
+  overflow: import('./types').AutopilotOverflow[];
+}> =>
+  req('POST', '/schedule/autopilot', payload);

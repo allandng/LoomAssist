@@ -91,6 +91,21 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on timeblockstemplate table: {e}")
 
+        # Phase 7: autopilot fields on Task
+        try:
+            result = conn.execute(text("PRAGMA table_info(task)")).fetchall()
+            task_cols = [row[1] for row in result]
+            autopilot_cols = {
+                "estimated_minutes": "INTEGER",
+                "deadline": "VARCHAR",
+            }
+            for col_name, col_type in autopilot_cols.items():
+                if col_name not in task_cols:
+                    conn.execute(text(f"ALTER TABLE task ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to task table.")
+        except Exception as e:
+            logging.error(f"Migration error on task (autopilot cols): {e}")
+
         # 5. InboxItem table (Phase 4)
         try:
             conn.execute(text("""

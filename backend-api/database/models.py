@@ -112,6 +112,9 @@ class Task(SQLModel, table=True):
     status: Optional[str] = Field(default="backlog")    # backlog | doing | done
     priority: Optional[str] = Field(default="low")      # high | med | low
     due_date: Optional[str] = Field(default=None)       # ISO date string, nullable
+    # Phase 7: Time-Blocking Autopilot
+    estimated_minutes: Optional[int] = Field(default=None)
+    deadline: Optional[str] = Field(default=None)       # ISO date string, nullable
 
 class TaskRead(SQLModel):
     id: int
@@ -122,6 +125,8 @@ class TaskRead(SQLModel):
     status: Optional[str]
     priority: Optional[str]
     due_date: Optional[str]
+    estimated_minutes: Optional[int]
+    deadline: Optional[str]
 
 # --- AVAILABILITY REQUEST MODELS ---
 class AvailabilityRequest(SQLModel, table=True):

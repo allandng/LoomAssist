@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
-import type { Event, TimeBlockDef } from '../types';
+import type { Event, TimeBlockDef, AutopilotProposal, AutopilotOverflow, Calendar } from '../types';
 
 type ModalName =
   | 'event-editor'
@@ -13,6 +13,7 @@ type ModalName =
   | 'weekly-review'
   | 'study-block'
   | 'time-block-template'
+  | 'autopilot-review'
   | null;
 
 interface ModalState {
@@ -33,6 +34,7 @@ interface ModalContextValue {
   openWeeklyReview: (summary: string, weekStart: string) => void;
   openStudyBlock: (deadlineEvent: Event, subject: string) => void;
   openTimeBlockTemplate: (prefillBlocks?: TimeBlockDef[]) => void;
+  openAutopilotReview: (proposals: AutopilotProposal[], overflow: AutopilotOverflow[], timelines: Calendar[], onApplied: () => void) => void;
   close: () => void;
 }
 
@@ -60,6 +62,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     openWeeklyReview:         (summary, weekStart) => open('weekly-review', { summary, weekStart }),
     openStudyBlock:           (deadlineEvent, subject) => open('study-block', { deadlineEvent, subject }),
     openTimeBlockTemplate:    (prefillBlocks) => open('time-block-template', { prefillBlocks: prefillBlocks ?? [] }),
+    openAutopilotReview:      (proposals, overflow, timelines, onApplied) => open('autopilot-review', { proposals, overflow, timelines, onApplied }),
     close,
   }), [modal, open, close]);
 

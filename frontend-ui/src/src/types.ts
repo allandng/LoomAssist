@@ -52,6 +52,22 @@ export interface Task {
   status: 'backlog' | 'doing' | 'done';
   priority: 'high' | 'med' | 'low';
   due_date: string;   // ISO date, nullable
+  estimated_minutes?: number | null;
+  deadline?: string | null;
+}
+
+export interface AutopilotProposal {
+  task_id: number;
+  task_title: string;
+  start: string;
+  end: string;
+  rationale: string;
+}
+
+export interface AutopilotOverflow {
+  task_id: number;
+  task_title: string;
+  reason: string;
 }
 
 export interface DurationStat {

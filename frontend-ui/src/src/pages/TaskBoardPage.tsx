@@ -3,10 +3,12 @@ import styles from './TaskBoardPage.module.css';
 import { Icon, Icons } from '../components/shared/Icon';
 import { TLDot } from '../components/shared/TLDot';
 import { SectionLabel } from '../components/shared/SectionLabel';
-import { listTasks, listCalendars, listEvents, updateTask, deleteTask } from '../api';
+import { listTasks, listCalendars, listEvents, updateTask, deleteTask, runAutopilot } from '../api';
 import { DensityHeatmap } from '../components/shared/DensityHeatmap';
 import type { Task, Calendar, Event } from '../types';
 import { parseChecklist } from '../lib/eventUtils';
+import { useModal } from '../contexts/ModalContext';
+import { useNotifications } from '../store/notifications';
 
 type GroupBy = 'timeline' | 'due' | 'priority' | 'status';
 type ShowFilter = 'all' | 'incomplete' | 'completed' | 'overdue';
@@ -25,8 +27,11 @@ interface TaskCardProps {
 }
 
 function TaskCard({ task, event, timeline: _timeline, activeTaskId, onToggle }: TaskCardProps) {
-  const isActive = task.id === activeTaskId;
+  const isActive  = task.id === activeTaskId;
   const isOverdue = task.due_date ? task.due_date < new Date().toISOString().split('T')[0] && !task.is_complete : false;
+  const [editEst, setEditEst] = useState(false);
+  const [estVal, setEstVal]   = useState(String(task.estimated_minutes ?? ''));
+  const [dlVal, setDlVal]     = useState(task.deadline ?? '');
   const checklist = parseChecklist(event?.checklist ?? '');
   const done = checklist.filter(c => c.done).length;
   const tlColor = _timeline?.color ?? 'var(--text-dim)';
@@ -69,17 +74,69 @@ function TaskCard({ task, event, timeline: _timeline, activeTaskId, onToggle }: 
           </div>
         </div>
       )}
+
+      {/* Autopilot fields */}
+      <div style={{ display: 'flex', gap: 6, marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+        {editEst ? (
+          <>
+            <input
+              type="number" min={1} placeholder="Est. min"
+              value={estVal}
+              onChange={e => setEstVal(e.target.value)}
+              onBlur={() => { updateTask(task.id, { estimated_minutes: estVal ? Number(estVal) : undefined }); setEditEst(false); }}
+              style={{ width: 70, fontSize: 11, padding: '1px 4px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-main)' }}
+              autoFocus
+            />
+            <input
+              type="date"
+              value={dlVal}
+              onChange={e => setDlVal(e.target.value)}
+              onBlur={() => { updateTask(task.id, { deadline: dlVal || undefined }); setEditEst(false); }}
+              style={{ fontSize: 11, padding: '1px 4px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-main)' }}
+            />
+          </>
+        ) : (
+          <button
+            onClick={() => setEditEst(true)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 11, padding: 0 }}
+            title="Set estimated time and deadline for autopilot"
+          >
+            {task.estimated_minutes ? `⏱ ${task.estimated_minutes}m` : '+ est.'}
+            {task.deadline ? ` · 📅 ${task.deadline}` : ''}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
 export function TaskBoardPage() {
+  const { openAutopilotReview } = useModal();
+  const { addNotification } = useNotifications();
   const [tasks, setTasks]         = useState<Task[]>([]);
   const [timelines, setTimelines] = useState<Calendar[]>([]);
   const [events, setEvents]       = useState<Event[]>([]);
   const [groupBy, setGroupBy]     = useState<GroupBy>('timeline');
   const [showFilter, setShowFilter] = useState<ShowFilter>('all');
   const [activeTaskId] = useState<number | null>(null);
+  const [planningWeek, setPlanningWeek] = useState(false);
+
+  async function handlePlanMyWeek() {
+    setPlanningWeek(true);
+    try {
+      const now       = new Date();
+      const weekEnd   = new Date(now.getTime() + 7 * 86_400_000);
+      const res = await runAutopilot({
+        window_start: now.toISOString(),
+        window_end:   weekEnd.toISOString(),
+      });
+      openAutopilotReview(res.proposals, res.overflow, timelines, loadData);
+    } catch {
+      addNotification({ type: 'error', title: 'Autopilot failed', message: 'Could not generate proposals.' });
+    } finally {
+      setPlanningWeek(false);
+    }
+  }
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -162,7 +219,18 @@ export function TaskBoardPage() {
     <div className={styles.page}>
       {/* Sidebar */}
       <div className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>Task Board</div>
+        <div className={styles.sidebarHeader} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Task Board</span>
+          <button
+            className="loom-btn-ghost"
+            style={{ fontSize: 11, padding: '3px 8px' }}
+            onClick={handlePlanMyWeek}
+            disabled={planningWeek}
+            title="Auto-schedule tasks with estimated durations"
+          >
+            {planningWeek ? '…' : 'Plan week'}
+          </button>
+        </div>
         <div className={styles.sidebarScroll}>
           <SectionLabel>Group by</SectionLabel>
           <div className={styles.groupList}>

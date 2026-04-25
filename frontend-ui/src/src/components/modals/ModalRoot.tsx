@@ -12,8 +12,9 @@ import { CounterProposalModal } from './CounterProposalModal';
 import { WeeklyReviewModal } from './WeeklyReviewModal';
 import { StudyBlockModal } from './StudyBlockModal';
 import { TimeBlockTemplateModal } from './TimeBlockTemplateModal';
+import { AutopilotReviewModal } from './AutopilotReviewModal';
 import { listCalendars } from '../../api';
-import type { Calendar, Event, TimeBlockDef } from '../../types';
+import type { Calendar, Event, TimeBlockDef, AutopilotProposal, AutopilotOverflow } from '../../types';
 
 export function ModalRoot({ onSaved }: { onSaved: () => void }) {
   const { modal } = useModal();
@@ -67,6 +68,15 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           prefillBlocks={(modal.props.prefillBlocks as TimeBlockDef[]) ?? []}
           timelines={timelines}
           onSaved={onSaved}
+        />
+      );
+    case 'autopilot-review':
+      return (
+        <AutopilotReviewModal
+          proposals={(modal.props.proposals as AutopilotProposal[]) ?? []}
+          overflow={(modal.props.overflow as AutopilotOverflow[]) ?? []}
+          timelines={(modal.props.timelines as Calendar[]) ?? timelines}
+          onApplied={modal.props.onApplied as () => void}
         />
       );
     default:
