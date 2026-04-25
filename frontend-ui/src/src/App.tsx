@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -27,7 +27,7 @@ import { useModal } from './contexts/ModalContext';
 import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { NotifPanel } from './components/NotifPanel';
-import { getCrashFlag, exportLogs, getWeeklyReview } from './api';
+import { getCrashFlag, exportLogs, getWeeklyReview, transcribeAudio, applyVoiceIntent } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
@@ -70,6 +70,71 @@ function Shell() {
   useEffect(() => {
     listInbox().then(items => setInboxCount(items.length)).catch(() => {});
   }, [inboxOpen]);
+
+  // Voice intent handler (Phase 5)
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef   = useRef<Blob[]>([]);
+  const [micActive, setMicActive] = useState(false);
+
+  const handleMic = useCallback(async () => {
+    if (micActive && recorderRef.current) {
+      recorderRef.current.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        setMicActive(false);
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        try {
+          const res = await transcribeAudio(blob);
+          const results: unknown[] = (res as { execution_results?: unknown[] }).execution_results ?? [];
+          for (const r of results) {
+            const result = r as Record<string, unknown>;
+            const action = result.action as string | undefined;
+            if (!action || action === 'create_event' || action === 'parse_error') continue;
+            if (result.status === 'pending_confirm') {
+              const ev = result.resolved_event as Record<string, string>;
+              const change = result.proposed_change as Record<string, unknown>;
+              const label = action === 'cancel_event'
+                ? `Delete "${ev.title}"?`
+                : action === 'move_event'
+                  ? `Move "${ev.title}" to ${new Date(change.start_time as string).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}?`
+                  : `Resize "${ev.title}" to end ${new Date(change.end_time as string).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}?`;
+              addNotification({
+                type: 'warning',
+                title: label,
+                message: '',
+                actionable: true,
+                actionLabel: 'Confirm',
+                actionFn: async () => {
+                  await applyVoiceIntent({ action, event_id: ev.id as unknown as number, proposed_change: change });
+                  setReloadKey(k => k + 1);
+                },
+              });
+            } else if (result.status === 'not_found') {
+              addNotification({ type: 'warning', title: 'No matching event found', message: String(result.detail ?? '') });
+            } else if (result.status === 'ambiguous') {
+              addNotification({ type: 'info', title: 'Multiple matches — please be more specific', message: '' });
+            }
+          }
+        } catch {
+          addNotification({ type: 'error', title: 'Transcription failed', message: 'Is the backend running?' });
+        }
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setMicActive(true);
+      // Auto-stop after 10 seconds
+      setTimeout(() => { if (recorderRef.current?.state === 'recording') recorderRef.current.stop(); }, 10_000);
+    } catch {
+      addNotification({ type: 'error', title: 'Microphone unavailable', message: 'Grant microphone permission.' });
+    }
+  }, [micActive, addNotification, setReloadKey]);
 
   useEffect(() => {
     const onChanged = () => setKeybinds(loadKeybinds());
@@ -189,8 +254,8 @@ function Shell() {
           onToday={nav.goToday}
           onNext={nav.goNext}
           unread={unreadCount}
-          notifPanelOpen={panelOpen}
           onBell={togglePanel}
+          onMic={handleMic}
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}

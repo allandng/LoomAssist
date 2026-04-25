@@ -227,8 +227,15 @@ export async function transcribeAudio(blob: Blob): Promise<{ text: string; event
 
 export const parseIntent = (
   text: string,
-): Promise<{ event?: Partial<EventCreate>; action?: string }> =>
+): Promise<{ status: string; result: Record<string, unknown>; intent: Record<string, unknown> }> =>
   req('POST', '/intent', { text });
+
+export const applyVoiceIntent = (payload: {
+  action: string;
+  event_id: number;
+  proposed_change: Record<string, unknown>;
+}): Promise<{ status: string; event?: Record<string, unknown> }> =>
+  req('POST', '/intent/apply', payload);
 
 // ---- Analytics ----
 
