@@ -11,7 +11,8 @@ import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/Cale
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
 import { YearView } from '../components/calendar/YearView';
-import { DragShader, type DragState } from '../components/calendar/DragShader';
+import { DragShader, type DragState, type SelectRange } from '../components/calendar/DragShader';
+import { TodayLineFreshness } from '../components/calendar/TodayLineFreshness';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
@@ -125,6 +126,8 @@ export function CalendarPage() {
 
   // Drag shader (Phase 2)
   const [dragging, setDragging] = useState<DragState | null>(null);
+  // Drag-to-select tint (Phase v3.0 §8 ride-along #2)
+  const [selectRange, setSelectRange] = useState<SelectRange | null>(null);
   const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
 
   // QuickPeek state
@@ -547,6 +550,16 @@ export function CalendarPage() {
     // for new-event creation from dragging, open the editor
     // openEventEditor(null, arg.startStr);
     // calRef.current?.getApi().unselect();
+    // Clear the select-range tint once the drag ends.
+    setSelectRange(null);
+  }, []);
+
+  // FullCalendar fires selectAllow on every drag-tick; we use it to track the
+  // current selection range so DragShader can tint conflicts in --warning.
+  // Always returning true keeps the drag enabled.
+  const handleSelectAllow = useCallback((arg: { start: Date; end: Date }) => {
+    setSelectRange({ start: arg.start, end: arg.end });
+    return true;
   }, []);
 
   const eventContent = useCallback((info: EventContentArg) => (
@@ -757,6 +770,7 @@ export function CalendarPage() {
           eventMouseEnter={handleMouseEnter}
           eventMouseLeave={handleMouseLeave}
           select={handleSelect}
+          selectAllow={handleSelectAllow}
           eventDragStart={handleEventDragStart}
           eventDragStop={handleEventDragStop}
           eventAllow={handleEventAllow}
@@ -769,7 +783,10 @@ export function CalendarPage() {
           }}
         />
 
-        {dragShaderEnabled && <DragShader dragging={dragging} events={events} />}
+        {dragShaderEnabled && (
+          <DragShader dragging={dragging} selectRange={selectRange} events={events} />
+        )}
+        <TodayLineFreshness view={nav.view} />
 
         {peek && (
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />

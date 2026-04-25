@@ -1,0 +1,307 @@
+.trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.trigger:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+.triggerActive {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.triggerDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.triggerDotPulse {
+  background: var(--accent);
+  animation: triggerPulse 1.4s ease-in-out infinite;
+}
+
+.triggerDotError { background: var(--error); }
+
+@keyframes triggerPulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
+}
+
+.triggerBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--warning);
+  color: white;
+  font-size: 9.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+
+.popoverWrap {
+  position: relative;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 380px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+}
+
+.header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.spacer { flex: 1; }
+
+.syncAllBtn {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.syncAllBtn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.empty {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.emptyAction {
+  margin-top: 14px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.connList {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.connRow {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connRow:last-child { border-bottom: none; }
+
+.connRowMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.connKindIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.connInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.connName {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connEmail {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.connRight {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.connTimestamp {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.connAction {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.connAction:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+/* Status pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.pillSuccess  { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.pillError    { color: var(--error);   border-color: color-mix(in srgb, var(--error) 40%, transparent);   background: color-mix(in srgb, var(--error) 10%, transparent); }
+.pillSyncing  { color: var(--accent);  border-color: color-mix(in srgb, var(--accent) 40%, transparent);  background: var(--accent-soft); }
+.pillWarning  { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
+
+.progressTrack {
+  height: 2px;
+  background: var(--bg-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+  width: 30%;
+  animation: progressShimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+}
+
+.footerLink {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+
+.footerLink:hover { color: var(--accent-hover); }
+
+.footerSecondary {
+  display: block;
+  padding: 8px 16px 12px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.footerSecondary:hover { color: var(--text-main); }

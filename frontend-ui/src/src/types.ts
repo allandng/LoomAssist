@@ -32,6 +32,11 @@ export interface Event {
   reminder_source?: 'user' | 'inferred' | 'none' | null;
   depends_on_event_id?: number | null;
   depends_offset_minutes?: number | null;
+  // Phase v3.0 cloud-sync provenance (null = local-only event)
+  connection_calendar_id?: string | null;
+  external_id?: string | null;
+  external_etag?: string | null;
+  last_synced_at?: string | null;
 }
 
 export interface EventTemplate {

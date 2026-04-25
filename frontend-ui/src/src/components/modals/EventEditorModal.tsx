@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import styles from './EventEditorModal.module.css';
 import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
+import { SourceBadge } from '../shared/SourceBadge';
 import { MentionTextarea } from '../shared/MentionTextarea';
 import { TLDot } from '../shared/TLDot';
 import { Icon, Icons } from '../shared/Icon';
@@ -500,6 +501,13 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             <span className={styles.travelLabel}>min travel</span>
           </div>
         </div>
+
+        {/* Phase v3.0: Provenance — only renders when this event came from sync */}
+        <SourceBadge
+          variant="editor"
+          connectionCalendarId={event?.connection_calendar_id}
+          lastSyncedAt={event?.last_synced_at}
+        />
 
         {/* Depends on (Phase 10) */}
         {allEvents.length > 0 && (

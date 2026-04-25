@@ -13,6 +13,10 @@ import { WeeklyReviewModal } from './WeeklyReviewModal';
 import { StudyBlockModal } from './StudyBlockModal';
 import { TimeBlockTemplateModal } from './TimeBlockTemplateModal';
 import { AutopilotReviewModal } from './AutopilotReviewModal';
+import { SyncMergeModal } from './SyncMergeModal';
+import { ProviderPickerModal } from '../connections/ProviderPickerModal';
+import { CalDAVCredentialsModal } from '../connections/CalDAVCredentialsModal';
+import { SubscribeDrawerModal } from '../connections/SubscribeDrawerModal';
 import { listCalendars } from '../../api';
 import type { Calendar, Event, TimeBlockDef, AutopilotProposal, AutopilotOverflow } from '../../types';
 
@@ -79,7 +83,60 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           onApplied={modal.props.onApplied as () => void}
         />
       );
+    case 'sync-merge':
+      return <SyncMergeModalShell itemId={modal.props.itemId as string} />;
+    case 'provider-picker':
+      return (
+        <BackdropShell>
+          <ProviderPickerModal
+            onPicked={modal.props.onPicked as ((kind: 'google' | 'caldav_icloud' | 'caldav_generic') => void) | undefined}
+          />
+        </BackdropShell>
+      );
+    case 'caldav-credentials':
+      return (
+        <BackdropShell>
+          <CalDAVCredentialsModal
+            kind={modal.props.kind as 'caldav_icloud' | 'caldav_generic'}
+            onCreated={modal.props.onCreated as ((connectionId: string) => void) | undefined}
+          />
+        </BackdropShell>
+      );
+    case 'subscribe-drawer':
+      return (
+        <BackdropShell>
+          <SubscribeDrawerModal connectionId={modal.props.connectionId as string} />
+        </BackdropShell>
+      );
     default:
       return null;
   }
+}
+
+function SyncMergeModalShell({ itemId }: { itemId: string }) {
+  const { close } = useModal();
+  return (
+    <BackdropShell>
+      <SyncMergeModal itemId={itemId} onClose={close} />
+    </BackdropShell>
+  );
+}
+
+function BackdropShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(8,13,26,0.7)',
+        backdropFilter: 'blur(4px)',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 20,
+        zIndex: 100,
+      }}
+    >
+      {children}
+    </div>
+  );
 }

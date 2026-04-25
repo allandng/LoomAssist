@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import styles from './QuickPeek.module.css';
 import { Icon, Icons } from '../shared/Icon';
 import { TLDot } from '../shared/TLDot';
+import { SourceBadge } from '../shared/SourceBadge';
 import type { Event, Calendar } from '../../types';
 import { parseChecklist, renderDescription } from '../../lib/eventUtils';
 
@@ -85,6 +86,11 @@ export function QuickPeek({ event, timelines, anchorX, anchorY }: QuickPeekProps
           )}
         </>
       )}
+
+      <SourceBadge
+        connectionCalendarId={event.connection_calendar_id}
+        lastSyncedAt={event.last_synced_at}
+      />
     </div>
   );
 }

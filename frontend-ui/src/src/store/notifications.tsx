@@ -16,6 +16,13 @@ export interface Notification {
   actionFn?: () => void;
   progress?: number;       // 0-100 for progress type
   autoRemoveMs?: number;
+  // Phase v3.0 §8 ride-along #5: identical collapseKey across N notifications
+  // collapses them in the bell panel into a single row. Useful for noisy
+  // sources (e.g. several Google sync cycles in an hour). Optional.
+  collapseKey?: string;
+  // Aggregate count when this notification represents a collapsed group.
+  // Set automatically by the reducer; consumers should not pass this.
+  collapsedCount?: number;
 }
 
 type AddPayload = Omit<Notification, 'id' | 'timestamp' | 'read'>;
@@ -28,9 +35,35 @@ type Action =
   | { type: 'clear' }
   | { type: 'markAllRead' };
 
+// Phase v3.0 §8 #5: when 3 or more unresolved notifications share a
+// collapseKey, the oldest (3rd back) is replaced in place by a single
+// summary row. Threshold matches the design doc: "more than 3 sync
+// notifications from the same connection are present, collapse them
+// into a single row."
+const COLLAPSE_THRESHOLD = 3;
+
+function applyCollapse(state: Notification[], incoming: Notification): Notification[] {
+  if (!incoming.collapseKey) return [incoming, ...state];
+  const sameKey = state.filter(n => n.collapseKey === incoming.collapseKey);
+  if (sameKey.length < COLLAPSE_THRESHOLD - 1) {
+    // Not yet at threshold — just prepend.
+    return [incoming, ...state];
+  }
+  // Drop everything in this group, replace with a single summary entry.
+  const others = state.filter(n => n.collapseKey !== incoming.collapseKey);
+  const total  = sameKey.length + 1;
+  const summary: Notification = {
+    ...incoming,
+    title:          incoming.title,
+    message:        `${total} notifications from ${incoming.collapseKey}`,
+    collapsedCount: total,
+  };
+  return [summary, ...others];
+}
+
 function reducer(state: Notification[], action: Action): Notification[] {
   switch (action.type) {
-    case 'add':       return [action.notif, ...state];
+    case 'add':       return applyCollapse(state, action.notif);
     case 'update':    return state.map(n => n.id === action.id ? { ...n, ...action.patch } : n);
     case 'dismiss':   return state.filter(n => n.id !== action.id);
     case 'clear':     return [];

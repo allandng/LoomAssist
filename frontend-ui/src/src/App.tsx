@@ -18,6 +18,16 @@ import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
 import { InboxPage, InboxSidebarContent } from './pages/InboxPage';
 import { CoursesPage, CoursesSidebarContent } from './pages/CoursesPage';
 import { JournalPage, JournalSidebarContent } from './pages/JournalPage';
+import { SignInPage } from './pages/SignInPage';
+import { OnboardingPage } from './pages/OnboardingPage';
+import { AccountSettingsPage } from './pages/AccountSettingsPage';
+import { ConnectionsSettingsPage } from './pages/ConnectionsSettingsPage';
+import { ConnectionDetailPage } from './pages/ConnectionDetailPage';
+import { SyncReviewPage } from './pages/SyncReviewPage';
+import { AccountAvatar } from './components/topbar/AccountAvatar';
+import { SyncCenter } from './components/topbar/SyncCenter';
+import { AccountProvider } from './contexts/AccountContext';
+import { SyncProvider } from './contexts/SyncContext';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { listCalendars, listInbox } from './api';
 import { useShortcuts } from './hooks/useShortcuts';
@@ -55,7 +65,17 @@ function Shell() {
   const nav        = useCalendarNav();
   const { unreadCount, addNotification, panelOpen, togglePanel } = useNotifications();
 
-  const dest: Destination = PATH_TO_DEST[location.pathname] ?? 'calendar';
+  // First-launch redirect: route to /onboarding once.
+  useEffect(() => {
+    if (!localStorage.getItem('loom:onboarded') && location.pathname === '/calendar') {
+      navigate('/onboarding', { replace: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Look up the destination from the path. /settings/* sub-routes still resolve to 'settings'.
+  const pathRoot = '/' + (location.pathname.split('/')[1] || '');
+  const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'calendar';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [reloadKey, setReloadKey] = useState(0);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
@@ -280,19 +300,29 @@ function Shell() {
           onSearch={handleSearch}
           semanticEnabled={semanticEnabled}
           onSemanticToggle={() => setSemanticEnabled(e => !e)}
+          right={
+            <>
+              <SyncCenter />
+              <AccountAvatar />
+            </>
+          }
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
           <Routes>
-            <Route path="/calendar"  element={<CalendarPage key={reloadKey} />} />
-            <Route path="/tasks"     element={<TaskBoardPage />} />
-            <Route path="/focus"     element={<FocusPage />} />
-            <Route path="/inbox"     element={<InboxPage />} />
-            <Route path="/courses"   element={<CoursesPage />} />
-            <Route path="/journal"   element={<JournalPage />} />
-            <Route path="/settings"  element={<SettingsPage />} />
-            <Route path="*"          element={<Navigate to="/calendar" replace />} />
+            <Route path="/calendar"                   element={<CalendarPage key={reloadKey} />} />
+            <Route path="/calendar/sync-review"        element={<SyncReviewPage />} />
+            <Route path="/tasks"                       element={<TaskBoardPage />} />
+            <Route path="/focus"                       element={<FocusPage />} />
+            <Route path="/inbox"                       element={<InboxPage />} />
+            <Route path="/courses"                     element={<CoursesPage />} />
+            <Route path="/journal"                     element={<JournalPage />} />
+            <Route path="/settings"                    element={<SettingsPage />} />
+            <Route path="/settings/account"            element={<AccountSettingsPage />} />
+            <Route path="/settings/connections"        element={<ConnectionsSettingsPage />} />
+            <Route path="/settings/connections/:id"    element={<ConnectionDetailPage />} />
+            <Route path="*"                            element={<Navigate to="/calendar" replace />} />
           </Routes>
           <ModalRoot onSaved={() => setReloadKey(k => k + 1)} />
         </div>
@@ -304,15 +334,24 @@ function Shell() {
 export default function App() {
   return (
     <BrowserRouter>
-      <NotificationsProvider>
-        <UndoProvider>
-          <ModalProvider>
-            <CalendarNavProvider>
-              <Shell />
-            </CalendarNavProvider>
-          </ModalProvider>
-        </UndoProvider>
-      </NotificationsProvider>
+      <AccountProvider>
+        <NotificationsProvider>
+          <SyncProvider>
+            <UndoProvider>
+              <ModalProvider>
+                <CalendarNavProvider>
+                  {/* Full-bleed routes bypass <Shell/> entirely (no app drawer / no top bar). */}
+                  <Routes>
+                    <Route path="/auth/sign-in" element={<SignInPage />} />
+                    <Route path="/onboarding"   element={<OnboardingPage />} />
+                    <Route path="*"             element={<Shell />} />
+                  </Routes>
+                </CalendarNavProvider>
+              </ModalProvider>
+            </UndoProvider>
+          </SyncProvider>
+        </NotificationsProvider>
+      </AccountProvider>
     </BrowserRouter>
   );
 }

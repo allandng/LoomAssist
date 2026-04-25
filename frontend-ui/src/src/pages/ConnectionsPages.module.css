@@ -1,0 +1,245 @@
+.page {
+  padding: 32px 48px;
+  max-width: 880px;
+  margin: 0 auto;
+  width: 100%;
+  overflow-y: auto;
+}
+
+.headerRow {
+  display: flex;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.headerTitle {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.spacer { flex: 1; }
+
+.lede {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 18px;
+  max-width: 600px;
+}
+
+.list {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child { border-bottom: none; }
+
+.rowKindIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+}
+
+.rowInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowName {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowEmail {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.rowMeta {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.pillSuccess { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.pillError   { color: var(--error);   border-color: color-mix(in srgb, var(--error) 40%, transparent);   background: color-mix(in srgb, var(--error) 10%, transparent); }
+
+.privacyNote {
+  margin-top: 18px;
+  padding: 12px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.55;
+}
+
+.empty {
+  padding: 60px 24px;
+  text-align: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.emptyTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.emptyLede {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 18px;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.55;
+}
+
+/* Detail page */
+.detailHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.detailKindIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+}
+
+.detailTitle {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.detailMeta {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.banner {
+  padding: 12px 14px;
+  border-left: 3px solid var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text-main);
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bannerSpacer { flex: 1; }
+
+.section {
+  margin-bottom: 28px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.subRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--bg-panel);
+}
+
+.subRowName {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.subRowMeta {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.dangerSection {
+  margin-top: 32px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--error);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.dangerTitle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--error);
+  margin: 0 0 8px;
+}
+
+.dangerLede {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+  line-height: 1.55;
+}

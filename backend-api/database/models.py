@@ -57,6 +57,17 @@ class EventBase(SQLModel):
     last_modified: Optional[str] = Field(default=None)   # ISO datetime, updated on every write
     deleted_at: Optional[str] = Field(default=None)      # tombstone — set instead of DELETE
 
+    # Phase v3.0: Cloud sync metadata
+    # connection_calendar_id: null = local-only event. Populated when an event
+    # came from sync OR was pushed to a provider.
+    connection_calendar_id: Optional[str] = Field(default=None, index=True)
+    # external_id: provider's stable id (Google: event.id; CalDAV: resource href).
+    # UNIQUE INDEX (connection_calendar_id, external_id) WHERE external_id IS NOT NULL.
+    # Distinct from external_uid which stays ICS-only (design doc §3 callout / R7).
+    external_id: Optional[str] = Field(default=None, index=True)
+    external_etag: Optional[str] = Field(default=None)   # provider concurrency token
+    last_synced_at: Optional[str] = Field(default=None)  # drives the freshness pill
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")
@@ -68,7 +79,10 @@ class EventRead(EventBase):
 class CalendarBase(SQLModel):
     name: str = Field(index=True)
     description: Optional[str] = None
-    color: Optional[str] = Field(default="#6366f1") 
+    color: Optional[str] = Field(default="#6366f1")
+    # Phase v3.0: True for timelines auto-created during connection setup.
+    # Drives the disconnect-confirm copy.
+    created_via_sync: Optional[bool] = Field(default=False)
 
 class Calendar(CalendarBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -308,3 +322,115 @@ class PeerRead(SQLModel):
 class DeviceConfig(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     device_id: str                 # UUID assigned at first boot
+
+# --- ACCOUNT (Phase v3.0 — identity-only mirror of Supabase user) ---
+class Account(SQLModel, table=True):
+    id: str = Field(default="me", primary_key=True)  # single-row enforcement
+    supabase_user_id: str
+    email: str
+    display_name: Optional[str] = None
+    auth_provider: str             # google · apple · microsoft · email
+    created_at: str
+    last_login_at: Optional[str] = None
+
+class AccountRead(SQLModel):
+    id: str
+    supabase_user_id: str
+    email: str
+    display_name: Optional[str]
+    auth_provider: str
+    created_at: str
+    last_login_at: Optional[str]
+
+# --- CONNECTION (Phase v3.0 — provider link, e.g. Google / iCloud / generic CalDAV) ---
+# Independent of Account. A user in local-only mode (no Account row) can still
+# create connections. The connection's auth identity may differ from the
+# LoomAssist account identity.
+class Connection(SQLModel, table=True):
+    id: str = Field(primary_key=True)                       # UUID; Keychain key = com.loomassist.connection.{id}
+    kind: str                                               # google | caldav_icloud | caldav_generic
+    display_name: str                                       # e.g. "Google — sam@workspace.com"
+    account_email: str                                      # provider-side email
+    caldav_base_url: Optional[str] = Field(default=None)    # null for Google
+    status: str = Field(default="connected")                # connected | paused | auth_expired | error
+    last_synced_at: Optional[str] = Field(default=None)
+    last_error: Optional[str] = Field(default=None)
+    created_at: str
+
+class ConnectionRead(SQLModel):
+    id: str
+    kind: str
+    display_name: str
+    account_email: str
+    caldav_base_url: Optional[str]
+    status: str
+    last_synced_at: Optional[str]
+    last_error: Optional[str]
+    created_at: str
+
+# --- CONNECTION CALENDAR (M:N join: one row per remote-calendar ↔ local-timeline pair) ---
+# Holds the per-pair sync state — direction, sync token, last-seen ETag, last
+# successful cursor. This is the table that makes the dedup engine
+# deterministic: every Event written by sync carries this id.
+class ConnectionCalendar(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    connection_id: str = Field(index=True)                  # FK → Connection.id (CASCADE on delete)
+    local_calendar_id: int                                  # FK → Calendar.id (nullable on disconnect)
+    remote_calendar_id: str                                 # Google: calendarId; CalDAV: collection href
+    remote_display_name: str                                # cached for the disconnect screen + Sync Center
+    sync_direction: str = Field(default="both")             # both | pull | push
+    sync_token: Optional[str] = Field(default=None)         # Google incremental cursor
+    caldav_ctag: Optional[str] = Field(default=None)        # CalDAV collection-level cursor
+    last_full_sync_at: Optional[str] = Field(default=None)
+    created_at: str
+
+class ConnectionCalendarRead(SQLModel):
+    id: str
+    connection_id: str
+    local_calendar_id: int
+    remote_calendar_id: str
+    remote_display_name: str
+    sync_direction: str
+    sync_token: Optional[str]
+    caldav_ctag: Optional[str]
+    last_full_sync_at: Optional[str]
+    created_at: str
+
+# --- SYNC REVIEW ITEM (queued surface state — every ambiguous match becomes a row) ---
+# The Sync Review page is `WHERE resolved_at IS NULL`. The only new table the
+# user directly sees as a list.
+class SyncReviewItem(SQLModel, table=True):
+    id: str = Field(primary_key=True)                       # UUID
+    connection_calendar_id: str = Field(index=True)
+    kind: str                                               # incoming_duplicate | bidirectional_conflict | push_rejected
+    local_event_id: Optional[int] = Field(default=None)     # null on push_rejected of a deleted local
+    incoming_payload: str                                   # JSON — full provider event normalized to LoomAssist shape
+    match_score: Optional[float] = Field(default=None)      # 0.0–1.0; null for non-duplicate kinds
+    match_reasons: Optional[str] = Field(default=None)      # JSON array — drives the merge UI
+    created_at: str
+    resolved_at: Optional[str] = Field(default=None, index=True)
+    resolution: Optional[str] = Field(default=None)         # approved_new | merged | rejected | replaced_local | ignored_forever
+    resolution_payload: Optional[str] = Field(default=None) # JSON — what we actually wrote (audit log + undo)
+
+class SyncReviewItemRead(SQLModel):
+    id: str
+    connection_calendar_id: str
+    kind: str
+    local_event_id: Optional[int]
+    incoming_payload: str
+    match_score: Optional[float]
+    match_reasons: Optional[str]
+    created_at: str
+    resolved_at: Optional[str]
+    resolution: Optional[str]
+    resolution_payload: Optional[str]
+
+# --- SYNC IGNORE RULE (denylist for "Reject & remember" decisions) ---
+# When a user picks "Reject & remember" on a Sync Review item, we hash the
+# provider event's stable identifying tuple and add it here. Future cycles
+# skip any incoming event whose hash matches.
+class SyncIgnoreRule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    connection_id: str = Field(index=True)
+    incoming_hash: str = Field(index=True)                  # SHA-256 of (remote_calendar_id + external_id + start_iso + title)
+    created_at: str

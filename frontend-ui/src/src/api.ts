@@ -445,3 +445,210 @@ export const getDiscoveredPeers = (): Promise<{ peers: import('./types').Discove
 
 export const syncNow = (peerId: number): Promise<{ ok: boolean; peer_id: number }> =>
   req('POST', `/sync/now/${peerId}`);
+
+// ── Phase v3.0: Cloud Identity (Supabase Auth, identity-only) ─────────────
+
+export interface Account {
+  id: string;
+  supabase_user_id: string;
+  email: string;
+  display_name: string | null;
+  auth_provider: string;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export const getMe = async (): Promise<Account | null> => {
+  const res = await fetch(`${BASE}/auth/me`);
+  if (res.status === 204) return null;
+  if (!res.ok) throw Object.assign(new Error(`GET /auth/me → ${res.status}`), { status: res.status });
+  return res.json();
+};
+
+export const startOAuth = (provider: 'google' | 'apple' | 'microsoft'): Promise<{ auth_url: string }> =>
+  req('POST', `/auth/oauth/${provider}/start`);
+
+export const completeOAuth = (
+  access_token: string,
+  refresh_token: string | null,
+  provider: string,
+): Promise<Account> =>
+  req('POST', '/auth/oauth/complete', { access_token, refresh_token, provider });
+
+export const emailSignup = (email: string, password: string): Promise<Account> =>
+  req('POST', '/auth/email/signup', { email, password });
+
+export const emailLogin = (email: string, password: string): Promise<Account> =>
+  req('POST', '/auth/email/login', { email, password });
+
+export const emailReset = (email: string): Promise<{ ok: boolean }> =>
+  req('POST', '/auth/email/reset', { email });
+
+export const updateMe = (display_name: string): Promise<Account> =>
+  req('PATCH', '/auth/me', { display_name });
+
+export const logout = (): Promise<{ ok: boolean }> =>
+  req('POST', '/auth/logout');
+
+// ── Phase v3.0: Cloud Sync — Connections + Sync + Sync Review ─────────────
+
+export type ConnectionKind = 'google' | 'caldav_icloud' | 'caldav_generic';
+export type ConnectionStatus = 'connected' | 'paused' | 'auth_expired' | 'error';
+
+export interface Connection {
+  id: string;
+  kind: ConnectionKind;
+  display_name: string;
+  account_email: string;
+  caldav_base_url: string | null;
+  status: ConnectionStatus;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface RemoteCalendar {
+  id: string;
+  display_name: string;
+  color: string | null;
+}
+
+export interface ConnectionCalendar {
+  id: string;
+  connection_id: string;
+  local_calendar_id: number;
+  remote_calendar_id: string;
+  remote_display_name: string;
+  sync_direction: 'both' | 'pull' | 'push';
+  sync_token: string | null;
+  caldav_ctag: string | null;
+  last_full_sync_at: string | null;
+  created_at: string;
+}
+
+export interface SyncStatus {
+  connection_id: string;
+  status: ConnectionStatus;
+  last_synced_at: string | null;
+  last_error: string | null;
+  pending_review_count: number;
+}
+
+export interface ReviewMatchReason {
+  field: string;
+  similarity: number;
+  value_local: string;
+  value_incoming: string;
+}
+
+export interface SyncReviewItem {
+  id: string;
+  connection_calendar_id: string;
+  connection_display_name: string;
+  kind: 'incoming_duplicate' | 'bidirectional_conflict' | 'push_rejected';
+  local_event_id: number | null;
+  incoming_payload: Record<string, unknown>;
+  match_score: number | null;
+  match_reasons: ReviewMatchReason[] | null;
+  created_at: string;
+}
+
+export const listConnections = (): Promise<Connection[]> =>
+  req('GET', '/connections');
+
+export const startGoogleConnection = (): Promise<{ auth_url: string }> =>
+  req('POST', '/connections/google/start');
+
+export const completeGoogleConnection = (code: string): Promise<Connection> =>
+  req('POST', '/connections/google/complete', { code });
+
+export const testCalDAV = (
+  base_url: string, username: string, password: string,
+): Promise<{ ok: boolean; principal_url?: string; error?: string }> =>
+  req('POST', '/connections/caldav/test', { base_url, username, password });
+
+export const createCalDAVConnection = (payload: {
+  kind: ConnectionKind;
+  base_url: string;
+  username: string;
+  password: string;
+  display_name?: string;
+}): Promise<Connection> =>
+  req('POST', '/connections/caldav', payload);
+
+export const pushConnectionToken = (connection_id: string, token: string): Promise<{ ok: boolean }> =>
+  req('POST', `/connections/${connection_id}/token`, { token });
+
+export const listRemoteCalendars = (connection_id: string): Promise<RemoteCalendar[]> =>
+  req('GET', `/connections/${connection_id}/calendars`);
+
+export const subscribeCalendar = (connection_id: string, payload: {
+  remote_calendar_id: string;
+  remote_display_name: string;
+  remote_color?: string | null;
+  local_calendar_id?: number | null;
+  sync_direction?: 'both' | 'pull' | 'push';
+}): Promise<ConnectionCalendar> =>
+  req('POST', `/connections/${connection_id}/subscribe`, payload);
+
+export const unsubscribeCalendar = (connection_id: string, cc_id: string): Promise<{ ok: boolean }> =>
+  req('DELETE', `/connections/${connection_id}/calendars/${cc_id}`);
+
+export const patchConnectionCalendar = (
+  connection_id: string, cc_id: string,
+  payload: { sync_direction?: 'both' | 'pull' | 'push'; local_calendar_id?: number },
+): Promise<ConnectionCalendar> =>
+  req('PATCH', `/connections/${connection_id}/calendars/${cc_id}`, payload);
+
+export const pauseConnection = (connection_id: string): Promise<Connection> =>
+  req('POST', `/connections/${connection_id}/pause`);
+
+export const resumeConnection = (connection_id: string): Promise<Connection> =>
+  req('POST', `/connections/${connection_id}/resume`);
+
+export interface DisconnectTimelineDecision {
+  local_calendar_id: number;
+  strategy: 'keep' | 'move' | 'delete';
+  move_target_id?: number;
+}
+
+export const disconnectConnection = (
+  connection_id: string,
+  timelines: DisconnectTimelineDecision[] = [],
+): Promise<{ ok: boolean }> =>
+  req('DELETE', `/connections/${connection_id}`, { timelines });
+
+export const runAllSync = (): Promise<{ started: string[] }> =>
+  req('POST', '/sync/run');
+
+export const runOneSync = (connection_id: string): Promise<{ started: string }> =>
+  req('POST', `/sync/run/${connection_id}`);
+
+export const getSyncStatus = (): Promise<SyncStatus[]> =>
+  req('GET', '/sync/status');
+
+export const listReview = (params?: { connection_id?: string; kind?: string; limit?: number }): Promise<SyncReviewItem[]> => {
+  const qs = new URLSearchParams();
+  if (params?.connection_id) qs.set('connection_id', params.connection_id);
+  if (params?.kind)          qs.set('kind', params.kind);
+  if (params?.limit)         qs.set('limit', String(params.limit));
+  const s = qs.toString();
+  return req('GET', `/sync/review${s ? '?' + s : ''}`);
+};
+
+export const getReviewItem = (id: string): Promise<SyncReviewItem> =>
+  req('GET', `/sync/review/${id}`);
+
+export const approveReview = (id: string): Promise<{ event_id: number }> =>
+  req('POST', `/sync/review/${id}/approve`);
+
+export const mergeReview = (id: string, merged_payload: Record<string, unknown>): Promise<{ event_id: number }> =>
+  req('POST', `/sync/review/${id}/merge`, { merged_payload });
+
+export const replaceLocalReview = (id: string): Promise<{ event_id: number }> =>
+  req('POST', `/sync/review/${id}/replace-local`);
+
+export const rejectReview = (id: string, remember = false): Promise<{ ok: boolean }> =>
+  req('POST', `/sync/review/${id}/reject`, { remember });
+
+export const SYNC_EVENTS_URL = `${BASE}/sync/events`;

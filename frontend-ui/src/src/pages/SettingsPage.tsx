@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview, reindexSearch,
   listSubscriptions, createSubscription, deleteSubscription, refreshSubscription,
   listCalendars as listCalendarsForSubs,
@@ -317,7 +318,7 @@ export function SettingsPage() {
     <div className={styles.page}>
 
       {/* Appearance */}
-      <section className={styles.section}>
+      <section id="appearance" className={styles.section}>
         <h2 className={styles.sectionTitle}>Appearance</h2>
         <div className={styles.themeToggle} onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} style={{ cursor: 'pointer' }}>
           <div className={`${styles.toggleTrack} ${theme === 'light' ? styles.on : ''}`}>
@@ -328,7 +329,7 @@ export function SettingsPage() {
       </section>
 
       {/* Keyboard Shortcuts */}
-      <section className={styles.section}>
+      <section id="keybindings" className={styles.section}>
         <h2 className={styles.sectionTitle}>Keyboard Shortcuts</h2>
         <div className={styles.kbTable}>
           {ACTION_ORDER.map(action => {
@@ -451,7 +452,7 @@ export function SettingsPage() {
 
       {/* Database — plain backup */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Database</h2>
+        <h2 id="data" className={styles.sectionTitle}>Database</h2>
         <div className={styles.row}>
           <button className="loom-btn-primary" onClick={handleBackup}>Backup Database</button>
           <button className="loom-btn-ghost" onClick={handleRestore}>Restore Database…</button>
@@ -524,7 +525,7 @@ export function SettingsPage() {
 
       {/* LAN Sync (Phase 14) */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>LAN Sync</h2>
+        <h2 id="lan-sync" className={styles.sectionTitle}>LAN Sync</h2>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
           Sync with other devices on your local network. Both devices must be running LoomAssist.
         </p>
@@ -605,5 +606,82 @@ export function SettingsPage() {
 }
 
 export function SettingsSidebarContent() {
-  return null;
+  return <SettingsNav />;
+}
+
+function SettingsNav() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const groups: Array<{ heading: string; items: Array<{ to: string; label: string; hash?: string }> }> = [
+    {
+      heading: 'Account',
+      items: [
+        { to: '/settings/account',     label: 'Profile' },
+        { to: '/settings/connections', label: 'Connections' },
+      ],
+    },
+    {
+      heading: 'App',
+      items: [
+        { to: '/settings#appearance',  label: 'Appearance',   hash: 'appearance' },
+        { to: '/settings#keybindings', label: 'Keybindings',  hash: 'keybindings' },
+        { to: '/settings#data',        label: 'Data',         hash: 'data' },
+        { to: '/settings#lan-sync',    label: 'LAN Sync',     hash: 'lan-sync' },
+      ],
+    },
+  ];
+
+  function go(to: string, hash?: string) {
+    navigate(to);
+    // Hash needs a microtask after navigation so the section is mounted.
+    if (hash) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(hash);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }
+
+  function isActive(to: string, hash?: string): boolean {
+    if (hash) {
+      return location.pathname === '/settings' && location.hash === `#${hash}`;
+    }
+    return location.pathname === to;
+  }
+
+  return (
+    <div style={{ padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {groups.map((g, gi) => (
+        <div key={g.heading} style={{ marginTop: gi === 0 ? 0 : 14 }}>
+          <div style={{
+            padding: '4px 10px', fontSize: 10.5, fontWeight: 700,
+            letterSpacing: '0.06em', textTransform: 'uppercase',
+            color: 'var(--text-dim)', marginBottom: 4,
+          }}>
+            {g.heading}
+          </div>
+          {g.items.map(it => {
+            const active = isActive(it.to, it.hash);
+            return (
+              <button
+                key={it.to}
+                onClick={() => go(it.to, it.hash)}
+                style={{
+                  width: '100%',
+                  padding: '7px 10px', borderRadius: 6,
+                  fontSize: 12.5, fontWeight: 500,
+                  color: active ? 'var(--accent)' : 'var(--text-main)',
+                  background: active ? 'var(--accent-soft)' : 'transparent',
+                  border: 'none', cursor: 'pointer', textAlign: 'left',
+                  display: 'block',
+                }}
+              >
+                {it.label}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
 }

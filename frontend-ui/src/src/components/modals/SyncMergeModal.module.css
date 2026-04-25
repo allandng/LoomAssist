@@ -1,0 +1,227 @@
+.shell {
+  width: 1080px;
+  max-width: 95vw;
+  max-height: 80vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.headerTitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.headerSubtitle {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.spacer { flex: 1; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.pillWarning {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.closeBtn {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.closeBtn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+.colHeaders {
+  display: grid;
+  grid-template-columns: 120px 1fr 1fr 1fr;
+  padding: 10px 24px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.colHeaders > span:nth-child(4) { color: var(--accent); }
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 120px 1fr 1fr 1fr;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fieldName {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-top: 6px;
+}
+
+.diffCell {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  min-height: 32px;
+  transition: border-color 100ms, background 100ms;
+}
+
+.diffCell:hover {
+  border-color: var(--border-strong);
+}
+
+.diffCellPicked {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.checkboxChecked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.diffCellValue {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-main);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.diffCellEmpty { color: var(--text-dim); }
+
+.matchedRow {
+  grid-column: 2 / 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.matchesLabel {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.previewCell {
+  padding: 6px 10px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-main);
+  min-height: 32px;
+  word-break: break-word;
+}
+
+.footer {
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-panel);
+}
+
+.footerHint {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.errorBanner {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-radius: 6px;
+  font-size: 12px;
+}

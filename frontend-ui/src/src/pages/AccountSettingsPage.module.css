@@ -1,0 +1,161 @@
+.page {
+  padding: 32px 48px;
+  overflow-y: auto;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+  padding: 16px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.profileInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.profileName {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.profileMeta {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.section {
+  margin-bottom: 28px;
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.sectionLede {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+}
+
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.fieldLabel {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.localCard {
+  padding: 24px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+.localCardTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.localCardLede {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 18px;
+  line-height: 1.55;
+}
+
+.dangerZone {
+  margin-top: 32px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--error);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.dangerTitle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--error);
+  margin: 0 0 8px;
+}
+
+.dangerLede {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+  line-height: 1.55;
+}
+
+.signOutNotice {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+  color: var(--text-main);
+  line-height: 1.5;
+}
+
+.errorBox {
+  border-left: 3px solid var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-main);
+  margin-top: 12px;
+}
+
+.savedBadge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--success);
+}

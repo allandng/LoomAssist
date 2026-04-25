@@ -5,6 +5,9 @@ av==17.0.0
 certifi==2026.2.25
 cryptography==47.0.0
 zeroconf==0.148.0
+caldav==2.0.0
+rapidfuzz==4.1.0
+vobject==0.9.10
 charset-normalizer==3.4.6
 click==8.3.1
 ctranslate2==4.7.1

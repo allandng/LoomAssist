@@ -1,0 +1,25 @@
+.btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 100ms;
+}
+
+.btn:hover {
+  border-color: var(--border-strong);
+}
+
+.local {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}

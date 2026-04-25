@@ -223,6 +223,148 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on deviceconfig table: {e}")
 
+        # Phase v3.0: Account table (identity-only mirror of Supabase user)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS account (
+                    id TEXT PRIMARY KEY,
+                    supabase_user_id TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    display_name TEXT,
+                    auth_provider TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on account table: {e}")
+
+        # Phase v3.0: Connection table (provider link)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS connection (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    account_email TEXT NOT NULL,
+                    caldav_base_url TEXT,
+                    status TEXT NOT NULL DEFAULT 'connected',
+                    last_synced_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on connection table: {e}")
+
+        # Phase v3.0: ConnectionCalendar table (per-pair sync state)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS connectioncalendar (
+                    id TEXT PRIMARY KEY,
+                    connection_id TEXT NOT NULL,
+                    local_calendar_id INTEGER NOT NULL,
+                    remote_calendar_id TEXT NOT NULL,
+                    remote_display_name TEXT NOT NULL,
+                    sync_direction TEXT NOT NULL DEFAULT 'both',
+                    sync_token TEXT,
+                    caldav_ctag TEXT,
+                    last_full_sync_at TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_connectioncalendar_remote
+                ON connectioncalendar(connection_id, remote_calendar_id)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS
+                idx_connectioncalendar_connection
+                ON connectioncalendar(connection_id)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on connectioncalendar table: {e}")
+
+        # Phase v3.0: SyncReviewItem table (the queue)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS syncreviewitem (
+                    id TEXT PRIMARY KEY,
+                    connection_calendar_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    local_event_id INTEGER,
+                    incoming_payload TEXT NOT NULL,
+                    match_score REAL,
+                    match_reasons TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    resolution TEXT,
+                    resolution_payload TEXT
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_syncreview_pending
+                ON syncreviewitem(resolved_at) WHERE resolved_at IS NULL
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_syncreview_cc
+                ON syncreviewitem(connection_calendar_id)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on syncreviewitem table: {e}")
+
+        # Phase v3.0: SyncIgnoreRule table (per-connection denylist)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS syncignorerule (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    connection_id TEXT NOT NULL,
+                    incoming_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_syncignore_lookup
+                ON syncignorerule(connection_id, incoming_hash)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on syncignorerule table: {e}")
+
+        # Phase v3.0: cloud-sync columns on Event
+        try:
+            result = conn.execute(text("PRAGMA table_info(event)")).fetchall()
+            event_cols = [row[1] for row in result]
+            cloud_cols = {
+                "connection_calendar_id": "TEXT",
+                "external_id":            "TEXT",
+                "external_etag":          "TEXT",
+                "last_synced_at":         "TEXT",
+            }
+            for col_name, col_type in cloud_cols.items():
+                if col_name not in event_cols:
+                    conn.execute(text(f"ALTER TABLE event ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to event table.")
+            # Partial unique index — allows multiple rows with NULL external_id
+            # (which is the normal "local only" state for v2 events).
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_event_external_id
+                ON event(connection_calendar_id, external_id)
+                WHERE external_id IS NOT NULL
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on event cloud-sync cols: {e}")
+
+        # Phase v3.0: created_via_sync column on Calendar
+        try:
+            result = conn.execute(text("PRAGMA table_info(calendar)")).fetchall()
+            cal_cols = [row[1] for row in result]
+            if "created_via_sync" not in cal_cols:
+                conn.execute(text("ALTER TABLE calendar ADD COLUMN created_via_sync INTEGER DEFAULT 0"))
+                logging.info("Migration: added column 'created_via_sync' to calendar table.")
+        except Exception as e:
+            logging.error(f"Migration error on calendar created_via_sync: {e}")
+
         # Phase 14c: last_modified + deleted_at on event and task
         try:
             result = conn.execute(text("PRAGMA table_info(event)")).fetchall()

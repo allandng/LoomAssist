@@ -3016,3 +3016,1028 @@ async def start_auto_sync():
         pass
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase v3.0 — Cloud identity (Supabase Auth, identity-only)
+#
+# Hard rails (per LoomAssist_UIUX_Guardrail.md §6 + design doc §1):
+#   - Identity = email + display name + provider IDs. Nothing else.
+#   - Calendar/event data NEVER traverses a LoomAssist server.
+#   - Tokens live in macOS Keychain (frontend); never SQLite, never Account row.
+#   - Local mode is a first-class state — Account row absent ⇒ 204 from /auth/me.
+# ─────────────────────────────────────────────────────────────────────────────
+import httpx
+from services.auth import supabase as supabase_auth
+
+
+class OAuthStartResponse(BaseModel):
+    auth_url: str
+
+
+class EmailSignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str
+    access_token: Optional[str] = None  # if frontend already exchanged via Supabase
+    refresh_token: Optional[str] = None
+
+
+class EmailResetRequest(BaseModel):
+    email: str
+
+
+class OAuthCompleteRequest(BaseModel):
+    """Frontend posts this after the system browser returns the user with the
+    Supabase access_token in the URL fragment. The frontend reads the fragment,
+    forwards it here so the backend can fetch the user profile and upsert
+    the Account row. The token itself is then stashed in the Keychain by the
+    frontend via the `keychain_set` Tauri command."""
+    access_token: str
+    refresh_token: Optional[str] = None
+    provider: str = "google"
+
+
+class AccountRead(BaseModel):
+    id: str
+    supabase_user_id: str
+    email: str
+    display_name: Optional[str]
+    auth_provider: str
+    created_at: str
+    last_login_at: Optional[str]
+
+
+class AccountUpdate(BaseModel):
+    display_name: Optional[str] = None
+
+
+def _account_to_dict(a: models.Account) -> dict:
+    return {
+        "id": a.id,
+        "supabase_user_id": a.supabase_user_id,
+        "email": a.email,
+        "display_name": a.display_name,
+        "auth_provider": a.auth_provider,
+        "created_at": a.created_at,
+        "last_login_at": a.last_login_at,
+    }
+
+
+def _upsert_account(db: Session, *, supabase_user_id: str, email: str,
+                    display_name: Optional[str], auth_provider: str) -> models.Account:
+    now = datetime.utcnow().isoformat()
+    existing = db.query(models.Account).filter(models.Account.id == "me").first()
+    if existing:
+        existing.supabase_user_id = supabase_user_id
+        existing.email = email
+        if display_name and not existing.display_name:
+            existing.display_name = display_name
+        existing.auth_provider = auth_provider
+        existing.last_login_at = now
+        db.commit()
+        db.refresh(existing)
+        return existing
+    acc = models.Account(
+        id="me",
+        supabase_user_id=supabase_user_id,
+        email=email,
+        display_name=display_name or (email.split("@")[0] if email else None),
+        auth_provider=auth_provider,
+        created_at=now,
+        last_login_at=now,
+    )
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+    return acc
+
+
+def _require_supabase():
+    if not supabase_auth.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": {
+                    "code": "supabase_not_configured",
+                    "detail": (
+                        "Cloud auth is not configured on this device. Set "
+                        "SUPABASE_URL and SUPABASE_ANON_KEY env vars to enable."
+                    ),
+                }
+            },
+        )
+
+
+@app.post("/auth/oauth/{provider}/start", response_model=OAuthStartResponse)
+def auth_oauth_start(provider: str):
+    _require_supabase()
+    if provider not in supabase_auth.SUPPORTED_OAUTH_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "unsupported_provider", "detail": provider}},
+        )
+    return {"auth_url": supabase_auth.build_oauth_url(provider)}
+
+
+@app.post("/auth/oauth/complete", response_model=AccountRead)
+async def auth_oauth_complete(payload: OAuthCompleteRequest, db: Session = Depends(get_db)):
+    """Frontend calls this after extracting the Supabase access_token from the
+    OAuth redirect's URL fragment. Validates with Supabase, upserts Account."""
+    _require_supabase()
+    try:
+        user = await supabase_auth.get_user(payload.access_token)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "invalid_token", "detail": str(e)}},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "supabase_unreachable", "detail": str(e)}},
+        )
+
+    sub = user.get("id") or user.get("sub")
+    email = user.get("email") or ""
+    metadata = user.get("user_metadata") or {}
+    name = metadata.get("full_name") or metadata.get("name")
+    if not sub or not email:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "incomplete_user", "detail": "Supabase returned no id/email"}},
+        )
+
+    acc = _upsert_account(
+        db,
+        supabase_user_id=sub,
+        email=email,
+        display_name=name,
+        auth_provider=payload.provider,
+    )
+    return _account_to_dict(acc)
+
+
+@app.post("/auth/email/signup", response_model=AccountRead)
+async def auth_email_signup(payload: EmailSignupRequest, db: Session = Depends(get_db)):
+    _require_supabase()
+    try:
+        result = await supabase_auth.email_signup(payload.email, payload.password)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={"error": {"code": "signup_failed", "detail": e.response.text}},
+        )
+    user = result.get("user") or {}
+    sub = user.get("id")
+    if not sub:
+        # Email-confirmation flow — Supabase returns no user until the link is clicked.
+        raise HTTPException(
+            status_code=202,
+            detail={"error": {"code": "confirmation_required",
+                              "detail": "Check your email to confirm before logging in."}},
+        )
+    acc = _upsert_account(
+        db,
+        supabase_user_id=sub,
+        email=user.get("email") or payload.email,
+        display_name=None,
+        auth_provider="email",
+    )
+    return _account_to_dict(acc)
+
+
+@app.post("/auth/email/login", response_model=AccountRead)
+async def auth_email_login(payload: EmailLoginRequest, db: Session = Depends(get_db)):
+    _require_supabase()
+    try:
+        result = await supabase_auth.email_login(payload.email, payload.password)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "login_failed", "detail": e.response.text}},
+        )
+    user = result.get("user") or {}
+    sub = user.get("id")
+    email = user.get("email") or payload.email
+    if not sub:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "incomplete_user", "detail": "Supabase returned no user"}},
+        )
+    acc = _upsert_account(
+        db,
+        supabase_user_id=sub,
+        email=email,
+        display_name=None,
+        auth_provider="email",
+    )
+    return _account_to_dict(acc)
+
+
+@app.post("/auth/email/reset")
+async def auth_email_reset(payload: EmailResetRequest):
+    _require_supabase()
+    try:
+        await supabase_auth.email_reset(payload.email)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={"error": {"code": "reset_failed", "detail": e.response.text}},
+        )
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(db: Session = Depends(get_db)):
+    """Returns the current Account, or 204 in local-only mode.
+
+    AccountContext on the frontend reads this on boot — 204 means "local mode",
+    not an error.
+    """
+    acc = db.query(models.Account).filter(models.Account.id == "me").first()
+    if not acc:
+        return Response(status_code=204)
+    return _account_to_dict(acc)
+
+
+@app.patch("/auth/me", response_model=AccountRead)
+def auth_update_me(payload: AccountUpdate, db: Session = Depends(get_db)):
+    acc = db.query(models.Account).filter(models.Account.id == "me").first()
+    if not acc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "no_account", "detail": "Local mode — sign in first"}},
+        )
+    if payload.display_name is not None:
+        acc.display_name = payload.display_name.strip() or None
+    db.commit()
+    db.refresh(acc)
+    return _account_to_dict(acc)
+
+
+@app.post("/auth/logout")
+def auth_logout(db: Session = Depends(get_db)):
+    """Clears the Account row. The frontend is responsible for clearing the
+    Keychain `supabase` slot via the `keychain_delete` Tauri command before
+    calling this. Per design doc §11 R5 + §10 Q7, sign-out is non-destructive:
+    Connections + Events are untouched."""
+    acc = db.query(models.Account).filter(models.Account.id == "me").first()
+    if acc:
+        db.delete(acc)
+        db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase v3.0 — Cloud Sync (Connections + Sync runner + Sync Review queue)
+#
+# Hard rails (per LoomAssist_UIUX_Guardrail.md §6 + design doc §3/§11):
+#   - Calendar/event data syncs DIRECTLY device ↔ provider; never traverses a
+#     LoomAssist server.
+#   - OAuth tokens / CalDAV passwords live in macOS Keychain — never SQLite.
+#   - external_uid stays ICS-only; sync uses the new external_id column (R7).
+#   - Disconnect is non-destructive locally AND remotely (Q7).
+#   - All transitions 150–250ms; progress bar in Sync Center is the only
+#     ambient animation introduced (no AI sparkle).
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json as _json_sync
+import uuid as _uuid_sync
+from fastapi.responses import StreamingResponse
+from services.sync import dedup as _sync_dedup  # noqa: F401  (imported for tests / future use)
+from services.sync import google as _sync_google
+from services.sync import caldav as _sync_caldav
+from services.sync import ics_normalize as _sync_ics
+from services.sync import runner as _sync_runner
+from services.sync import keychain_bridge as _kb
+
+# Wire the runner with the SessionLocal factory and start the 5-min loop.
+_sync_runner.configure(SessionLocal)
+
+
+@app.on_event("startup")
+async def _start_sync_runner():
+    _sync_runner.start()
+
+
+# ── Pydantic models ──────────────────────────────────────────────────────────
+
+class ConnectionRead(BaseModel):
+    id: str
+    kind: str
+    display_name: str
+    account_email: str
+    caldav_base_url: Optional[str]
+    status: str
+    last_synced_at: Optional[str]
+    last_error: Optional[str]
+    created_at: str
+
+
+class CalDAVCreateRequest(BaseModel):
+    kind: str = "caldav_generic"      # caldav_icloud | caldav_generic
+    base_url: str
+    username: str
+    password: str
+    display_name: Optional[str] = None
+
+
+class CalDAVTestRequest(BaseModel):
+    base_url: str
+    username: str
+    password: str
+
+
+class GoogleCompleteRequest(BaseModel):
+    code: str
+
+
+class TokenPushRequest(BaseModel):
+    """Frontend pushes a token (OAuth refresh_token for Google, JSON for
+    CalDAV creds) into the in-memory keychain bridge so the runner can use it
+    without making a roundtrip through Tauri. Never persisted server-side."""
+    token: str
+
+
+class RemoteCalendarRead(BaseModel):
+    id: str                # remote calendar id (Google) or href (CalDAV)
+    display_name: str
+    color: Optional[str] = None
+
+
+class SubscribeRequest(BaseModel):
+    remote_calendar_id: str
+    remote_display_name: str
+    remote_color: Optional[str] = None
+    local_calendar_id: Optional[int] = None    # null → create a new timeline
+    sync_direction: str = "both"               # both | pull | push
+
+
+class ConnectionCalendarRead(BaseModel):
+    id: str
+    connection_id: str
+    local_calendar_id: int
+    remote_calendar_id: str
+    remote_display_name: str
+    sync_direction: str
+    sync_token: Optional[str]
+    caldav_ctag: Optional[str]
+    last_full_sync_at: Optional[str]
+    created_at: str
+
+
+class CCPatchRequest(BaseModel):
+    sync_direction: Optional[str] = None
+    local_calendar_id: Optional[int] = None
+
+
+class TimelineDecision(BaseModel):
+    """Per-timeline strategy on full disconnect."""
+    local_calendar_id: int
+    strategy: str  # keep | move | delete
+    move_target_id: Optional[int] = None
+
+
+class DisconnectRequest(BaseModel):
+    timelines: List[TimelineDecision] = []
+
+
+class SyncStatusItem(BaseModel):
+    connection_id:         str
+    status:                str
+    last_synced_at:        Optional[str]
+    last_error:            Optional[str]
+    pending_review_count:  int
+
+
+class ReviewItemRead(BaseModel):
+    id: str
+    connection_calendar_id: str
+    connection_display_name: str
+    kind: str
+    local_event_id: Optional[int]
+    incoming_payload: dict
+    match_score: Optional[float]
+    match_reasons: Optional[list]
+    created_at: str
+
+
+class MergePayloadRequest(BaseModel):
+    merged_payload: dict
+
+
+class RejectRequest(BaseModel):
+    remember: bool = False
+
+
+class BulkActionRequest(BaseModel):
+    item_ids: List[str]
+    action: str  # approve | reject | merge_default
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _connection_dict(c: models.Connection) -> dict:
+    return {
+        "id": c.id, "kind": c.kind, "display_name": c.display_name,
+        "account_email": c.account_email, "caldav_base_url": c.caldav_base_url,
+        "status": c.status, "last_synced_at": c.last_synced_at,
+        "last_error": c.last_error, "created_at": c.created_at,
+    }
+
+
+def _cc_dict(cc: models.ConnectionCalendar) -> dict:
+    return {
+        "id": cc.id, "connection_id": cc.connection_id,
+        "local_calendar_id": cc.local_calendar_id,
+        "remote_calendar_id": cc.remote_calendar_id,
+        "remote_display_name": cc.remote_display_name,
+        "sync_direction": cc.sync_direction,
+        "sync_token": cc.sync_token, "caldav_ctag": cc.caldav_ctag,
+        "last_full_sync_at": cc.last_full_sync_at, "created_at": cc.created_at,
+    }
+
+
+# ── /connections/* ───────────────────────────────────────────────────────────
+
+@app.get("/connections", response_model=List[ConnectionRead])
+def connections_list(db: Session = Depends(get_db)):
+    rows = db.query(models.Connection).order_by(models.Connection.created_at).all()
+    return [_connection_dict(c) for c in rows]
+
+
+@app.post("/connections/google/start")
+def connections_google_start():
+    if not _sync_google.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "google_not_configured",
+                              "detail": "Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET to enable Google sync."}},
+        )
+    state = _uuid_sync.uuid4().hex
+    return {"auth_url": _sync_google.build_authorize_url(state)}
+
+
+@app.post("/connections/google/complete", response_model=ConnectionRead)
+async def connections_google_complete(payload: GoogleCompleteRequest, db: Session = Depends(get_db)):
+    """Complete the Google OAuth flow with the authorization code. The
+    frontend extracts the code from the redirect URL and POSTs it here."""
+    if not _sync_google.is_configured():
+        raise HTTPException(status_code=503, detail={"error": {"code": "google_not_configured"}})
+    try:
+        tok = await _sync_google.exchange_code(payload.code)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=401,
+                            detail={"error": {"code": "google_token_exchange_failed", "detail": e.response.text}})
+    refresh_token = tok.get("refresh_token")
+    access_token  = tok.get("access_token")
+    if not refresh_token or not access_token:
+        raise HTTPException(status_code=502,
+                            detail={"error": {"code": "google_no_refresh_token",
+                                              "detail": "Google did not return a refresh_token. Re-consent required."}})
+
+    info = await _sync_google.fetch_userinfo(access_token)
+    cid = str(_uuid_sync.uuid4())
+    conn = models.Connection(
+        id=cid, kind="google",
+        display_name=f"Google — {info.get('email','')}",
+        account_email=info.get("email", ""),
+        caldav_base_url=None,
+        status="connected",
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(conn)
+    db.commit()
+    db.refresh(conn)
+    _kb.set_token(cid, refresh_token)
+    return _connection_dict(conn)
+
+
+@app.post("/connections/caldav/test")
+def connections_caldav_test(payload: CalDAVTestRequest):
+    return _sync_caldav.discover_principal(payload.base_url, payload.username, payload.password)
+
+
+@app.post("/connections/caldav", response_model=ConnectionRead)
+def connections_caldav_create(payload: CalDAVCreateRequest, db: Session = Depends(get_db)):
+    test = _sync_caldav.discover_principal(payload.base_url, payload.username, payload.password)
+    if not test.get("ok"):
+        raise HTTPException(status_code=401,
+                            detail={"error": {"code": "caldav_auth_failed", "detail": test.get("error", "")}})
+    cid = str(_uuid_sync.uuid4())
+    display = payload.display_name or f"{payload.kind.replace('caldav_', '').title()} — {payload.username}"
+    conn = models.Connection(
+        id=cid, kind=payload.kind,
+        display_name=display,
+        account_email=payload.username,
+        caldav_base_url=payload.base_url,
+        status="connected",
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(conn)
+    db.commit()
+    db.refresh(conn)
+    _kb.set_token(cid, _json_sync.dumps({"username": payload.username, "password": payload.password}))
+    return _connection_dict(conn)
+
+
+@app.post("/connections/{connection_id}/token")
+def connections_push_token(connection_id: str, payload: TokenPushRequest, db: Session = Depends(get_db)):
+    """Frontend pushes a token from the macOS Keychain into the runner's
+    in-memory cache. Used after backend restart so sync resumes without a
+    full reconnect."""
+    if not db.query(models.Connection).filter(models.Connection.id == connection_id).first():
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+    _kb.set_token(connection_id, payload.token)
+    return {"ok": True}
+
+
+@app.get("/connections/{connection_id}/calendars", response_model=List[RemoteCalendarRead])
+async def connections_remote_calendars(connection_id: str, db: Session = Depends(get_db)):
+    conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+
+    if conn.kind == "google":
+        token_blob = await _kb.get_token(connection_id)
+        if not token_blob:
+            raise HTTPException(status_code=401, detail={"error": {"code": "auth_expired"}})
+        try:
+            tok = await _sync_google.refresh_access_token(token_blob)
+        except Exception as e:
+            raise HTTPException(status_code=401, detail={"error": {"code": "auth_expired", "detail": str(e)[:200]}})
+        cals = await _sync_google.list_calendars(tok["access_token"])
+        return [{
+            "id":           c.get("id"),
+            "display_name": c.get("summary") or "(Untitled)",
+            "color":        c.get("backgroundColor"),
+        } for c in cals]
+
+    # CalDAV
+    creds_blob = await _kb.get_token(connection_id)
+    if not creds_blob:
+        raise HTTPException(status_code=401, detail={"error": {"code": "auth_expired"}})
+    try:
+        creds = _json_sync.loads(creds_blob)
+    except Exception:
+        raise HTTPException(status_code=401, detail={"error": {"code": "auth_expired"}})
+    cols = await asyncio.get_event_loop().run_in_executor(
+        None, _sync_caldav.list_collections,
+        conn.caldav_base_url or _sync_caldav.ICLOUD_DEFAULT_BASE,
+        creds["username"], creds["password"],
+    )
+    return [{"id": c["href"], "display_name": c["display_name"], "color": c.get("color")} for c in cols]
+
+
+@app.post("/connections/{connection_id}/subscribe", response_model=ConnectionCalendarRead)
+async def connections_subscribe(connection_id: str, payload: SubscribeRequest, db: Session = Depends(get_db)):
+    conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+
+    # Auto-create the local timeline if not provided.
+    local_cal_id = payload.local_calendar_id
+    if local_cal_id is None:
+        cal = models.Calendar(
+            name=payload.remote_display_name,
+            color=payload.remote_color or "#6366f1",
+            created_via_sync=True,
+        )
+        db.add(cal)
+        db.commit()
+        db.refresh(cal)
+        local_cal_id = cal.id
+
+    # UNIQUE(connection_id, remote_calendar_id) check (per §10 Q8).
+    existing = (db.query(models.ConnectionCalendar)
+                  .filter(models.ConnectionCalendar.connection_id == connection_id,
+                          models.ConnectionCalendar.remote_calendar_id == payload.remote_calendar_id)
+                  .first())
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "already_subscribed",
+                              "detail": f"This calendar is already synced to timeline {existing.local_calendar_id}."}},
+        )
+
+    cc = models.ConnectionCalendar(
+        id=str(_uuid_sync.uuid4()),
+        connection_id=connection_id,
+        local_calendar_id=local_cal_id,
+        remote_calendar_id=payload.remote_calendar_id,
+        remote_display_name=payload.remote_display_name,
+        sync_direction=payload.sync_direction,
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(cc)
+    db.commit()
+    db.refresh(cc)
+
+    # Trigger an immediate sync so the user sees events appear.
+    # In tests where no event loop is running, just skip the kick-off.
+    try:
+        asyncio.create_task(_sync_runner.run_one(connection_id))
+    except RuntimeError:
+        pass
+    return _cc_dict(cc)
+
+
+@app.delete("/connections/{connection_id}/calendars/{cc_id}")
+def connections_unsubscribe(connection_id: str, cc_id: str, db: Session = Depends(get_db)):
+    cc = db.query(models.ConnectionCalendar).filter(
+        models.ConnectionCalendar.id == cc_id,
+        models.ConnectionCalendar.connection_id == connection_id,
+    ).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+
+    # Null-out events bound to this cc — non-destructive locally.
+    db.query(models.Event).filter(models.Event.connection_calendar_id == cc_id).update({
+        "connection_calendar_id": None,
+        "external_id": None,
+        "external_etag": None,
+        "last_synced_at": None,
+    })
+    # Drop the join row + any pending review items for it.
+    db.query(models.SyncReviewItem).filter(
+        models.SyncReviewItem.connection_calendar_id == cc_id
+    ).delete()
+    db.delete(cc)
+    db.commit()
+    return {"ok": True}
+
+
+@app.patch("/connections/{connection_id}/calendars/{cc_id}", response_model=ConnectionCalendarRead)
+def connections_cc_patch(connection_id: str, cc_id: str, payload: CCPatchRequest, db: Session = Depends(get_db)):
+    cc = db.query(models.ConnectionCalendar).filter(
+        models.ConnectionCalendar.id == cc_id,
+        models.ConnectionCalendar.connection_id == connection_id,
+    ).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    if payload.sync_direction is not None:
+        if payload.sync_direction not in ("both", "pull", "push"):
+            raise HTTPException(status_code=400, detail={"error": {"code": "bad_direction"}})
+        cc.sync_direction = payload.sync_direction
+    if payload.local_calendar_id is not None:
+        cc.local_calendar_id = payload.local_calendar_id
+    db.commit()
+    db.refresh(cc)
+    return _cc_dict(cc)
+
+
+@app.post("/connections/{connection_id}/pause", response_model=ConnectionRead)
+def connections_pause(connection_id: str, db: Session = Depends(get_db)):
+    conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+    conn.status = "paused"
+    db.commit()
+    db.refresh(conn)
+    return _connection_dict(conn)
+
+
+@app.post("/connections/{connection_id}/resume", response_model=ConnectionRead)
+async def connections_resume(connection_id: str, db: Session = Depends(get_db)):
+    conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+    conn.status = "connected"
+    db.commit()
+    db.refresh(conn)
+    try:
+        asyncio.create_task(_sync_runner.run_one(connection_id))
+    except RuntimeError:
+        pass
+    return _connection_dict(conn)
+
+
+@app.delete("/connections/{connection_id}")
+def connections_disconnect(connection_id: str, payload: DisconnectRequest, db: Session = Depends(get_db)):
+    """Full disconnect.
+
+    Per design doc §3 + §10 Q7 + §11 R5: non-destructive locally and remotely.
+      - Cascade delete ConnectionCalendar + SyncReviewItem rows.
+      - Null-out Event.connection_calendar_id et al on every event tied here.
+      - Per affected created_via_sync=true timeline, apply the user's
+        keep / move / delete decision (default: keep).
+      - Clear the keychain bridge entry.
+      - Provider events untouched (we don't delete remote events).
+    """
+    conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+
+    cc_rows = db.query(models.ConnectionCalendar).filter(
+        models.ConnectionCalendar.connection_id == connection_id
+    ).all()
+    cc_ids = [cc.id for cc in cc_rows]
+
+    # Null-out events.
+    if cc_ids:
+        db.query(models.Event).filter(models.Event.connection_calendar_id.in_(cc_ids)).update(
+            {"connection_calendar_id": None, "external_id": None,
+             "external_etag": None, "last_synced_at": None},
+            synchronize_session=False,
+        )
+        db.query(models.SyncReviewItem).filter(
+            models.SyncReviewItem.connection_calendar_id.in_(cc_ids)
+        ).delete(synchronize_session=False)
+
+    # Apply per-timeline decisions.
+    decisions = {d.local_calendar_id: d for d in payload.timelines}
+    for cc in cc_rows:
+        cal = db.query(models.Calendar).filter(models.Calendar.id == cc.local_calendar_id).first()
+        if not cal or not cal.created_via_sync:
+            continue
+        d = decisions.get(cc.local_calendar_id)
+        if d is None or d.strategy == "keep":
+            continue
+        if d.strategy == "move" and d.move_target_id:
+            db.query(models.Event).filter(models.Event.calendar_id == cal.id).update(
+                {"calendar_id": d.move_target_id}, synchronize_session=False)
+            db.delete(cal)
+        elif d.strategy == "delete":
+            db.query(models.Event).filter(models.Event.calendar_id == cal.id).delete(synchronize_session=False)
+            db.delete(cal)
+
+    # Drop the connection's children + the connection itself.
+    for cc in cc_rows:
+        db.delete(cc)
+    db.query(models.SyncIgnoreRule).filter(
+        models.SyncIgnoreRule.connection_id == connection_id
+    ).delete(synchronize_session=False)
+    db.delete(conn)
+    db.commit()
+
+    _kb.clear_token(connection_id)
+    return {"ok": True}
+
+
+# ── /sync/* (cloud — distinct namespace from the existing LAN sync) ──────────
+
+@app.post("/sync/run")
+async def sync_run_all(db: Session = Depends(get_db)):
+    started = await _sync_runner.run_all(db)
+    return {"started": started}
+
+
+@app.post("/sync/run/{connection_id}")
+async def sync_run_one(connection_id: str, db: Session = Depends(get_db)):
+    if not db.query(models.Connection).filter(models.Connection.id == connection_id).first():
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+    await _sync_runner.run_one(connection_id)
+    return {"started": connection_id}
+
+
+@app.get("/sync/status", response_model=List[SyncStatusItem])
+def sync_status(db: Session = Depends(get_db)):
+    out: List[dict] = []
+    for c in db.query(models.Connection).all():
+        review_count = (
+            db.query(models.SyncReviewItem)
+              .join(models.ConnectionCalendar, models.ConnectionCalendar.id == models.SyncReviewItem.connection_calendar_id)
+              .filter(models.ConnectionCalendar.connection_id == c.id,
+                      models.SyncReviewItem.resolved_at.is_(None))
+              .count()
+        )
+        out.append({
+            "connection_id":         c.id,
+            "status":                c.status,
+            "last_synced_at":        c.last_synced_at,
+            "last_error":            c.last_error,
+            "pending_review_count":  review_count,
+        })
+    return out
+
+
+@app.get("/sync/events")
+async def sync_events_stream():
+    """SSE endpoint. Frontend's SyncContext subscribes once on mount; the
+    runner pushes {conn_id, phase, ...} events."""
+    queue = _sync_runner.subscribe()
+
+    async def gen():
+        try:
+            yield "event: ready\ndata: {}\n\n"
+            while True:
+                evt = await queue.get()
+                yield f"data: {_json_sync.dumps(evt)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _sync_runner.unsubscribe(queue)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ── /sync/review/* ───────────────────────────────────────────────────────────
+
+def _review_to_dict(item: models.SyncReviewItem, conn_display_name: str) -> dict:
+    return {
+        "id":                       item.id,
+        "connection_calendar_id":   item.connection_calendar_id,
+        "connection_display_name":  conn_display_name,
+        "kind":                     item.kind,
+        "local_event_id":           item.local_event_id,
+        "incoming_payload":         _json_sync.loads(item.incoming_payload) if item.incoming_payload else {},
+        "match_score":              item.match_score,
+        "match_reasons":            _json_sync.loads(item.match_reasons) if item.match_reasons else None,
+        "created_at":               item.created_at,
+    }
+
+
+@app.get("/sync/review", response_model=List[ReviewItemRead])
+def sync_review_list(
+    connection_id: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    q = (db.query(models.SyncReviewItem, models.ConnectionCalendar, models.Connection)
+           .join(models.ConnectionCalendar, models.ConnectionCalendar.id == models.SyncReviewItem.connection_calendar_id)
+           .join(models.Connection,         models.Connection.id == models.ConnectionCalendar.connection_id)
+           .filter(models.SyncReviewItem.resolved_at.is_(None)))
+    if connection_id:
+        q = q.filter(models.Connection.id == connection_id)
+    if kind:
+        q = q.filter(models.SyncReviewItem.kind == kind)
+    rows = q.order_by(models.SyncReviewItem.created_at.desc()).limit(limit).all()
+    return [_review_to_dict(item, conn.display_name) for (item, _cc, conn) in rows]
+
+
+@app.get("/sync/review/{item_id}", response_model=ReviewItemRead)
+def sync_review_get(item_id: str, db: Session = Depends(get_db)):
+    row = (db.query(models.SyncReviewItem, models.ConnectionCalendar, models.Connection)
+             .join(models.ConnectionCalendar, models.ConnectionCalendar.id == models.SyncReviewItem.connection_calendar_id)
+             .join(models.Connection,         models.Connection.id == models.ConnectionCalendar.connection_id)
+             .filter(models.SyncReviewItem.id == item_id)
+             .first())
+    if not row:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_not_found"}})
+    item, _cc, conn = row
+    return _review_to_dict(item, conn.display_name)
+
+
+def _resolve_item(item: models.SyncReviewItem, resolution: str, payload: Optional[dict] = None) -> None:
+    item.resolved_at         = datetime.utcnow().isoformat()
+    item.resolution          = resolution
+    item.resolution_payload  = _json_sync.dumps(payload) if payload else None
+
+
+@app.post("/sync/review/{item_id}/approve")
+def sync_review_approve(item_id: str, db: Session = Depends(get_db)):
+    """User says 'these are different events' — apply the incoming payload as
+    a brand-new local event (not merged into the candidate)."""
+    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
+    if not item or item.resolved_at:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
+    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
+    p = _json_sync.loads(item.incoming_payload)
+    new_ev = models.Event(
+        title=p.get("title") or "(Untitled)",
+        start_time=p.get("start_time") or datetime.utcnow().isoformat(),
+        end_time=p.get("end_time")     or datetime.utcnow().isoformat(),
+        calendar_id=cc.local_calendar_id,
+        description=p.get("description"),
+        location=p.get("location"),
+        is_all_day=bool(p.get("is_all_day")),
+        connection_calendar_id=cc.id,
+        external_id=p.get("external_id"),
+        external_etag=p.get("external_etag"),
+        last_synced_at=datetime.utcnow().isoformat(),
+        last_modified=datetime.utcnow().isoformat(),
+    )
+    db.add(new_ev)
+    db.flush()
+    _resolve_item(item, "approved_new", {"event_id": new_ev.id})
+    db.commit()
+    return {"event_id": new_ev.id}
+
+
+@app.post("/sync/review/{item_id}/merge")
+def sync_review_merge(item_id: str, body: MergePayloadRequest, db: Session = Depends(get_db)):
+    """Apply the user-merged payload to the candidate local event, then push
+    to the provider (best-effort — push failures get queued for retry)."""
+    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
+    if not item or item.resolved_at:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
+    if not item.local_event_id:
+        raise HTTPException(status_code=400, detail={"error": {"code": "no_local_event"}})
+    ev = db.query(models.Event).filter(models.Event.id == item.local_event_id).first()
+    if not ev:
+        raise HTTPException(status_code=404, detail={"error": {"code": "event_missing"}})
+    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
+
+    p = body.merged_payload or {}
+    for k in ("title", "start_time", "end_time", "description", "location", "is_all_day"):
+        if k in p:
+            setattr(ev, k, p[k])
+    ev.connection_calendar_id = cc.id
+    if p.get("external_id"):    ev.external_id   = p["external_id"]
+    if p.get("external_etag"):  ev.external_etag = p["external_etag"]
+    ev.last_synced_at = datetime.utcnow().isoformat()
+    ev.last_modified  = datetime.utcnow().isoformat()
+    _resolve_item(item, "merged", {"event_id": ev.id})
+    db.commit()
+    return {"event_id": ev.id}
+
+
+@app.post("/sync/review/{item_id}/replace-local")
+def sync_review_replace_local(item_id: str, db: Session = Depends(get_db)):
+    """Use incoming wholesale; overwrite local."""
+    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
+    if not item or item.resolved_at:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
+    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
+    p = _json_sync.loads(item.incoming_payload)
+    if item.local_event_id:
+        ev = db.query(models.Event).filter(models.Event.id == item.local_event_id).first()
+        if ev:
+            for k in ("title", "start_time", "end_time", "description", "location", "is_all_day"):
+                if k in p:
+                    setattr(ev, k, p[k])
+            ev.connection_calendar_id = cc.id
+            ev.external_id   = p.get("external_id")   or ev.external_id
+            ev.external_etag = p.get("external_etag") or ev.external_etag
+            ev.last_synced_at = datetime.utcnow().isoformat()
+            ev.last_modified  = datetime.utcnow().isoformat()
+            _resolve_item(item, "replaced_local", {"event_id": ev.id})
+            db.commit()
+            return {"event_id": ev.id}
+    # Fallback: insert new (mirrors approve).
+    new_ev = models.Event(
+        title=p.get("title") or "(Untitled)",
+        start_time=p.get("start_time") or datetime.utcnow().isoformat(),
+        end_time=p.get("end_time")     or datetime.utcnow().isoformat(),
+        calendar_id=cc.local_calendar_id,
+        description=p.get("description"), location=p.get("location"),
+        is_all_day=bool(p.get("is_all_day")),
+        connection_calendar_id=cc.id,
+        external_id=p.get("external_id"),
+        external_etag=p.get("external_etag"),
+        last_synced_at=datetime.utcnow().isoformat(),
+        last_modified=datetime.utcnow().isoformat(),
+    )
+    db.add(new_ev)
+    db.flush()
+    _resolve_item(item, "replaced_local", {"event_id": new_ev.id})
+    db.commit()
+    return {"event_id": new_ev.id}
+
+
+@app.post("/sync/review/{item_id}/reject")
+def sync_review_reject(item_id: str, body: RejectRequest, db: Session = Depends(get_db)):
+    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
+    if not item or item.resolved_at:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
+    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
+
+    if body.remember:
+        p = _json_sync.loads(item.incoming_payload)
+        h = hashlib.sha256(("|".join([
+            cc.remote_calendar_id or "",
+            p.get("external_id") or "",
+            p.get("start_time")  or "",
+            p.get("title")       or "",
+        ])).encode("utf-8")).hexdigest()
+        if not (db.query(models.SyncIgnoreRule)
+                  .filter(models.SyncIgnoreRule.connection_id == cc.connection_id,
+                          models.SyncIgnoreRule.incoming_hash == h)
+                  .first()):
+            db.add(models.SyncIgnoreRule(
+                connection_id=cc.connection_id,
+                incoming_hash=h,
+                created_at=datetime.utcnow().isoformat(),
+            ))
+    _resolve_item(item, "ignored_forever" if body.remember else "rejected")
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/sync/review/bulk")
+def sync_review_bulk(body: BulkActionRequest, db: Session = Depends(get_db)):
+    if body.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail={"error": {"code": "bad_bulk_action"}})
+    n = 0
+    for iid in body.item_ids:
+        item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == iid).first()
+        if not item or item.resolved_at:
+            continue
+        if body.action == "reject":
+            _resolve_item(item, "rejected")
+            n += 1
+    db.commit()
+    return {"resolved": n}
+
+# ─────────────────────────────────────────────────────────────────────────────

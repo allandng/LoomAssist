@@ -10,6 +10,39 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+// ── Phase v3.0: macOS Keychain (OAuth tokens / CalDAV passwords) ────────────
+//
+// Slot format: `com.loomassist.{kind}` where kind is `supabase` or
+// `connection.{uuid}`. Tokens NEVER touch SQLite or disk — only the Keychain.
+
+const KEYCHAIN_SERVICE: &str = "com.loomassist";
+
+#[tauri::command]
+fn keychain_set(slot: String, value: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &slot).map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn keychain_get(slot: String) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &slot).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn keychain_delete(slot: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &slot).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn loom_log_dir() -> std::path::PathBuf {
     let home = env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     std::path::Path::new(&home).join("Library/Logs/LoomAssist")
@@ -170,7 +203,12 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            keychain_set,
+            keychain_get,
+            keychain_delete,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
