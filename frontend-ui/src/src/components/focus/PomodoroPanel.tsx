@@ -5,6 +5,16 @@ import { TLDot } from '../shared/TLDot';
 import type { Task, Calendar } from '../../types';
 import { timelineColor } from '../../lib/eventUtils';
 
+function emitPomodoroState(state: string) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    if (w.__TAURI_INTERNALS__?.invoke) {
+      w.__TAURI_INTERNALS__.emit('pomodoro-state-change', { state });
+    }
+  } catch { /* non-Tauri environment */ }
+}
+
 type TimerMode = 'work' | 'short-break' | 'long-break';
 
 interface PomodoroSettings {
@@ -108,11 +118,18 @@ export function PomodoroPanel({ activeTaskId, tasks, timelines }: PomodoroPanelP
     }
   }
 
-  const handlePauseResume = useCallback(() => setRunning(r => !r), []);
+  const handlePauseResume = useCallback(() => {
+    setRunning(r => {
+      const next = !r;
+      emitPomodoroState(next ? (mode === 'work' ? 'running' : 'break') : 'paused');
+      return next;
+    });
+  }, [mode]);
 
   const handleReset = useCallback(() => {
     setRunning(false);
     setTimeLeft(totalSecs(mode));
+    emitPomodoroState('idle');
   }, [mode, settings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateSetting<K extends keyof PomodoroSettings>(key: K, delta: number) {
