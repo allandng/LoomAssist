@@ -46,8 +46,11 @@ export const createEvent = (
 export const updateEvent = (
   id: number,
   payload: EventUpdate,
-): Promise<{ event: Event; conflicts: ConflictInfo[] }> =>
+): Promise<{ event: Event; conflicts: ConflictInfo[]; dependents?: ConflictInfo[] }> =>
   req('PUT', `/events/${id}`, payload);
+
+export const cascadeDependents = (id: number): Promise<{ updated: Event[] }> =>
+  req('POST', `/events/${id}/cascade-dependents`);
 
 export const deleteEvent = (id: number): Promise<void> =>
   req('DELETE', `/events/${id}`);

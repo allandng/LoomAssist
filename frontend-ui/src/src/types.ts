@@ -30,6 +30,8 @@ export interface Event {
   location?: string | null;
   travel_time_minutes?: number | null;
   reminder_source?: 'user' | 'inferred' | 'none' | null;
+  depends_on_event_id?: number | null;
+  depends_offset_minutes?: number | null;
 }
 
 export interface EventTemplate {

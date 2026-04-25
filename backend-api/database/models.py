@@ -49,6 +49,10 @@ class EventBase(SQLModel):
     # Phase 1: Adaptive Reminders — tracks whether reminder was user-set or inferred
     reminder_source: Optional[str] = Field(default="none")  # "user" | "inferred" | "none"
 
+    # Phase 10: Cross-Event Dependencies
+    depends_on_event_id: Optional[int] = Field(default=None)
+    depends_offset_minutes: Optional[int] = Field(default=None)
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")

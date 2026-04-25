@@ -51,6 +51,8 @@ def run_migrations():
                 "location": "TEXT",
                 "travel_time_minutes": "INTEGER",
                 "reminder_source": "TEXT DEFAULT 'none'",
+                "depends_on_event_id": "INTEGER",
+                "depends_offset_minutes": "INTEGER",
             }
             
             for col_name, col_type in new_columns.items():

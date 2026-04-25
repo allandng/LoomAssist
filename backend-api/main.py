@@ -310,6 +310,10 @@ def _try_upsert_embedding(event_id: int, title: str, description: Optional[str],
         upsert_event_embedding(event_id, title, description, db)
     except Exception as e:
         logger.warning(f"Embedding upsert failed for event {event_id}: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 @app.post("/events/")
@@ -327,6 +331,12 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
             event.reminder_source = "none"
     else:
         event.reminder_source = "user"
+
+    # Phase 10: guard circular dependency
+    if event.depends_on_event_id is not None:
+        dep_ev = db.query(models.Event).filter(models.Event.id == event.depends_on_event_id).first()
+        if dep_ev and dep_ev.is_recurring:
+            raise HTTPException(status_code=400, detail={"error": {"code": "recurring_parent", "detail": "Recurring events cannot be dependency parents."}})
 
     db_event = models.Event.model_validate(event)
     db.add(db_event)
@@ -368,13 +378,29 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
     for key, value in event.model_dump().items():
         setattr(db_event, key, value)
 
+    # Phase 10: guard circular dependency and recurring parent
+    new_dep_id = event.depends_on_event_id
+    if new_dep_id is not None:
+        dep_ev = db.query(models.Event).filter(models.Event.id == new_dep_id).first()
+        if dep_ev and dep_ev.is_recurring:
+            raise HTTPException(status_code=400, detail={"error": {"code": "recurring_parent", "detail": "Recurring events cannot be dependency parents."}})
+        if _detect_circular(event_id, new_dep_id, db):
+            raise HTTPException(status_code=400, detail={"error": {"code": "circular_dependency", "detail": "This would create a circular dependency."}})
+
     db.commit()
     db.refresh(db_event)
     _try_upsert_embedding(db_event.id, db_event.title, db_event.description, db)
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
+
+    # Return any dependents so frontend can offer cascade
+    dependents = db.query(models.Event).filter(
+        models.Event.depends_on_event_id == event_id
+    ).all()
+
     return {
         "event": db_event,
         "conflicts": [{"id": c.id, "title": c.title} for c in conflicts],
+        "dependents": [{"id": d.id, "title": d.title, "start_time": d.start_time, "end_time": d.end_time} for d in dependents],
     }
 
 @app.delete("/events/{event_id}")
@@ -387,6 +413,10 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
         )
 
     event_id_to_delete = db_event.id
+    # Phase 10: nullify depends_on for children — never cascade-delete
+    db.query(models.Event).filter(
+        models.Event.depends_on_event_id == event_id_to_delete
+    ).update({"depends_on_event_id": None}, synchronize_session=False)
     db.delete(db_event)
     db.commit()
     try:
@@ -1985,6 +2015,61 @@ def view_availability(token: str, db: Session = Depends(get_db)):
     html_path = Path(__file__).parent / "availability_receiver.html"
     html = html_path.read_text(encoding="utf-8").replace("{{ token }}", token)
     return HTMLResponse(content=html)
+
+
+# ── Phase 10: Cross-Event Dependencies ───────────────────────────────────────
+
+def _detect_circular(event_id: int, depends_on_id: int, db: Session) -> bool:
+    """Return True if setting event_id.depends_on = depends_on_id would create a cycle."""
+    visited: set[int] = {event_id}
+    current = depends_on_id
+    while current is not None:
+        if current in visited:
+            return True
+        visited.add(current)
+        ev = db.query(models.Event).filter(models.Event.id == current).first()
+        if not ev:
+            break
+        current = ev.depends_on_event_id
+    return False
+
+
+class CascadeDependentsResponse(BaseModel):
+    updated: list[dict]
+
+@app.post("/events/{event_id}/cascade-dependents", response_model=CascadeDependentsResponse)
+def cascade_dependents(event_id: int, db: Session = Depends(get_db)):
+    """Apply depends_offset_minutes to all direct dependents of this event."""
+    parent = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+
+    children = db.query(models.Event).filter(
+        models.Event.depends_on_event_id == event_id
+    ).all()
+
+    updated = []
+    for child in children:
+        if child.depends_offset_minutes is None:
+            continue
+        try:
+            parent_end = datetime.fromisoformat(parent.end_time)
+        except ValueError:
+            continue
+        offset  = timedelta(minutes=child.depends_offset_minutes)
+        dur_td  = timedelta(seconds=max(0, (
+            datetime.fromisoformat(child.end_time) - datetime.fromisoformat(child.start_time)
+        ).total_seconds()))
+        new_start = parent_end + offset
+        new_end   = new_start + dur_td
+        child.start_time = new_start.isoformat()
+        child.end_time   = new_end.isoformat()
+        updated.append(child.model_dump())
+
+    db.commit()
+    return CascadeDependentsResponse(updated=updated)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Phase 9: iCal Subscription URLs ──────────────────────────────────────────

@@ -12,6 +12,7 @@ import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
   parseDateTime, clockEvent, resolveConflict, listCourses,
+  cascadeDependents, listEvents,
 } from '../../api';
 import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
 import { SuggestionChip } from '../shared/SuggestionChip';
@@ -156,6 +157,12 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<number | null>(null);
   useEffect(() => { listCourses().then(setCourses).catch(() => {}); }, []);
+
+  // Phase 10: Dependencies
+  const [allEvents, setAllEvents] = useState<Event[]>([]);
+  const [dependsOnId, setDependsOnId] = useState<number | null>(event?.depends_on_event_id ?? null);
+  const [dependsOffset, setDependsOffset] = useState<number>(event?.depends_offset_minutes ?? 0);
+  useEffect(() => { listEvents().then(evs => setAllEvents(evs.filter(e => e.id !== event?.id))).catch(() => {}); }, [event?.id]);
   const [suggestions, setSuggestions] = useState<ConflictSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 
@@ -212,6 +219,8 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       calendar_id: calendarId,
       reminder_minutes: reminder,
       reminder_source: reminderSource,
+      depends_on_event_id: dependsOnId,
+      depends_offset_minutes: dependsOffset,
       location: location || null,
       travel_time_minutes: travelTime || null,
       description,
@@ -237,13 +246,28 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
     if (isEdit && event) {
       const prev = event;
-      const { conflicts: c } = await updateEvent(event.id, payload);
+      const { conflicts: c, dependents = [] } = await updateEvent(event.id, payload);
       conflicts = c;
       pushUndo({
         label: `Edit "${prev.title}"`,
         undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
         redo: async () => { await updateEvent(event.id, payload); },
       });
+      // Phase 10: cascade toast
+      if (dependents.length > 0) {
+        const eid = event.id;
+        addNotification({
+          type: 'warning',
+          title: `Move ${dependents.length} dependent event(s)?`,
+          message: dependents.map(d => d.title).join(', '),
+          actionable: true,
+          actionLabel: 'Yes, cascade',
+          actionFn: async () => {
+            await cascadeDependents(eid);
+            onSaved();
+          },
+        });
+      }
     } else {
       const { event: created, conflicts: c } = await createEvent(payload);
       conflicts = c;
@@ -476,6 +500,39 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             <span className={styles.travelLabel}>min travel</span>
           </div>
         </div>
+
+        {/* Depends on (Phase 10) */}
+        {allEvents.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Depends on</div>
+              <select
+                className="loom-field"
+                style={{ fontSize: 12 }}
+                value={dependsOnId ?? ''}
+                onChange={e => setDependsOnId(Number(e.target.value) || null)}
+              >
+                <option value="">None</option>
+                {allEvents.map(e => (
+                  <option key={e.id} value={e.id}>{e.title} ({e.start_time.slice(0, 10)})</option>
+                ))}
+              </select>
+            </div>
+            {dependsOnId && (
+              <div style={{ minWidth: 110 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Offset (min)</div>
+                <input
+                  type="number"
+                  className="loom-field"
+                  style={{ fontSize: 12, width: 90 }}
+                  value={dependsOffset}
+                  onChange={e => setDependsOffset(Number(e.target.value))}
+                  title="Minutes after parent event ends (+) or before parent starts (-)"
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Recurrence */}
         <div className={`${styles.recurBox} ${recurring ? styles.recurBoxActive : ''}`}>
