@@ -203,8 +203,9 @@ export async function extractSyllabus(file: File): Promise<SyllabusEvent[]> {
 
 export const saveApprovedEvents = (
   events: SyllabusEvent[],
+  course_id?: number,
 ): Promise<{ created: number; event_ids: number[] }> =>
-  req('POST', '/documents/save-approved-events/', { events });
+  req('POST', '/documents/save-approved-events/', { events, course_id: course_id ?? null });
 
 // ---- Smart Scheduling ----
 
@@ -308,6 +309,35 @@ export const deleteInboxItem = (id: number): Promise<InboxItem> =>
   req('DELETE', `/inbox/${id}`);
 
 // ---- Autopilot (Phase 7) ----
+
+// ---- Courses + Assignments (Phase 8) ----
+
+export const listCourses = (): Promise<import('./types').Course[]> =>
+  req('GET', '/courses');
+
+export const createCourse = (payload: Omit<import('./types').Course, 'id'>): Promise<import('./types').Course> =>
+  req('POST', '/courses', payload);
+
+export const updateCourse = (id: number, payload: Omit<import('./types').Course, 'id'>): Promise<import('./types').Course> =>
+  req('PUT', `/courses/${id}`, payload);
+
+export const deleteCourse = (id: number): Promise<void> =>
+  req('DELETE', `/courses/${id}`);
+
+export const listAssignments = (courseId?: number): Promise<import('./types').Assignment[]> =>
+  req('GET', courseId ? `/assignments?course_id=${courseId}` : '/assignments');
+
+export const createAssignment = (payload: Omit<import('./types').Assignment, 'id'>): Promise<import('./types').Assignment> =>
+  req('POST', '/assignments', payload);
+
+export const updateAssignment = (id: number, payload: Partial<import('./types').Assignment>): Promise<import('./types').Assignment> =>
+  req('PUT', `/assignments/${id}`, payload);
+
+export const deleteAssignment = (id: number): Promise<void> =>
+  req('DELETE', `/assignments/${id}`);
+
+export const getCourseGrade = (courseId: number): Promise<{ grade: number | null; breakdown: Record<string, number | null> }> =>
+  req('GET', `/courses/${courseId}/grade`);
 
 export const runAutopilot = (payload: {
   window_start: string;

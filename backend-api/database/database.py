@@ -91,6 +91,35 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on timeblockstemplate table: {e}")
 
+        # Phase 8: Course + Assignment tables
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS course (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    code TEXT,
+                    instructor TEXT,
+                    syllabus_path TEXT,
+                    timeline_id INTEGER,
+                    grade_weights TEXT NOT NULL DEFAULT '[]',
+                    color TEXT NOT NULL DEFAULT '#6366f1'
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assignment (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    course_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    due_date TEXT NOT NULL,
+                    weight_category TEXT,
+                    score REAL,
+                    max_score REAL,
+                    event_id INTEGER
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on course/assignment tables: {e}")
+
         # Phase 7: autopilot fields on Task
         try:
             result = conn.execute(text("PRAGMA table_info(task)")).fetchall()

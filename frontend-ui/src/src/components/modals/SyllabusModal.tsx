@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
 import { useModal } from '../../contexts/ModalContext';
 import { useNotifications } from '../../store/notifications';
-import { extractSyllabus, saveApprovedEvents } from '../../api';
-import type { SyllabusEvent } from '../../types';
+import { extractSyllabus, saveApprovedEvents, listCourses } from '../../api';
+import type { SyllabusEvent, Course } from '../../types';
 
 interface SyllabusModalProps {
   onSaved: () => void;
@@ -17,6 +17,9 @@ export function SyllabusModal({ onSaved }: SyllabusModalProps) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [courseId, setCourseId] = useState<number | null>(null);
+  useEffect(() => { listCourses().then(setCourses).catch(() => {}); }, []);
 
   async function handleScan() {
     if (!file) return;
@@ -52,7 +55,7 @@ export function SyllabusModal({ onSaved }: SyllabusModalProps) {
     if (approved.length === 0) return;
     setSaving(true);
     try {
-      const res = await saveApprovedEvents(approved);
+      const res = await saveApprovedEvents(approved, courseId ?? undefined);
       addNotification({
         type: 'success',
         title: 'Events saved',
@@ -72,16 +75,32 @@ export function SyllabusModal({ onSaved }: SyllabusModalProps) {
     <ModalShell title="Scan File" width={520} onClose={close}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {!events && (
-          <div>
-            <FieldLabel>PDF file</FieldLabel>
-            <input
-              type="file"
-              accept=".pdf"
-              className="loom-field"
-              style={{ padding: '6px 8px', cursor: 'pointer' }}
-              onChange={e => setFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
+          <>
+            <div>
+              <FieldLabel>PDF file</FieldLabel>
+              <input
+                type="file"
+                accept=".pdf"
+                className="loom-field"
+                style={{ padding: '6px 8px', cursor: 'pointer' }}
+                onChange={e => setFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+            {courses.length > 0 && (
+              <div>
+                <FieldLabel>Link to course (optional)</FieldLabel>
+                <select
+                  className="loom-field"
+                  value={courseId ?? ''}
+                  onChange={e => setCourseId(Number(e.target.value) || null)}
+                  style={{ fontSize: 13 }}
+                >
+                  <option value="">None</option>
+                  {courses.map(c => <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ''}</option>)}
+                </select>
+              </div>
+            )}
+          </>
         )}
 
         {events && (

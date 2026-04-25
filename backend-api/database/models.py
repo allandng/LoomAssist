@@ -155,6 +155,47 @@ class AvailabilityRequestRead(SQLModel):
     created_at: str
     expires_at: str
 
+# --- COURSE MODELS (Phase 8) ---
+class Course(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    code: Optional[str] = None           # e.g. "CS107"
+    instructor: Optional[str] = None
+    syllabus_path: Optional[str] = None  # local file path
+    timeline_id: Optional[int] = None    # default Calendar for this course
+    grade_weights: str = Field(default="[]")  # JSON [{"name":"Midterm","weight":30},...]
+    color: str = Field(default="#6366f1")
+
+class CourseRead(SQLModel):
+    id: int
+    name: str
+    code: Optional[str]
+    instructor: Optional[str]
+    syllabus_path: Optional[str]
+    timeline_id: Optional[int]
+    grade_weights: str
+    color: str
+
+class Assignment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    course_id: int = Field(index=True)
+    title: str
+    due_date: str                         # ISO date
+    weight_category: Optional[str] = None # references grade_weights[].name
+    score: Optional[float] = None
+    max_score: Optional[float] = None
+    event_id: Optional[int] = None        # if scheduled on calendar
+
+class AssignmentRead(SQLModel):
+    id: int
+    course_id: int
+    title: str
+    due_date: str
+    weight_category: Optional[str]
+    score: Optional[float]
+    max_score: Optional[float]
+    event_id: Optional[int]
+
 # --- EVENT EMBEDDING MODELS (Phase 6) ---
 class EventEmbedding(SQLModel, table=True):
     event_id: int = Field(primary_key=True)

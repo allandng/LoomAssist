@@ -11,9 +11,9 @@ import { useNotifications } from '../../store/notifications';
 import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
-  parseDateTime, clockEvent, resolveConflict,
+  parseDateTime, clockEvent, resolveConflict, listCourses,
 } from '../../api';
-import type { Event, Calendar, ChecklistItem, ConflictSuggestion } from '../../types';
+import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
 import { SuggestionChip } from '../shared/SuggestionChip';
 import { parseChecklist } from '../../lib/eventUtils';
 
@@ -153,6 +153,9 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const [conflictWarning, setConflictWarning] = useState('');
   const [needsConfirm, setNeedsConfirm] = useState(false);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [courseId, setCourseId] = useState<number | null>(null);
+  useEffect(() => { listCourses().then(setCourses).catch(() => {}); }, []);
   const [suggestions, setSuggestions] = useState<ConflictSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 
@@ -404,6 +407,25 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
               </select>
               <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
             </div>
+            {courses.length > 0 && (
+              <div className={styles.timelineSelect} style={{ marginTop: 6 }}>
+                <select
+                  className={styles.selectInline}
+                  value={courseId ?? ''}
+                  onChange={e => {
+                    const val = Number(e.target.value) || null;
+                    setCourseId(val);
+                    // Auto-set timeline to the course's default if available
+                    const c = courses.find(c => c.id === val);
+                    if (c?.timeline_id) setCalendarId(c.timeline_id);
+                  }}
+                >
+                  <option value="">No course</option>
+                  {courses.map(c => <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ''}</option>)}
+                </select>
+                <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
+              </div>
+            )}
           </div>
           <div>
             <FieldLabel>

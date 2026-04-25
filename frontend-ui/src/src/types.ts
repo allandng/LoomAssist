@@ -56,6 +56,33 @@ export interface Task {
   deadline?: string | null;
 }
 
+export interface GradeWeight {
+  name: string;
+  weight: number;
+}
+
+export interface Course {
+  id: number;
+  name: string;
+  code: string | null;
+  instructor: string | null;
+  syllabus_path: string | null;
+  timeline_id: number | null;
+  grade_weights: string;  // JSON GradeWeight[]
+  color: string;
+}
+
+export interface Assignment {
+  id: number;
+  course_id: number;
+  title: string;
+  due_date: string;
+  weight_category: string | null;
+  score: number | null;
+  max_score: number | null;
+  event_id: number | null;
+}
+
 export interface AutopilotProposal {
   task_id: number;
   task_title: string;
