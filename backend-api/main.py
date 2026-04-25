@@ -275,6 +275,15 @@ def check_conflicts(payload: ConflictCheckRequest, db: Session = Depends(get_db)
     )
     return {"conflicts": [{"id": c.id, "title": c.title} for c in conflicts]}
 
+def _try_upsert_embedding(event_id: int, title: str, description: Optional[str], db: Session) -> None:
+    """Upsert embedding after event write — never blocks the event write on failure."""
+    try:
+        from services.embedder import upsert_event_embedding
+        upsert_event_embedding(event_id, title, description, db)
+    except Exception as e:
+        logger.warning(f"Embedding upsert failed for event {event_id}: {e}")
+
+
 @app.post("/events/")
 def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     validate_calendar_exists(event.calendar_id, db)
@@ -295,6 +304,7 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
+    _try_upsert_embedding(db_event.id, db_event.title, db_event.description, db)
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
     return {
         "event": db_event,
@@ -332,6 +342,7 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
 
     db.commit()
     db.refresh(db_event)
+    _try_upsert_embedding(db_event.id, db_event.title, db_event.description, db)
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
     return {
         "event": db_event,
@@ -347,8 +358,14 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
             detail={"error": {"code": "not_found", "detail": "Event not found"}}
         )
 
+    event_id_to_delete = db_event.id
     db.delete(db_event)
     db.commit()
+    try:
+        from services.embedder import delete_event_embedding
+        delete_event_embedding(event_id_to_delete, db)
+    except Exception:
+        pass
     return {"status": "success", "message": "Event deleted"}
 
 # H4: Pydantic model for skip-date request body
@@ -1047,6 +1064,49 @@ def find_free_slots(req: FindFreeRequest, db: Session = Depends(get_db)):
             cursor += timedelta(minutes=15)
 
     return {"slots": free_slots, "duration_minutes": req.duration_minutes}
+
+
+# ── Phase 6: Semantic Search ──────────────────────────────────────────────────
+
+class SemanticSearchResult(BaseModel):
+    event: dict
+    score: float
+
+@app.get("/search/semantic")
+def semantic_search(q: str, k: int = 10, db: Session = Depends(get_db)):
+    try:
+        from services.embedder import search as embedding_search
+        hits = embedding_search(q, k, db)
+    except Exception as e:
+        logger.error(f"Semantic search error: {e}")
+        return {"results": []}
+
+    results = []
+    for event_id, score in hits:
+        ev = db.query(models.Event).filter(models.Event.id == event_id).first()
+        if ev:
+            results.append({"event": ev.model_dump(), "score": round(score, 4)})
+    return {"results": results}
+
+
+@app.post("/search/reindex")
+def reindex_embeddings(db: Session = Depends(get_db)):
+    try:
+        from services.embedder import upsert_event_embedding
+        events = db.query(models.Event).all()
+        count = 0
+        for ev in events:
+            try:
+                upsert_event_embedding(ev.id, ev.title, ev.description, db)
+                count += 1
+            except Exception as e:
+                logger.warning(f"Reindex failed for event {ev.id}: {e}")
+        return {"reindexed": count}
+    except Exception as e:
+        logger.error(f"Reindex error: {e}")
+        raise HTTPException(status_code=500, detail={"error": {"code": "reindex_failed", "detail": str(e)}})
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _find_free_slots_internal(

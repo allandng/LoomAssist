@@ -150,6 +150,13 @@ class AvailabilityRequestRead(SQLModel):
     created_at: str
     expires_at: str
 
+# --- EVENT EMBEDDING MODELS (Phase 6) ---
+class EventEmbedding(SQLModel, table=True):
+    event_id: int = Field(primary_key=True)
+    vector: bytes                # numpy float32 serialized via tobytes()
+    model: str = Field(default="all-MiniLM-L6-v2")
+    updated_at: str              # ISO datetime
+
 # --- INBOX ITEM MODELS (Phase 4) ---
 class InboxItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

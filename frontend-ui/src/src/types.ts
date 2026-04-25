@@ -190,6 +190,11 @@ export interface TimeBlockTemplate {
   blocks_json: string;  // JSON string — parse to TimeBlockDef[]
 }
 
+export interface SemanticSearchResult {
+  event: Event;
+  score: number;
+}
+
 export interface ConflictSuggestion {
   start: string;
   end: string;

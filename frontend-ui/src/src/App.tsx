@@ -27,7 +27,7 @@ import { useModal } from './contexts/ModalContext';
 import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { NotifPanel } from './components/NotifPanel';
-import { getCrashFlag, exportLogs, getWeeklyReview, transcribeAudio, applyVoiceIntent } from './api';
+import { getCrashFlag, exportLogs, getWeeklyReview, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
@@ -70,6 +70,23 @@ function Shell() {
   useEffect(() => {
     listInbox().then(items => setInboxCount(items.length)).catch(() => {});
   }, [inboxOpen]);
+
+  // Semantic search (Phase 6)
+  const [semanticEnabled, setSemanticEnabled] = useState(false);
+  const handleSearch = useCallback(async (q: string) => {
+    if (!semanticEnabled || q.trim().length < 3) return;
+    try {
+      const res = await semanticSearch(q.trim(), 5);
+      if (res.results.length === 0) {
+        addNotification({ type: 'info', title: 'No semantic matches', message: `No events match "${q}"` });
+      } else {
+        const titles = res.results.map(r => `${r.event.title} (${Math.round(r.score * 100)}%)`).join(', ');
+        addNotification({ type: 'info', title: `Semantic results for "${q}"`, message: titles, autoRemoveMs: 8000 });
+      }
+    } catch {
+      addNotification({ type: 'error', title: 'Semantic search failed', message: 'Is the backend running?' });
+    }
+  }, [semanticEnabled, addNotification]);
 
   // Voice intent handler (Phase 5)
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -256,6 +273,9 @@ function Shell() {
           unread={unreadCount}
           onBell={togglePanel}
           onMic={handleMic}
+          onSearch={handleSearch}
+          semanticEnabled={semanticEnabled}
+          onSemanticToggle={() => setSemanticEnabled(e => !e)}
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}

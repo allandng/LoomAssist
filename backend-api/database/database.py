@@ -107,6 +107,19 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on inboxitem table: {e}")
 
+        # 6. EventEmbedding table (Phase 6)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS eventembedding (
+                    event_id INTEGER PRIMARY KEY,
+                    vector BLOB NOT NULL,
+                    model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
+                    updated_at TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on eventembedding table: {e}")
+
     logging.info("Migration check complete.")
 
 def migrate_todo_to_task():

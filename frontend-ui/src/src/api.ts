@@ -70,6 +70,15 @@ export const inferReminder = (
 ): Promise<{ minutes: number; rationale: string }> =>
   req('POST', '/ai/infer-reminder', { title, description });
 
+export const semanticSearch = (
+  q: string,
+  k = 10,
+): Promise<{ results: import('./types').SemanticSearchResult[] }> =>
+  req('GET', `/search/semantic?q=${encodeURIComponent(q)}&k=${k}`);
+
+export const reindexSearch = (): Promise<{ reindexed: number }> =>
+  req('POST', '/search/reindex');
+
 export const resolveConflict = (payload: {
   event: { title: string; start_time: string; end_time: string; calendar_id: number };
   conflicts: Array<{ id: number; title: string }>;

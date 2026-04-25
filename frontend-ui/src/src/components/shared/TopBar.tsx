@@ -28,6 +28,8 @@ interface TopBarProps {
   onSettings?: () => void;
   onSearch?: (query: string) => void;
   onMic?: () => void;
+  semanticEnabled?: boolean;
+  onSemanticToggle?: () => void;
   syncStatus?: 'ok' | 'error' | 'syncing';
   syncLabel?: string;
   right?: ReactNode;
@@ -46,6 +48,8 @@ export function TopBar({
   onSettings,
   onSearch,
   onMic,
+  semanticEnabled = false,
+  onSemanticToggle,
   syncStatus = 'ok',
   syncLabel = 'Synced',
   right,
@@ -106,12 +110,23 @@ export function TopBar({
         <input
           ref={searchRef}
           className={styles.searchInput}
-          placeholder="Search events, timelines…"
+          placeholder={semanticEnabled ? 'Semantic search…' : 'Search events, timelines…'}
           onChange={handleSearchChange}
           onKeyDown={handleSearchKey}
         />
         <Kbd small>/</Kbd>
       </label>
+      {onSemanticToggle && (
+        <button
+          className={styles.iconBtn}
+          onClick={onSemanticToggle}
+          title={semanticEnabled ? 'Semantic search ON — click to use text search' : 'Click to enable semantic search'}
+          aria-pressed={semanticEnabled}
+          style={{ color: semanticEnabled ? 'var(--accent)' : undefined }}
+        >
+          <Icon d={Icons.help} size={15} />
+        </button>
+      )}
 
       {/* AI Quick-Add */}
       <button className={styles.aiBar} onClick={onMic} title="AI Quick-Add">

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview } from '../api';
+import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview, reindexSearch } from '../api';
 import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
 import { lastMonday } from '../lib/eventUtils';
 import { useModal } from '../contexts/ModalContext';
@@ -222,6 +222,26 @@ export function SettingsPage() {
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
         </label>
+      </section>
+
+      {/* Search */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Search</h2>
+        <div className={styles.row}>
+          <button className="loom-btn-ghost" onClick={async () => {
+            try {
+              const res = await reindexSearch();
+              addNotification({ type: 'success', title: 'Re-indexed', message: `${res.reindexed} events indexed for semantic search.`, autoRemoveMs: 4000 });
+            } catch {
+              addNotification({ type: 'error', title: 'Re-index failed', message: 'Could not index events.' });
+            }
+          }}>
+            Re-index Semantic Search
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Run once after enabling semantic search or after a model upgrade.
+        </p>
       </section>
 
       {/* Database */}
