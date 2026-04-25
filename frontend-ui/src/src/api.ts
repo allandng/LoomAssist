@@ -398,3 +398,30 @@ export const runAutopilot = (payload: {
   overflow: import('./types').AutopilotOverflow[];
 }> =>
   req('POST', '/schedule/autopilot', payload);
+
+// ── Phase 13: Encrypted Local Backup ──────────────────────────────────────
+
+export async function exportBackup(passphrase: string, includeAudio = false): Promise<Blob> {
+  const resp = await fetch('http://localhost:8000/backup/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passphrase, include_audio: includeAudio }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.detail ?? 'Export failed');
+  }
+  return resp.blob();
+}
+
+export async function importBackup(file: File, passphrase: string): Promise<{ success: boolean; message: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('passphrase', passphrase);
+  const resp = await fetch('http://localhost:8000/backup/import', { method: 'POST', body: form });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.detail ?? 'Import failed');
+  }
+  return resp.json();
+}
