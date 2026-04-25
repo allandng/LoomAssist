@@ -53,6 +53,10 @@ class EventBase(SQLModel):
     depends_on_event_id: Optional[int] = Field(default=None)
     depends_offset_minutes: Optional[int] = Field(default=None)
 
+    # Phase 14c: Sync metadata
+    last_modified: Optional[str] = Field(default=None)   # ISO datetime, updated on every write
+    deleted_at: Optional[str] = Field(default=None)      # tombstone — set instead of DELETE
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")
@@ -119,6 +123,9 @@ class Task(SQLModel, table=True):
     # Phase 7: Time-Blocking Autopilot
     estimated_minutes: Optional[int] = Field(default=None)
     deadline: Optional[str] = Field(default=None)       # ISO date string, nullable
+    # Phase 14c: Sync metadata
+    last_modified: Optional[str] = Field(default=None)
+    deleted_at: Optional[str] = Field(default=None)
 
 class TaskRead(SQLModel):
     id: int
@@ -281,3 +288,23 @@ class TimeBlockTemplateRead(SQLModel):
     description: str
     created_at: str
     blocks_json: str
+
+# --- PEER MODELS (Phase 14a) ---
+class Peer(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    cert_fingerprint: str          # SHA-256 hex fingerprint of the peer's TLS cert
+    last_seen: Optional[str] = None  # ISO datetime
+    created_at: str
+
+class PeerRead(SQLModel):
+    id: int
+    name: str
+    cert_fingerprint: str
+    last_seen: Optional[str]
+    created_at: str
+
+# --- DEVICE CONFIG (Phase 14c — single-row config) ---
+class DeviceConfig(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    device_id: str                 # UUID assigned at first boot

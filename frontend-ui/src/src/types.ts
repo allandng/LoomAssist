@@ -275,3 +275,27 @@ export interface InboxItem {
   scheduled_event_id: number | null;
   archived: boolean;
 }
+
+// Phase 14: LAN Sync
+export interface Peer {
+  id: number;
+  name: string;
+  cert_fingerprint: string;
+  last_seen: string | null;
+  created_at: string;
+}
+
+export interface DiscoveredPeer {
+  name: string;
+  host: string;
+  port: number;
+  fingerprint: string;
+}
+
+export interface PairStartResult {
+  host: string;
+  port: number;
+  cert_fingerprint: string;
+  code: string;
+  expires: string;
+}

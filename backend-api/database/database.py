@@ -198,6 +198,46 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on eventembedding table: {e}")
 
+        # Phase 14a: Peer table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS peer (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    cert_fingerprint TEXT NOT NULL,
+                    last_seen TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on peer table: {e}")
+
+        # Phase 14c: DeviceConfig table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS deviceconfig (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on deviceconfig table: {e}")
+
+        # Phase 14c: last_modified + deleted_at on event and task
+        try:
+            result = conn.execute(text("PRAGMA table_info(event)")).fetchall()
+            event_cols = [row[1] for row in result]
+            for col in ["last_modified", "deleted_at"]:
+                if col not in event_cols:
+                    conn.execute(text(f"ALTER TABLE event ADD COLUMN {col} TEXT"))
+            result = conn.execute(text("PRAGMA table_info(task)")).fetchall()
+            task_cols = [row[1] for row in result]
+            for col in ["last_modified", "deleted_at"]:
+                if col not in task_cols:
+                    conn.execute(text(f"ALTER TABLE task ADD COLUMN {col} TEXT"))
+        except Exception as e:
+            logging.error(f"Migration error on sync columns: {e}")
+
     logging.info("Migration check complete.")
 
 def migrate_todo_to_task():
