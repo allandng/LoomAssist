@@ -4,8 +4,9 @@ import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview
   listSubscriptions, createSubscription, deleteSubscription, refreshSubscription,
   listCalendars as listCalendarsForSubs,
   exportBackup, importBackup,
+  pairStart, pairComplete, listPeers, deletePeer, getDiscoveredPeers, syncNow,
 } from '../api';
-import type { Subscription, Calendar as CalendarType } from '../types';
+import type { Subscription, Calendar as CalendarType, Peer, DiscoveredPeer, PairStartResult } from '../types';
 import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
 import { lastMonday } from '../lib/eventUtils';
 import { useModal } from '../contexts/ModalContext';
@@ -256,6 +257,62 @@ export function SettingsPage() {
     }
   }
 
+  // ---- LAN Sync (Phase 14) ----
+  const [peers, setPeers]                   = useState<Peer[]>([]);
+  const [discoveredPeers, setDiscovered]    = useState<DiscoveredPeer[]>([]);
+  const [pairInfo, setPairInfo]             = useState<PairStartResult | null>(null);
+  const [pairCode, setPairCode]             = useState('');
+  const [pairName, setPairName]             = useState('');
+  const [syncingId, setSyncingId]           = useState<number | null>(null);
+
+  const loadPeers = useCallback(() => {
+    listPeers().then(setPeers).catch(() => {});
+    getDiscoveredPeers().then(r => setDiscovered(r.peers)).catch(() => {});
+  }, []);
+
+  useEffect(() => { loadPeers(); }, [loadPeers]);
+
+  async function handleStartPairing() {
+    try {
+      const info = await pairStart();
+      setPairInfo(info);
+    } catch {
+      addNotification({ type: 'error', title: 'Pairing failed', message: 'Could not start pairing.' });
+    }
+  }
+
+  async function handleCompletePairing() {
+    if (!pairCode.trim() || !pairName.trim() || !pairInfo) return;
+    try {
+      await pairComplete(pairCode.trim(), pairName.trim(), pairInfo.cert_fingerprint);
+      addNotification({ type: 'success', title: 'Device paired', autoRemoveMs: 4000 });
+      setPairInfo(null);
+      setPairCode('');
+      setPairName('');
+      loadPeers();
+    } catch {
+      addNotification({ type: 'error', title: 'Pairing failed', message: 'Invalid code or code expired.' });
+    }
+  }
+
+  async function handleSyncNow(peerId: number) {
+    setSyncingId(peerId);
+    try {
+      await syncNow(peerId);
+      addNotification({ type: 'success', title: 'Sync complete', autoRemoveMs: 3000 });
+      loadPeers();
+    } catch {
+      addNotification({ type: 'error', title: 'Sync failed', message: 'Peer may be offline.' });
+    } finally {
+      setSyncingId(null);
+    }
+  }
+
+  async function handleDeletePeer(peerId: number) {
+    await deletePeer(peerId);
+    loadPeers();
+  }
+
   return (
     <div className={styles.page}>
 
@@ -463,6 +520,74 @@ export function SettingsPage() {
         <button className="loom-btn-primary" onClick={handleWeeklyReview} disabled={reviewLoading}>
           {reviewLoading ? 'Generating…' : 'Generate Review'}
         </button>
+      </section>
+
+      {/* LAN Sync (Phase 14) */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>LAN Sync</h2>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+          Sync with other devices on your local network. Both devices must be running LoomAssist.
+        </p>
+
+        {/* Paired devices */}
+        {peers.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Paired devices</span>
+            {peers.map(p => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--bg-elevated)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <span style={{ flex: 1, fontSize: 13, color: 'var(--text-main)' }}>{p.name}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {p.last_seen ? `Synced ${new Date(p.last_seen).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : 'Never synced'}
+                </span>
+                <button className="loom-btn-ghost" style={{ padding: '2px 8px', fontSize: 11 }}
+                  disabled={syncingId === p.id} onClick={() => handleSyncNow(p.id)}>
+                  {syncingId === p.id ? 'Syncing…' : 'Sync now'}
+                </button>
+                <button onClick={() => handleDeletePeer(p.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* mDNS-discovered peers not yet paired */}
+        {discoveredPeers.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Nearby devices</span>
+            {discoveredPeers.map((d, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-main)', flex: 1 }}>{d.name} ({d.host})</span>
+                <button className="loom-btn-ghost" style={{ padding: '2px 8px', fontSize: 11 }}
+                  onClick={() => { setPairInfo({ host: d.host, port: d.port, cert_fingerprint: d.fingerprint, code: '', expires: '' }); }}>
+                  Pair
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {discoveredPeers.length === 0 && peers.length === 0 && (
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>No devices found nearby. Use QR pairing below.</p>
+        )}
+
+        {/* Pairing flow */}
+        {!pairInfo ? (
+          <button className="loom-btn-primary" onClick={handleStartPairing} style={{ width: 'fit-content' }}>
+            Pair a device…
+          </button>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-elevated)', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>Show this code on the other device:</span>
+            <span style={{ fontSize: 32, fontWeight: 700, letterSpacing: 8, color: 'var(--accent)', fontFamily: 'monospace' }}>{pairInfo.code}</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Expires {new Date(pairInfo.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+            <input placeholder="Device name" value={pairName} onChange={e => setPairName(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-main)', color: 'var(--text-main)', fontSize: 13, width: 220 }} />
+            <input placeholder="Enter code from other device" value={pairCode} onChange={e => setPairCode(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-main)', color: 'var(--text-main)', fontSize: 13, width: 220 }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="loom-btn-primary" onClick={handleCompletePairing}>Confirm pairing</button>
+              <button className="loom-btn-ghost" onClick={() => setPairInfo(null)}>Cancel</button>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* App Info */}

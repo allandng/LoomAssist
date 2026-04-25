@@ -2724,3 +2724,295 @@ async def import_backup(passphrase: str = Form(...), file: UploadFile = File(...
     return BackupImportResponse(success=True, message="Database restored. Reload your data.")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PHASE 14 — LAN-ONLY MULTI-DEVICE SYNC
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 14a: Pairing ─────────────────────────────────────────────────────────────
+
+# In-memory pairing code store: { code: { fingerprint, host, port, expires } }
+_pairing_codes: dict = {}
+
+def _get_or_create_device_id(db: Session) -> str:
+    row = db.query(models.DeviceConfig).first()
+    if row:
+        return row.device_id
+    new_id = str(uuid.uuid4())
+    row = models.DeviceConfig(device_id=new_id)
+    db.add(row)
+    db.commit()
+    return new_id
+
+def _generate_self_signed_cert() -> tuple[str, str]:
+    """Return (cert_pem, key_pem). Reuses existing files if present."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime as _dt
+
+    cert_dir = Path("./certs")
+    cert_dir.mkdir(exist_ok=True)
+    cert_file = cert_dir / "loom.crt"
+    key_file  = cert_dir / "loom.key"
+
+    if cert_file.exists() and key_file.exists():
+        return cert_file.read_text(), key_file.read_text()
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "loomassist")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_dt.datetime.utcnow())
+        .not_valid_after(_dt.datetime.utcnow() + _dt.timedelta(days=3650))
+        .sign(private_key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+    key_pem  = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ).decode()
+    cert_file.write_text(cert_pem)
+    key_file.write_text(key_pem)
+    return cert_pem, key_pem
+
+def _cert_fingerprint(cert_pem: str) -> str:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    return cert.fingerprint(hashes.SHA256()).hex()
+
+@app.post("/pair/start")
+def pair_start(db: Session = Depends(get_db)):
+    import random as _random
+    cert_pem, _ = _generate_self_signed_cert()
+    fingerprint  = _cert_fingerprint(cert_pem)
+    code = f"{_random.randint(0, 999999):06d}"
+    expires = (datetime.utcnow() + timedelta(minutes=5)).isoformat()
+    _pairing_codes[code] = {"fingerprint": fingerprint, "expires": expires}
+    return {
+        "host": "0.0.0.0",
+        "port": 8000,
+        "cert_fingerprint": fingerprint,
+        "code": code,
+        "expires": expires,
+    }
+
+class PairCompleteRequest(BaseModel):
+    code: str
+    peer_name: str
+    peer_cert_fingerprint: str
+
+@app.post("/pair/complete", response_model=models.PeerRead)
+def pair_complete(req: PairCompleteRequest, db: Session = Depends(get_db)):
+    entry = _pairing_codes.get(req.code)
+    if not entry:
+        raise HTTPException(status_code=400, detail={"error": {"code": "invalid_code"}})
+    if datetime.utcnow().isoformat() > entry["expires"]:
+        del _pairing_codes[req.code]
+        raise HTTPException(status_code=400, detail={"error": {"code": "code_expired"}})
+    del _pairing_codes[req.code]
+    peer = models.Peer(
+        name=req.peer_name,
+        cert_fingerprint=req.peer_cert_fingerprint,
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(peer)
+    db.commit()
+    db.refresh(peer)
+    return peer
+
+@app.get("/pair/peers", response_model=list[models.PeerRead])
+def list_peers(db: Session = Depends(get_db)):
+    return db.query(models.Peer).all()
+
+@app.delete("/pair/peers/{peer_id}")
+def delete_peer(peer_id: int, db: Session = Depends(get_db)):
+    peer = db.query(models.Peer).filter(models.Peer.id == peer_id).first()
+    if not peer:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    db.delete(peer)
+    db.commit()
+    return {"ok": True}
+
+# ── 14b: mDNS Discovery ───────────────────────────────────────────────────────
+
+_zeroconf_instance = None
+_discovered_peers: list[dict] = []
+
+def _start_mdns(fingerprint: str, port: int = 8000):
+    global _zeroconf_instance
+    try:
+        from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
+        import socket as _socket
+
+        local_ip = _socket.gethostbyname(_socket.gethostname())
+        info = ServiceInfo(
+            "_loomassist._tcp.local.",
+            f"LoomAssist-{fingerprint[:8]}._loomassist._tcp.local.",
+            addresses=[_socket.inet_aton(local_ip)],
+            port=port,
+            properties={"fingerprint": fingerprint},
+        )
+        zc = Zeroconf()
+        zc.register_service(info)
+        _zeroconf_instance = zc
+
+        class Listener:
+            def add_service(self, zc_inner, type_, name):
+                info_found = zc_inner.get_service_info(type_, name)
+                if info_found:
+                    _discovered_peers.append({
+                        "name": name,
+                        "host": _socket.inet_ntoa(info_found.addresses[0]),
+                        "port": info_found.port,
+                        "fingerprint": info_found.properties.get(b"fingerprint", b"").decode(),
+                    })
+            def remove_service(self, zc_inner, type_, name):
+                pass
+            def update_service(self, zc_inner, type_, name):
+                pass
+
+        ServiceBrowser(zc, "_loomassist._tcp.local.", Listener())
+        logger.info("mDNS: advertising LoomAssist service")
+    except Exception as e:
+        logger.warning(f"mDNS init failed (non-fatal): {e}")
+
+@app.get("/discovery/peers")
+def get_discovery_peers():
+    return {"peers": _discovered_peers}
+
+# ── 14c: Sync Engine ──────────────────────────────────────────────────────────
+
+class SyncExchangeRequest(BaseModel):
+    since: str   # ISO datetime — return records modified after this
+
+@app.post("/sync/exchange")
+def sync_exchange(req: SyncExchangeRequest, db: Session = Depends(get_db)):
+    events = (
+        db.query(models.Event)
+        .filter(models.Event.last_modified != None, models.Event.last_modified > req.since)  # noqa: E711
+        .all()
+    )
+    tasks = (
+        db.query(models.Task)
+        .filter(models.Task.last_modified != None, models.Task.last_modified > req.since)  # noqa: E711
+        .all()
+    )
+    return {
+        "since": req.since,
+        "events": [e.__dict__ for e in events],
+        "tasks":  [t.__dict__ for t in tasks],
+    }
+
+@app.post("/sync/apply")
+def sync_apply(payload: dict, db: Session = Depends(get_db)):
+    """Accept inbound sync payload from a peer and apply last-write-wins."""
+    applied = 0
+    for ev_data in payload.get("events", []):
+        ev_data.pop("_sa_instance_state", None)
+        ev_id = ev_data.get("id")
+        existing = db.query(models.Event).filter(models.Event.id == ev_id).first() if ev_id else None
+        if existing:
+            remote_ts  = ev_data.get("last_modified", "")
+            local_ts   = existing.last_modified or ""
+            if remote_ts > local_ts:
+                for k, v in ev_data.items():
+                    if k != "id" and hasattr(existing, k):
+                        setattr(existing, k, v)
+                db.commit()
+                applied += 1
+        else:
+            new_ev = models.Event(**{k: v for k, v in ev_data.items() if hasattr(models.Event, k)})
+            db.add(new_ev)
+            db.commit()
+            applied += 1
+    for t_data in payload.get("tasks", []):
+        t_data.pop("_sa_instance_state", None)
+        t_id = t_data.get("id")
+        existing = db.query(models.Task).filter(models.Task.id == t_id).first() if t_id else None
+        if existing:
+            remote_ts = t_data.get("last_modified", "")
+            local_ts  = existing.last_modified or ""
+            if remote_ts > local_ts:
+                for k, v in t_data.items():
+                    if k != "id" and hasattr(existing, k):
+                        setattr(existing, k, v)
+                db.commit()
+                applied += 1
+        else:
+            new_t = models.Task(**{k: v for k, v in t_data.items() if hasattr(models.Task, k)})
+            db.add(new_t)
+            db.commit()
+            applied += 1
+    return {"applied": applied}
+
+@app.post("/sync/now/{peer_id}")
+async def sync_now(peer_id: int, db: Session = Depends(get_db)):
+    """Manually trigger a sync with a specific peer."""
+    peer = db.query(models.Peer).filter(models.Peer.id == peer_id).first()
+    if not peer:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+
+    last_sync = peer.last_seen or "1970-01-01T00:00:00"
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10) as cli:
+            # 1. Pull from peer
+            resp = await cli.post(
+                f"http://{peer.cert_fingerprint}:8000/sync/exchange",
+                json={"since": last_sync},
+            )
+            if resp.status_code == 200:
+                await cli.post("http://localhost:8000/sync/apply", json=resp.json())
+
+        peer.last_seen = datetime.utcnow().isoformat()
+        db.commit()
+        return {"ok": True, "peer_id": peer_id}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"error": {"code": "sync_failed", "detail": str(e)}})
+
+# Background auto-sync every 5 minutes
+async def _auto_sync_loop():
+    await asyncio.sleep(30)  # brief startup delay
+    while True:
+        try:
+            db = SessionLocal()
+            peers = db.query(models.Peer).all()
+            now = datetime.utcnow().isoformat()
+            for peer in peers:
+                last = peer.last_seen or "1970-01-01T00:00:00"
+                try:
+                    async with httpx.AsyncClient(timeout=8) as cli:
+                        resp = await cli.post(
+                            "http://localhost:8000/sync/exchange",
+                            json={"since": last},
+                        )
+                        if resp.status_code == 200:
+                            await cli.post("http://localhost:8000/sync/apply", json=resp.json())
+                    peer.last_seen = now
+                    db.commit()
+                except Exception:
+                    pass
+            db.close()
+        except Exception:
+            pass
+        await asyncio.sleep(300)  # 5 minutes
+
+@app.on_event("startup")
+async def start_auto_sync():
+    asyncio.create_task(_auto_sync_loop())
+    # Also start mDNS if cert exists
+    try:
+        cert_file = Path("./certs/loom.crt")
+        if cert_file.exists():
+            fp = _cert_fingerprint(cert_file.read_text())
+            _start_mdns(fp)
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────────────────────────────────────

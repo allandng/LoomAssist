@@ -425,3 +425,23 @@ export async function importBackup(file: File, passphrase: string): Promise<{ su
   }
   return resp.json();
 }
+
+// ── Phase 14: LAN Sync ────────────────────────────────────────────────────
+
+export const pairStart = (): Promise<import('./types').PairStartResult> =>
+  req('POST', '/pair/start');
+
+export const pairComplete = (code: string, peerName: string, peerCertFingerprint: string): Promise<import('./types').Peer> =>
+  req('POST', '/pair/complete', { code, peer_name: peerName, peer_cert_fingerprint: peerCertFingerprint });
+
+export const listPeers = (): Promise<import('./types').Peer[]> =>
+  req('GET', '/pair/peers');
+
+export const deletePeer = (id: number): Promise<void> =>
+  req('DELETE', `/pair/peers/${id}`);
+
+export const getDiscoveredPeers = (): Promise<{ peers: import('./types').DiscoveredPeer[] }> =>
+  req('GET', '/discovery/peers');
+
+export const syncNow = (peerId: number): Promise<{ ok: boolean; peer_id: number }> =>
+  req('POST', `/sync/now/${peerId}`);
