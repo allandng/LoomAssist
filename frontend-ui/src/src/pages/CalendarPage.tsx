@@ -4,13 +4,14 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import listPlugin from '@fullcalendar/list';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { EventDropArg, EventClickArg, EventHoveringArg, DateSelectArg, EventContentArg } from '@fullcalendar/core';
-import type { EventResizeDoneArg } from '@fullcalendar/interaction';
+import type { EventDropArg, EventClickArg, EventHoveringArg, DateSelectArg, EventContentArg, DateSpanApi } from '@fullcalendar/core';
+import type { EventResizeDoneArg, EventDragStartArg, EventResizeStartArg } from '@fullcalendar/interaction';
 import styles from './CalendarPage.module.css';
 import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/CalendarSidebar';
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
 import { YearView } from '../components/calendar/YearView';
+import { DragShader, type DragState } from '../components/calendar/DragShader';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
@@ -121,6 +122,10 @@ export function CalendarPage() {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncStatus, setSyncStatus] = useState<'ok' | 'error'>('ok');
   const [syncLabel, setSyncLabel] = useState('Synced');
+
+  // Drag shader (Phase 2)
+  const [dragging, setDragging] = useState<DragState | null>(null);
+  const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
 
   // QuickPeek state
   const [peek, setPeek] = useState<{ event: Event; x: number; y: number } | null>(null);
@@ -440,6 +445,38 @@ export function CalendarPage() {
     }
   }, [pushUndo, loadAll, addNotification]);
 
+  // ---- Drag shader callbacks (Phase 2) ----
+  const handleEventDragStart = useCallback((arg: EventDragStartArg) => {
+    if (!dragShaderEnabled) return;
+    const ev = arg.event.extendedProps.event as Event;
+    const start = arg.event.start ?? new Date();
+    const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
+    setDragging({ id: ev.id, start, end });
+  }, [dragShaderEnabled]);
+
+  const handleEventDragStop = useCallback((_arg: EventDragStartArg) => {
+    setDragging(null);
+  }, []);
+
+  const handleEventAllow = useCallback((dropInfo: DateSpanApi): boolean => {
+    if (dragShaderEnabled) {
+      setDragging(prev => prev ? { ...prev, start: dropInfo.start, end: dropInfo.end } : null);
+    }
+    return true;
+  }, [dragShaderEnabled]);
+
+  const handleResizeStart = useCallback((arg: EventResizeStartArg) => {
+    if (!dragShaderEnabled) return;
+    const ev = arg.event.extendedProps.event as Event;
+    const start = arg.event.start ?? new Date();
+    const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
+    setDragging({ id: ev.id, start, end });
+  }, [dragShaderEnabled]);
+
+  const handleResizeStop = useCallback((_arg: EventResizeStartArg) => {
+    setDragging(null);
+  }, []);
+
   const handleEventResize = useCallback(async (arg: EventResizeDoneArg) => {
     const ev: Event = arg.event.extendedProps.event;
     const prevEnd  = arg.oldEvent.end!;
@@ -720,12 +757,19 @@ export function CalendarPage() {
           eventMouseEnter={handleMouseEnter}
           eventMouseLeave={handleMouseLeave}
           select={handleSelect}
+          eventDragStart={handleEventDragStart}
+          eventDragStop={handleEventDragStop}
+          eventAllow={handleEventAllow}
+          eventResizeStart={handleResizeStart}
+          eventResizeStop={handleResizeStop}
           datesSet={info => nav.setDateLabel(info.view.title)}
           eventClassNames={arg => {
             const ev: Event = arg.event.extendedProps.event;
             return selectedEventIds.has(ev.id) ? ['loom-event-selected'] : [];
           }}
         />
+
+        {dragShaderEnabled && <DragShader dragging={dragging} events={events} />}
 
         {peek && (
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />

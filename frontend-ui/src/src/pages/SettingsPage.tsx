@@ -35,6 +35,16 @@ export function SettingsPage() {
     () => localStorage.getItem('loom_crash_reports_enabled') !== 'false',
   );
 
+  // ---- Drag shader (Phase 2) ----
+  const [dragShader, setDragShader] = useState<boolean>(
+    () => localStorage.getItem('loom_drag_shader_enabled') !== 'false',
+  );
+  function handleDragShaderToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setDragShader(val);
+    localStorage.setItem('loom_drag_shader_enabled', val ? 'true' : 'false');
+  }
+
   // ---- Keybinds ----
   const [keybinds, setKeybinds] = useState(loadKeybinds);
   const [capturing, setCapturing] = useState<KeybindAction | null>(null);
@@ -202,6 +212,15 @@ export function SettingsPage() {
         <label className={styles.checkRow}>
           <input type="checkbox" checked={crashReports} onChange={handleCrashToggle} />
           <span>Enable crash reporting</span>
+        </label>
+      </section>
+
+      {/* Calendar */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Calendar</h2>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
+          <span>Show conflict preview while dragging events</span>
         </label>
       </section>
 

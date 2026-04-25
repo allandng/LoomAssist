@@ -35,6 +35,10 @@
   --tl-family:   #06B6D4;
   --tl-errands:  #8B5CF6;
 
+  /* Drag shader (Phase 2) */
+  --drag-free:     rgba(74, 222, 128, 0.12);
+  --drag-conflict: rgba(248, 113, 113, 0.18);
+
   /* Typography */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
