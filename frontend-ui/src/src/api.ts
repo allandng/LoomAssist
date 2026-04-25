@@ -313,6 +313,35 @@ export const deleteInboxItem = (id: number): Promise<InboxItem> =>
 
 // ---- Autopilot (Phase 7) ----
 
+// ---- Journal (Phase 12) ----
+
+export async function createJournalEntry(
+  audioBlob: Blob | null,
+  date?: string,
+  mood?: string | null,
+  saveAudio?: boolean,
+): Promise<import('./types').JournalEntry> {
+  const form = new FormData();
+  if (audioBlob) form.append('audio', audioBlob, 'journal.webm');
+  if (date) form.append('date', date);
+  if (mood) form.append('mood', mood);
+  form.append('save_audio', saveAudio ? 'true' : 'false');
+  const res = await fetch(`${BASE}/journal`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`journal → ${res.status}`);
+  return res.json();
+}
+
+export const listJournal = (from?: string, to?: string): Promise<import('./types').JournalEntry[]> => {
+  const params = new URLSearchParams();
+  if (from) params.set('from_date', from);
+  if (to)   params.set('to_date', to);
+  const qs = params.toString();
+  return req('GET', `/journal${qs ? '?' + qs : ''}`);
+};
+
+export const deleteJournalEntry = (id: number): Promise<void> =>
+  req('DELETE', `/journal/${id}`);
+
 // ---- Subscriptions (Phase 9) ----
 
 export const listSubscriptions = (): Promise<import('./types').Subscription[]> =>

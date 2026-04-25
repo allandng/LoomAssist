@@ -17,6 +17,7 @@ import { FocusPage, FocusSidebarContent } from './pages/FocusPage';
 import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
 import { InboxPage, InboxSidebarContent } from './pages/InboxPage';
 import { CoursesPage, CoursesSidebarContent } from './pages/CoursesPage';
+import { JournalPage, JournalSidebarContent } from './pages/JournalPage';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { listCalendars, listInbox } from './api';
 import { useShortcuts } from './hooks/useShortcuts';
@@ -32,10 +33,10 @@ import { getCrashFlag, exportLogs, getWeeklyReview, transcribeAudio, applyVoiceI
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
-  calendar: '/calendar', tasks: '/tasks', focus: '/focus', inbox: '/inbox', courses: '/courses', settings: '/settings',
+  calendar: '/calendar', tasks: '/tasks', focus: '/focus', inbox: '/inbox', courses: '/courses', journal: '/journal', settings: '/settings',
 };
 const PATH_TO_DEST: Record<string, Destination> = {
-  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/courses': 'courses', '/settings': 'settings',
+  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/courses': 'courses', '/journal': 'journal', '/settings': 'settings',
 };
 
 // Apply saved theme before first render to avoid flash
@@ -259,6 +260,7 @@ function Shell() {
           {dest === 'focus'    && <FocusSidebarContent />}
           {dest === 'inbox'    && <InboxSidebarContent />}
           {dest === 'courses'  && <CoursesSidebarContent />}
+          {dest === 'journal'  && <JournalSidebarContent />}
           {dest === 'settings' && <SettingsSidebarContent />}
         </ContextSidebar>
       )}
@@ -288,6 +290,7 @@ function Shell() {
             <Route path="/focus"     element={<FocusPage />} />
             <Route path="/inbox"     element={<InboxPage />} />
             <Route path="/courses"   element={<CoursesPage />} />
+            <Route path="/journal"   element={<JournalPage />} />
             <Route path="/settings"  element={<SettingsPage />} />
             <Route path="*"          element={<Navigate to="/calendar" replace />} />
           </Routes>

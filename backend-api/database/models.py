@@ -159,6 +159,23 @@ class AvailabilityRequestRead(SQLModel):
     created_at: str
     expires_at: str
 
+# --- JOURNAL ENTRY MODELS (Phase 12) ---
+class JournalEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date: str                           # ISO date YYYY-MM-DD
+    transcript: str
+    audio_path: Optional[str] = None   # local file path if audio storage enabled
+    mood: Optional[str] = None         # "great" | "ok" | "rough" | None
+    created_at: str                     # ISO datetime
+
+class JournalEntryRead(SQLModel):
+    id: int
+    date: str
+    transcript: str
+    audio_path: Optional[str]
+    mood: Optional[str]
+    created_at: str
+
 # --- SUBSCRIPTION MODELS (Phase 9) ---
 class Subscription(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

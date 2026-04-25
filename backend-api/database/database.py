@@ -93,6 +93,21 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on timeblockstemplate table: {e}")
 
+        # Phase 12: JournalEntry table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS journalentry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    transcript TEXT NOT NULL,
+                    audio_path TEXT,
+                    mood TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on journalentry table: {e}")
+
         # Phase 9: Subscription table
         try:
             conn.execute(text("""

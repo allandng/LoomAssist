@@ -58,6 +58,15 @@ export interface Task {
   deadline?: string | null;
 }
 
+export interface JournalEntry {
+  id: number;
+  date: string;       // YYYY-MM-DD
+  transcript: string;
+  audio_path: string | null;
+  mood: 'great' | 'ok' | 'rough' | null;
+  created_at: string;
+}
+
 export interface Subscription {
   id: number;
   name: string;
