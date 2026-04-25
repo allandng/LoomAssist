@@ -1,7 +1,7 @@
 import styles from './AppDrawer.module.css';
 import { Icon, Icons } from './Icon';
 
-export type Destination = 'calendar' | 'tasks' | 'focus' | 'inbox' | 'courses' | 'settings';
+export type Destination = 'calendar' | 'tasks' | 'focus' | 'inbox' | 'courses' | 'journal' | 'settings';
 
 interface AppDrawerProps {
   active: Destination;
@@ -15,6 +15,7 @@ const NAV_ITEMS: { id: Destination; label: string; icon: React.ReactNode; kbd: s
   { id: 'focus',    label: 'Focus Mode', icon: Icons.focus,    kbd: 'F' },
   { id: 'inbox',    label: 'Inbox',      icon: Icons.mail,     kbd: 'I' },
   { id: 'courses',  label: 'Courses',    icon: Icons.doc,      kbd: '' },
+  { id: 'journal',  label: 'Journal',    icon: Icons.mic,      kbd: '' },
   { id: 'settings', label: 'Settings',   icon: Icons.settings, kbd: '' },
 ];
 

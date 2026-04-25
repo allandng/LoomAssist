@@ -1578,6 +1578,81 @@ def infer_reminder(req: InferReminderRequest):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Phase 12: Voice Journal ───────────────────────────────────────────────────
+
+_JOURNAL_AUDIO_DIR = Path(__file__).parent / "journal_audio"
+
+class JournalCreateRequest(BaseModel):
+    date: Optional[str] = None     # defaults to today
+    mood: Optional[str] = None     # "great" | "ok" | "rough"
+    save_audio: bool = False
+
+@app.post("/journal", response_model=models.JournalEntryRead)
+async def create_journal_entry(
+    audio: Optional[UploadFile] = File(None),
+    date: Optional[str] = Form(None),
+    mood: Optional[str] = Form(None),
+    save_audio: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    entry_date = date or datetime.now().strftime("%Y-%m-%d")
+    transcript = ""
+    audio_path = None
+
+    if audio:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            tmp.write(await audio.read())
+            tmp_path = tmp.name
+        try:
+            segments, _ = model.transcribe(tmp_path, beam_size=5)
+            transcript = " ".join(seg.text for seg in segments).strip()
+            if save_audio:
+                _JOURNAL_AUDIO_DIR.mkdir(exist_ok=True)
+                audio_dest = _JOURNAL_AUDIO_DIR / f"journal_{entry_date}_{int(datetime.now().timestamp())}.webm"
+                import shutil as _shutil
+                _shutil.copy(tmp_path, audio_dest)
+                audio_path = str(audio_dest)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    entry = models.JournalEntry(
+        date=entry_date,
+        transcript=transcript,
+        audio_path=audio_path,
+        mood=mood,
+        created_at=datetime.now().isoformat(),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+@app.get("/journal", response_model=list[models.JournalEntryRead])
+def list_journal(
+    from_date: Optional[str] = None,
+    to_date:   Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(models.JournalEntry)
+    if from_date:
+        q = q.filter(models.JournalEntry.date >= from_date)
+    if to_date:
+        q = q.filter(models.JournalEntry.date <= to_date)
+    return q.order_by(models.JournalEntry.date.desc()).all()
+
+@app.delete("/journal/{entry_id}")
+def delete_journal_entry(entry_id: int, db: Session = Depends(get_db)):
+    entry = db.query(models.JournalEntry).filter(models.JournalEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    db.delete(entry)
+    db.commit()
+    return {"status": "deleted"}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class WeeklyReviewRequest(BaseModel):
     week_start: str  # ISO datetime — the Monday 00:00:00 of the week to review
 
@@ -1600,18 +1675,29 @@ async def weekly_review(req: WeeklyReviewRequest, db: Session = Depends(get_db))
     past_summary     = [{"title": e.title, "start": e.start_time} for e in past_events]
     upcoming_summary = [{"title": e.title, "start": e.start_time} for e in upcoming_events]
 
+    # Phase 12: include journal entries if any
+    journal_entries = db.query(models.JournalEntry).filter(
+        models.JournalEntry.date >= week_start.strftime("%Y-%m-%d"),
+        models.JournalEntry.date <  week_end.strftime("%Y-%m-%d"),
+    ).all()
+    journal_block = ""
+    if journal_entries:
+        transcripts = [f"- [{e.date}] {e.transcript}" for e in journal_entries]
+        journal_block = "\n\nJournal reflections from last week:\n" + "\n".join(transcripts)
+
     prompt = f"""You are a friendly productivity assistant for a student/developer using a local calendar app.
 
 Last week's events:
 {json.dumps(past_summary, indent=2)}
 
 Upcoming week's events:
-{json.dumps(upcoming_summary, indent=2)}
+{json.dumps(upcoming_summary, indent=2)}{journal_block}
 
 Write a SHORT weekly review (3-5 sentences max). Include:
 1. One sentence summarising what last week looked like (themes, workload).
 2. One observation — e.g. busiest day, a recurring topic, or if it was light.
 3. One sentence previewing the week ahead with a practical focus tip.
+{("4. A brief 'Reflections' note drawn from the journal entries." if journal_entries else "")}
 
 Keep the tone warm and motivating. Do not list every event. Plain text only, no markdown."""
 
