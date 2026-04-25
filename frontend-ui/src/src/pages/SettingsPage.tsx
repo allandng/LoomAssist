@@ -3,6 +3,7 @@ import type { ChangeEvent } from 'react';
 import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview, reindexSearch,
   listSubscriptions, createSubscription, deleteSubscription, refreshSubscription,
   listCalendars as listCalendarsForSubs,
+  exportBackup, importBackup,
 } from '../api';
 import type { Subscription, Calendar as CalendarType } from '../types';
 import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
@@ -201,6 +202,60 @@ export function SettingsPage() {
     }
   }
 
+  // ---- Encrypted Backup (Phase 13) ----
+  const [encPassphrase, setEncPassphrase]       = useState('');
+  const [encIncludeAudio, setEncIncludeAudio]   = useState(false);
+  const [encExporting, setEncExporting]         = useState(false);
+  const [encImporting, setEncImporting]         = useState(false);
+  const [encImportFile, setEncImportFile]       = useState<File | null>(null);
+  const [encImportPass, setEncImportPass]       = useState('');
+
+  async function handleEncExport() {
+    if (!encPassphrase.trim()) {
+      addNotification({ type: 'warning', title: 'Passphrase required', message: 'Enter a passphrase to encrypt the backup.' });
+      return;
+    }
+    setEncExporting(true);
+    try {
+      const blob = await exportBackup(encPassphrase.trim(), encIncludeAudio);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `loom-backup-${new Date().toISOString().slice(0, 10)}.loombackup`;
+      a.click();
+      addNotification({ type: 'success', title: 'Backup exported', autoRemoveMs: 4000 });
+    } catch (err) {
+      addNotification({ type: 'error', title: 'Export failed', message: String(err) });
+    } finally {
+      setEncExporting(false);
+    }
+  }
+
+  async function handleEncImport() {
+    if (!encImportFile) {
+      addNotification({ type: 'warning', title: 'No file selected', message: 'Choose a .loombackup file.' });
+      return;
+    }
+    if (!encImportPass.trim()) {
+      addNotification({ type: 'warning', title: 'Passphrase required', message: 'Enter the passphrase used when exporting.' });
+      return;
+    }
+    const confirmed = window.confirm(
+      'This will replace your current database. A pre-restore backup will be saved automatically. Proceed?'
+    );
+    if (!confirmed) return;
+    setEncImporting(true);
+    try {
+      const result = await importBackup(encImportFile, encImportPass.trim());
+      addNotification({ type: 'success', title: 'Database restored', message: result.message, autoRemoveMs: 5000 });
+      setEncImportFile(null);
+      setEncImportPass('');
+    } catch (err) {
+      addNotification({ type: 'error', title: 'Import failed', message: String(err) });
+    } finally {
+      setEncImporting(false);
+    }
+  }
+
   return (
     <div className={styles.page}>
 
@@ -337,12 +392,61 @@ export function SettingsPage() {
         </p>
       </section>
 
-      {/* Database */}
+      {/* Database — plain backup */}
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Database</h2>
         <div className={styles.row}>
           <button className="loom-btn-primary" onClick={handleBackup}>Backup Database</button>
           <button className="loom-btn-ghost" onClick={handleRestore}>Restore Database…</button>
+        </div>
+      </section>
+
+      {/* Backup & Restore (Phase 13 — encrypted) */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Backup &amp; Restore</h2>
+
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+          Encrypted backups are AES-256-GCM with a key derived from your passphrase (scrypt). Only you can decrypt them.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 13, color: 'var(--text-main)', fontWeight: 600 }}>Export</label>
+          <input
+            type="password"
+            placeholder="Passphrase"
+            value={encPassphrase}
+            onChange={e => setEncPassphrase(e.target.value)}
+            style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-main)', fontSize: 13, width: 260 }}
+          />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={encIncludeAudio} onChange={e => setEncIncludeAudio(e.target.checked)} />
+            Include saved journal audio files
+          </label>
+          <button className="loom-btn-primary" onClick={handleEncExport} disabled={encExporting} style={{ width: 'fit-content' }}>
+            {encExporting ? 'Exporting…' : 'Export .loombackup'}
+          </button>
+        </div>
+
+        <div style={{ height: 1, background: 'var(--border)', margin: '16px 0' }} />
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 13, color: 'var(--text-main)', fontWeight: 600 }}>Import</label>
+          <input
+            type="file"
+            accept=".loombackup"
+            onChange={e => setEncImportFile(e.target.files?.[0] ?? null)}
+            style={{ fontSize: 12, color: 'var(--text-muted)' }}
+          />
+          <input
+            type="password"
+            placeholder="Passphrase"
+            value={encImportPass}
+            onChange={e => setEncImportPass(e.target.value)}
+            style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-main)', fontSize: 13, width: 260 }}
+          />
+          <button className="loom-btn-ghost" onClick={handleEncImport} disabled={encImporting} style={{ width: 'fit-content' }}>
+            {encImporting ? 'Restoring…' : 'Restore from .loombackup'}
+          </button>
         </div>
       </section>
 

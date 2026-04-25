@@ -2567,3 +2567,160 @@ def delete_inbox_item(item_id: int, db: Session = Depends(get_db)):
     return item
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PHASE 13 — ENCRYPTED LOCAL BACKUP
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BackupExportRequest(BaseModel):
+    passphrase: str
+    include_audio: bool = False
+
+class BackupImportResponse(BaseModel):
+    success: bool
+    message: str
+
+def _encrypt_backup(data: bytes, passphrase: str) -> bytes:
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import secrets as _secrets
+    salt = _secrets.token_bytes(32)
+    kdf = Scrypt(salt=salt, length=32, n=16384, r=8, p=1)
+    key = kdf.derive(passphrase.encode("utf-8"))
+    aesgcm = AESGCM(key)
+    nonce = _secrets.token_bytes(12)
+    ciphertext = aesgcm.encrypt(nonce, data, None)
+    # Format: 4-byte version | 32-byte salt | 12-byte nonce | ciphertext
+    return b"LBK1" + salt + nonce + ciphertext
+
+def _decrypt_backup(data: bytes, passphrase: str) -> bytes:
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+    if len(data) < 4 + 32 + 12 + 16:
+        raise ValueError("File too short")
+    if data[:4] != b"LBK1":
+        raise ValueError("Not a .loombackup file")
+    salt = data[4:36]
+    nonce = data[36:48]
+    ciphertext = data[48:]
+    kdf = Scrypt(salt=salt, length=32, n=16384, r=8, p=1)
+    key = kdf.derive(passphrase.encode("utf-8"))
+    aesgcm = AESGCM(key)
+    try:
+        return aesgcm.decrypt(nonce, ciphertext, None)
+    except InvalidTag:
+        raise ValueError("Wrong passphrase or corrupted backup")
+
+@app.post("/backup/export")
+def export_backup(req: BackupExportRequest):
+    import sqlite3 as _sqlite3
+    import tarfile as _tarfile
+    import io as _io
+
+    db_path = os.environ.get("LOOM_DB_PATH", "./loom.sqlite3")
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail={"error": {"code": "db_not_found"}})
+
+    # SQLite online backup to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3") as tmp:
+        tmp_path = tmp.name
+    try:
+        src = _sqlite3.connect(db_path)
+        dst = _sqlite3.connect(tmp_path)
+        src.backup(dst)
+        dst.close()
+        src.close()
+
+        # Bundle into tar archive in memory
+        tar_buf = _io.BytesIO()
+        with _tarfile.open(fileobj=tar_buf, mode="w:gz") as tar:
+            tar.add(tmp_path, arcname="loom.sqlite3")
+            if req.include_audio:
+                audio_dir = Path("./journal_audio")
+                if audio_dir.exists():
+                    for af in audio_dir.iterdir():
+                        tar.add(af, arcname=f"journal_audio/{af.name}")
+        archive_bytes = tar_buf.getvalue()
+
+        encrypted = _encrypt_backup(archive_bytes, req.passphrase)
+        return Response(
+            content=encrypted,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename=loom-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}.loombackup"},
+        )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+class BackupImportRequest(BaseModel):
+    passphrase: str
+
+@app.post("/backup/import", response_model=BackupImportResponse)
+async def import_backup(passphrase: str = Form(...), file: UploadFile = File(...)):
+    import sqlite3 as _sqlite3
+    import tarfile as _tarfile
+    import io as _io
+
+    content = await file.read()
+    try:
+        archive_bytes = _decrypt_backup(content, passphrase)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": {"code": "decrypt_failed", "detail": str(e)}})
+
+    tar_buf = _io.BytesIO(archive_bytes)
+    try:
+        with _tarfile.open(fileobj=tar_buf, mode="r:gz") as tar:
+            db_member = tar.getmember("loom.sqlite3")
+            db_bytes_io = tar.extractfile(db_member)
+            if db_bytes_io is None:
+                raise ValueError("No loom.sqlite3 in archive")
+            db_bytes = db_bytes_io.read()
+
+            # Validate SQLite header
+            if len(db_bytes) < 16 or db_bytes[:16] != b"SQLite format 3\x00":
+                raise ValueError("Extracted file is not a valid SQLite database")
+
+            # Write to temp + verify
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3") as tmp:
+                tmp.write(db_bytes)
+                tmp_path = tmp.name
+
+            try:
+                test_eng = _sqlite3.connect(tmp_path)
+                test_eng.execute("SELECT 1")
+                test_eng.close()
+            except Exception:
+                os.remove(tmp_path)
+                raise ValueError("Backup database is corrupt")
+
+            # Extract optional audio files
+            audio_members = [m for m in tar.getmembers() if m.name.startswith("journal_audio/")]
+            audio_dir = Path("./journal_audio")
+            audio_dir.mkdir(exist_ok=True)
+            for m in audio_members:
+                af = tar.extractfile(m)
+                if af:
+                    dest = audio_dir / Path(m.name).name
+                    dest.write_bytes(af.read())
+    except (ValueError, KeyError, _tarfile.TarError) as e:
+        raise HTTPException(status_code=400, detail={"error": {"code": "invalid_backup", "detail": str(e)}})
+
+    db_path = os.environ.get("LOOM_DB_PATH", "./loom.sqlite3")
+    # Pre-restore backup
+    pre_bak = db_path + ".pre-restore.bak"
+    if os.path.exists(db_path):
+        shutil.copy2(db_path, pre_bak)
+
+    engine.dispose()
+    try:
+        shutil.move(tmp_path, db_path)
+    except Exception as exc:
+        # Roll back
+        if os.path.exists(pre_bak):
+            shutil.copy2(pre_bak, db_path)
+        raise HTTPException(status_code=500, detail={"error": {"code": "restore_failed", "detail": str(exc)}})
+
+    return BackupImportResponse(success=True, message="Database restored. Reload your data.")
+
+# ─────────────────────────────────────────────────────────────────────────────
