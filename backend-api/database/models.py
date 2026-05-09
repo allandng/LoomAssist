@@ -42,9 +42,18 @@ class EventBase(SQLModel):
     actual_start: Optional[str] = Field(default=None)
     actual_end:   Optional[str] = Field(default=None)
 
+    # "Missed": opt-in marker. ISO timestamp set when the user marks the event
+    # as missed via the EventEditorModal footer; null otherwise. Source of
+    # truth for GET /events/missed. Auto-cleared by the editor on a normal save.
+    missed_at: Optional[str] = Field(default=None)
+
     # Location and travel time
     location: Optional[str] = Field(default=None)
     travel_time_minutes: Optional[int] = Field(default=None)
+
+    # Class-Prep Auto-Blocking — type qualifies events for prep buffers
+    event_type:   Optional[str] = Field(default=None)   # "lecture" | "lab" | "office_hours" | "other"
+    prep_minutes: Optional[int] = Field(default=None)
 
     # Phase 1: Adaptive Reminders — tracks whether reminder was user-set or inferred
     reminder_source: Optional[str] = Field(default="none")  # "user" | "inferred" | "none"
@@ -68,6 +77,10 @@ class EventBase(SQLModel):
     external_etag: Optional[str] = Field(default=None)   # provider concurrency token
     last_synced_at: Optional[str] = Field(default=None)  # drives the freshness pill
 
+    # Procrastination Radar: links study-block (or future focus-session) events
+    # back to the originating Assignment so the radar can detect "no study time blocked."
+    assignment_id: Optional[int] = Field(default=None, index=True)
+
 class Event(EventBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     calendar: Optional["Calendar"] = Relationship(back_populates="events")
@@ -83,6 +96,12 @@ class CalendarBase(SQLModel):
     # Phase v3.0: True for timelines auto-created during connection setup.
     # Drives the disconnect-confirm copy.
     created_via_sync: Optional[bool] = Field(default=False)
+    # Future-features 3A: course timelines — drives Up Next deadline detection,
+    # the Semester at a Glance view, and the grade tracker.
+    is_course: Optional[bool] = Field(default=False)
+    course_code: Optional[str] = Field(default=None)
+    term_start: Optional[str] = Field(default=None)  # ISO date
+    term_end:   Optional[str] = Field(default=None)  # ISO date
 
 class Calendar(CalendarBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -137,6 +156,9 @@ class Task(SQLModel, table=True):
     # Phase 7: Time-Blocking Autopilot
     estimated_minutes: Optional[int] = Field(default=None)
     deadline: Optional[str] = Field(default=None)       # ISO date string, nullable
+    # Future-features 3C: grade tracker on tasks
+    grade:  Optional[float] = Field(default=None)
+    weight: Optional[float] = Field(default=None)
     # Phase 14c: Sync metadata
     last_modified: Optional[str] = Field(default=None)
     deleted_at: Optional[str] = Field(default=None)
@@ -152,6 +174,56 @@ class TaskRead(SQLModel):
     due_date: Optional[str]
     estimated_minutes: Optional[int]
     deadline: Optional[str]
+    grade:  Optional[float]
+    weight: Optional[float]
+
+# --- HABIT MODELS (4A) ---
+class Habit(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    color: str = Field(default="#6366f1")
+    target_per_week: int = Field(default=7)
+    created_at: str
+
+class HabitRead(SQLModel):
+    id: int
+    name: str
+    color: str
+    target_per_week: int
+    created_at: str
+
+class HabitEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    habit_id: int = Field(index=True)
+    date: str       # ISO date YYYY-MM-DD
+    count: int = Field(default=1)
+
+class HabitEntryRead(SQLModel):
+    id: int
+    habit_id: int
+    date: str
+    count: int
+
+# --- TASK TEMPLATE MODELS (4C) ---
+class TaskTemplate(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    title: str
+    description: Optional[str] = None
+    default_priority: str = Field(default="low")
+    recurrence_days: Optional[str] = None  # comma-sep day nums
+    calendar_id: Optional[int] = None
+    created_at: str
+
+class TaskTemplateRead(SQLModel):
+    id: int
+    name: str
+    title: str
+    description: Optional[str]
+    default_priority: str
+    recurrence_days: Optional[str]
+    calendar_id: Optional[int]
+    created_at: str
 
 # --- AVAILABILITY REQUEST MODELS ---
 class AvailabilityRequest(SQLModel, table=True):
@@ -166,6 +238,10 @@ class AvailabilityRequest(SQLModel, table=True):
     receiver_name: Optional[str] = None
     created_at: str
     expires_at: str
+    # Feature 10: optional pre-filled recipients for project-driven availability.
+    # JSON list of {person_id, name, email}. Receivers still self-identify on the
+    # receiver page — this is metadata only.
+    recipients_json: Optional[str] = None
 
 class AvailabilityRequestRead(SQLModel):
     id: int
@@ -179,6 +255,7 @@ class AvailabilityRequestRead(SQLModel):
     receiver_name: Optional[str]
     created_at: str
     expires_at: str
+    recipients_json: Optional[str] = None
 
 # --- JOURNAL ENTRY MODELS (Phase 12) ---
 class JournalEntry(SQLModel, table=True):
@@ -188,6 +265,7 @@ class JournalEntry(SQLModel, table=True):
     audio_path: Optional[str] = None   # local file path if audio storage enabled
     mood: Optional[str] = None         # "great" | "ok" | "rough" | None
     created_at: str                     # ISO datetime
+    event_id: Optional[int] = Field(default=None, index=True)
 
 class JournalEntryRead(SQLModel):
     id: int
@@ -196,6 +274,43 @@ class JournalEntryRead(SQLModel):
     audio_path: Optional[str]
     mood: Optional[str]
     created_at: str
+    event_id: Optional[int] = None
+
+# --- WEEKLY REVIEW (cached generated review for a Mon–Sun window) ---
+class WeeklyReview(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    week_start: str = Field(index=True)            # ISO date (Monday)
+    markdown: str                                  # rendered review text
+    metrics: str = Field(default="{}")             # JSON: total_hours, busiest_day, completion_rate, hours_per_timeline
+    generated_at: str                              # ISO datetime
+
+class WeeklyReviewRead(SQLModel):
+    id: int
+    week_start: str
+    markdown: str
+    metrics: str
+    generated_at: str
+
+# --- POMODORO SESSION MODELS (Energy Mapping) ---
+# Each completed pomodoro phase is logged here. Drives the Energy Map widget on
+# the home page (work-mode counts binned by hour-of-day × day-of-week).
+class PomodoroSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    completed_at: str = Field(index=True)              # ISO datetime, local tz
+    duration_minutes: int                              # actual elapsed work duration
+    mode: str                                          # work | short-break | long-break
+    task_id: Optional[int] = Field(default=None, index=True)  # no FK (Task pattern)
+    task_note: Optional[str] = Field(default=None)     # denormalized snapshot
+    round_num: Optional[int] = Field(default=None)
+
+class PomodoroSessionRead(SQLModel):
+    id: int
+    completed_at: str
+    duration_minutes: int
+    mode: str
+    task_id: Optional[int]
+    task_note: Optional[str]
+    round_num: Optional[int]
 
 # --- SUBSCRIPTION MODELS (Phase 9) ---
 class Subscription(SQLModel, table=True):
@@ -228,6 +343,10 @@ class Course(SQLModel, table=True):
     timeline_id: Optional[int] = None    # default Calendar for this course
     grade_weights: str = Field(default="[]")  # JSON [{"name":"Midterm","weight":30},...]
     color: str = Field(default="#6366f1")
+    # Feature 10: 'course' (default) | 'independent' (singleton catch-all for
+    # uncourseed group projects). The Independent row is auto-created on first
+    # uncourseed project; its term_id stays NULL (term-scope-agnostic).
+    kind: Optional[str] = Field(default="course")
 
 class CourseRead(SQLModel):
     id: int
@@ -238,6 +357,7 @@ class CourseRead(SQLModel):
     timeline_id: Optional[int]
     grade_weights: str
     color: str
+    kind: Optional[str] = "course"
 
 class Assignment(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -248,6 +368,9 @@ class Assignment(SQLModel, table=True):
     score: Optional[float] = None
     max_score: Optional[float] = None
     event_id: Optional[int] = None        # if scheduled on calendar
+    # Feature 10: deliverables = assignments. NULL on personal-only assignments.
+    project_id: Optional[int] = Field(default=None, index=True)
+    assignee_person_id: Optional[int] = Field(default=None, index=True)
 
 class AssignmentRead(SQLModel):
     id: int
@@ -258,6 +381,8 @@ class AssignmentRead(SQLModel):
     score: Optional[float]
     max_score: Optional[float]
     event_id: Optional[int]
+    project_id: Optional[int] = None
+    assignee_person_id: Optional[int] = None
 
 # --- EVENT EMBEDDING MODELS (Phase 6) ---
 class EventEmbedding(SQLModel, table=True):
@@ -433,4 +558,63 @@ class SyncIgnoreRule(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     connection_id: str = Field(index=True)
     incoming_hash: str = Field(index=True)                  # SHA-256 of (remote_calendar_id + external_id + start_iso + title)
+    created_at: str
+
+# --- FEATURE 10: GROUP PROJECT TRACKER ---
+# Projects sit under Course (or the singleton "Independent" pseudo-course).
+# Person is a local-only contact-like entity; never linked to Account/Auth.
+# ProjectMember is the M:N join. See docs/projects-design.md.
+
+class Project(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    course_id: int = Field(index=True)        # FK Course; "Independent" pseudo-course if uncourseed
+    name: str
+    description: Optional[str] = None
+    color: str = Field(default="#6366f1")
+    archived_at: Optional[str] = None         # nullable ISO datetime; archived projects hide by default
+    created_at: str
+
+class ProjectRead(SQLModel):
+    id: int
+    course_id: int
+    name: str
+    description: Optional[str]
+    color: str
+    archived_at: Optional[str]
+    created_at: str
+
+class Person(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    email: Optional[str] = None               # required only for availability use
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+    archived_at: Optional[str] = None
+    # Exactly one row may be true at a time — enforced at the route layer
+    # (POST /people/{id}/set-self clears all other rows in a transaction).
+    is_self: bool = Field(default=False)
+    created_at: str
+
+class PersonRead(SQLModel):
+    id: int
+    name: str
+    email: Optional[str]
+    phone: Optional[str]
+    notes: Optional[str]
+    archived_at: Optional[str]
+    is_self: bool
+    created_at: str
+
+class ProjectMember(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    person_id: int = Field(index=True)
+    role: Optional[str] = None                # free-form: "lead", "writer", "designer", …
+    created_at: str
+
+class ProjectMemberRead(SQLModel):
+    id: int
+    project_id: int
+    person_id: int
+    role: Optional[str]
     created_at: str

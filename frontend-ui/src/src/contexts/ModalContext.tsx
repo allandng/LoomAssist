@@ -14,6 +14,7 @@ type ModalName =
   | 'study-block'
   | 'time-block-template'
   | 'autopilot-review'
+  | 'missed-events'
   | 'sync-merge'
   | 'provider-picker'
   | 'caldav-credentials'
@@ -39,6 +40,7 @@ interface ModalContextValue {
   openStudyBlock: (deadlineEvent: Event, subject: string) => void;
   openTimeBlockTemplate: (prefillBlocks?: TimeBlockDef[]) => void;
   openAutopilotReview: (proposals: AutopilotProposal[], overflow: AutopilotOverflow[], timelines: Calendar[], onApplied: () => void) => void;
+  openMissedEvents:    (items: Event[], truncated: boolean, onReschedule: (event: Event, suggestedStart: string | null, suggestedEnd: string | null) => void) => void;
   openSyncMerge:        (itemId: string) => void;
   openProviderPicker:   (onPicked?: (kind: 'google' | 'caldav_icloud' | 'caldav_generic') => void) => void;
   openCalDAVCredentials:(kind: 'caldav_icloud' | 'caldav_generic', onCreated?: (connectionId: string) => void) => void;
@@ -71,6 +73,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     openStudyBlock:           (deadlineEvent, subject) => open('study-block', { deadlineEvent, subject }),
     openTimeBlockTemplate:    (prefillBlocks) => open('time-block-template', { prefillBlocks: prefillBlocks ?? [] }),
     openAutopilotReview:      (proposals, overflow, timelines, onApplied) => open('autopilot-review', { proposals, overflow, timelines, onApplied }),
+    openMissedEvents:         (items, truncated, onReschedule) => open('missed-events', { items, truncated, onReschedule }),
     openSyncMerge:            (itemId) => open('sync-merge', { itemId }),
     openProviderPicker:       (onPicked) => open('provider-picker', { onPicked }),
     openCalDAVCredentials:    (kind, onCreated) => open('caldav-credentials', { kind, onCreated }),

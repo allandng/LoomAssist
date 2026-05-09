@@ -21,6 +21,7 @@ import styles from './SettingsPage.module.css';
 const ACTION_ORDER: KeybindAction[] = [
   'new_event', 'today', 'sidebar_toggle', 'focus_mode',
   'view_month', 'view_week', 'view_day', 'view_agenda',
+  'snooze_day', 'snooze_week', 'command_palette',
 ];
 
 export function SettingsPage() {
@@ -28,14 +29,34 @@ export function SettingsPage() {
   const { openWeeklyReview } = useModal();
 
   // ---- Appearance ----
-  const [theme, setTheme] = useState<'dark' | 'light'>(
-    () => (localStorage.getItem('loom-theme') === 'light' ? 'light' : 'dark'),
-  );
+  type ThemeMode = 'dark' | 'light' | 'high-contrast';
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const v = localStorage.getItem('loom-theme');
+    return v === 'light' || v === 'high-contrast' ? v : 'dark';
+  });
 
   useEffect(() => {
-    document.body.classList.toggle('light-mode', theme === 'light');
+    document.body.classList.toggle('light-mode',    theme === 'light');
+    document.body.classList.toggle('high-contrast', theme === 'high-contrast');
     localStorage.setItem('loom-theme', theme);
   }, [theme]);
+
+  const [dyslexicFont, setDyslexicFont] = useState<boolean>(
+    () => localStorage.getItem('loom_font_dyslexic') === 'true',
+  );
+  useEffect(() => {
+    document.body.classList.toggle('font-dyslexic', dyslexicFont);
+    localStorage.setItem('loom_font_dyslexic', dyslexicFont ? 'true' : 'false');
+  }, [dyslexicFont]);
+
+  const [displayName, setDisplayName] = useState<string>(
+    () => localStorage.getItem('loom_user_name') ?? '',
+  );
+  function saveDisplayName(name: string) {
+    setDisplayName(name);
+    if (name.trim()) localStorage.setItem('loom_user_name', name.trim());
+    else localStorage.removeItem('loom_user_name');
+  }
 
   // ---- Subscriptions (Phase 9) ----
   const [subs, setSubs]           = useState<Subscription[]>([]);
@@ -96,6 +117,34 @@ export function SettingsPage() {
     const val = e.target.checked;
     setDragShader(val);
     localStorage.setItem('loom_drag_shader_enabled', val ? 'true' : 'false');
+  }
+
+  // ---- Spoken briefing (Future-features 2C) ----
+  const [speakBriefing, setSpeakBriefing] = useState<boolean>(
+    () => localStorage.getItem('loom_speak_briefing') === 'true',
+  );
+  function handleSpeakBriefingToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setSpeakBriefing(val);
+    localStorage.setItem('loom_speak_briefing', val ? 'true' : 'false');
+  }
+
+  // ---- Sleep window guardrail ----
+  const [sleepEnabled, setSleepEnabled] = useState<boolean>(
+    () => localStorage.getItem('loom_sleep_window_enabled') === '1',
+  );
+  const [sleepTime, setSleepTime] = useState<string>(
+    () => localStorage.getItem('loom_sleep_window_time') ?? '23:00',
+  );
+  function handleSleepToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setSleepEnabled(val);
+    localStorage.setItem('loom_sleep_window_enabled', val ? '1' : '0');
+  }
+  function handleSleepTimeChange(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    setSleepTime(val);
+    localStorage.setItem('loom_sleep_window_time', val);
   }
 
   // ---- Keybinds ----
@@ -320,12 +369,43 @@ export function SettingsPage() {
       {/* Appearance */}
       <section id="appearance" className={styles.section}>
         <h2 className={styles.sectionTitle}>Appearance</h2>
-        <div className={styles.themeToggle} onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} style={{ cursor: 'pointer' }}>
-          <div className={`${styles.toggleTrack} ${theme === 'light' ? styles.on : ''}`}>
-            <div className={styles.toggleThumb} />
+
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: 8 }}>
+          Display name
+          <input
+            className="loom-field"
+            value={displayName}
+            onChange={e => saveDisplayName(e.target.value)}
+            placeholder="What should the Home greeting call you?"
+            style={{ marginTop: 4, width: '100%', maxWidth: 320 }}
+          />
+        </label>
+
+        <div style={{ marginTop: 14 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: 6 }}>Theme</span>
+          <div style={{ display: 'inline-flex', gap: 4, padding: 3, background: 'var(--bg-elevated)', borderRadius: 8 }}>
+            {(['dark', 'light', 'high-contrast'] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => setTheme(opt)}
+                style={{
+                  padding: '5px 12px', fontSize: 12, fontWeight: 600,
+                  borderRadius: 5, border: 'none', cursor: 'pointer',
+                  background: theme === opt ? 'var(--accent)' : 'transparent',
+                  color:      theme === opt ? '#fff' : 'var(--text-muted)',
+                  textTransform: 'capitalize',
+                }}
+              >
+                {opt === 'high-contrast' ? 'High contrast' : opt}
+              </button>
+            ))}
           </div>
-          <span className={styles.themeLabel}>Light mode</span>
         </div>
+
+        <label className={styles.checkRow} style={{ marginTop: 14 }}>
+          <input type="checkbox" checked={dyslexicFont} onChange={e => setDyslexicFont(e.target.checked)} />
+          <span>Use dyslexia-friendly font (OpenDyslexic if installed)</span>
+        </label>
       </section>
 
       {/* Keyboard Shortcuts */}
@@ -385,6 +465,36 @@ export function SettingsPage() {
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
         </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={speakBriefing} onChange={handleSpeakBriefingToggle} />
+          <span>Speak today's agenda at startup (macOS)</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={sleepEnabled} onChange={handleSleepToggle} />
+          <span>Warn for events past sleep window</span>
+        </label>
+        {sleepEnabled && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 24, fontSize: 12, color: 'var(--text-muted)' }}>
+            <span>Wind-down time</span>
+            <input
+              type="time"
+              value={sleepTime}
+              onChange={handleSleepTimeChange}
+              step={60}
+              style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-main)', fontSize: 12 }}
+            />
+            <span>— events ending after this time surface a soft warning.</span>
+          </div>
+        )}
+      </section>
+
+      {/* Print */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Print</h2>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+          Press <kbd>Cmd+P</kbd> from any Calendar view to print the current view. App chrome is hidden automatically.
+        </p>
+        <button className="loom-btn-ghost" onClick={() => window.print()}>Print current view</button>
       </section>
 
       {/* Subscriptions */}

@@ -4,6 +4,19 @@ LoomAssist is a local-first desktop calendar app for students and developers. Al
 
 ---
 
+## ✨ What's new in v2.3
+
+- **🎯 GPA Projection** — per-course slider on Courses; preview the finishing grade if remaining work scores X%. Aggregates onto a Home-page grade widget too.
+- **⏰ Procrastination Radar** — `/schedule/procrastination-radar` flags assignments due within 7 days that have no linked study or focus block; surfaces as a wellness toast on the calendar.
+- **📚 Exam Cluster Detection** — three or more exam-type events within a 5-day window trip a banner via the existing `/schedule/analyze` warnings. Reuses the wellness-warning surface — no new top-level UI.
+- **📖 Class-Prep Auto-Blocking** — new `event_type` and `prep_minutes` fields on `Event`. For events tagged `lecture`, the prep buffer expands busy windows backward in the free-slot search and renders as a leading prep block on the grid.
+- **⚡ Energy Mapping** — new `PomodoroSession` table + `/pomodoro-sessions/energy-map` route + `EnergyMappingWidget` on the home page. Hour-of-day × day-of-week completion rate, read-only.
+- **🌙 Sleep Window Guardrail** — configurable wind-down time in Settings (localStorage-backed, no schema change). Events that end past it raise a soft warning during create / drag / resize via the existing notification system.
+- **↺ Mark as Missed** — opt-in `Event.missed_at` flag set from the EventEditor footer on past non-recurring events. Calendar sidebar lists what's marked; the new `MissedEventsModal` walks per-row reschedule via `findFreeSlots`. Auto-clears on a regular Save.
+- **📝 Class-Day Takeaway Prompt** — when a lecture event ends, a dismissible `TakeawayToast` captures a two-line takeaway. New `POST /journal/text` route + `JournalEntry.event_id` indexed FK persist the entry tagged to the originating event. One prompt per event; no re-prompt after explicit dismiss.
+
+---
+
 ## ✨ What's new in v2.2
 
 - **☁️ Optional Cloud Identity** — sign in with Google · Apple · Microsoft · email. Identity-only — your email + display name are stored on Supabase and **nothing else ever leaves the device**. Local mode stays first-class; sign-in is always optional.
@@ -76,6 +89,14 @@ LoomAssist is a local-first desktop calendar app for students and developers. Al
 - **🖨️ Print Week View** — Print-optimized layout opens in a new tab
 - **🌗 Light / Dark Mode** — Toggle from Settings; persisted to localStorage
 - **⌨️ Configurable Keybinds** — Rebind any shortcut from Settings with live key-capture UI
+- **🎯 GPA Projection** — Per-course slider on Courses showing current weighted grade and projected finish if remaining work scores X%
+- **⏰ Procrastination Radar** — Assignments due within 7 days with no linked study/focus block surface as wellness toasts
+- **📚 Exam Cluster Warnings** — Three or more exam-type events within a 5-day window trip a warning banner with rebalance affordance
+- **📖 Class-Prep Auto-Blocking** — Opt-in `prep_minutes` on lecture events expands busy windows so the prep buffer is honored by the slot finder
+- **⚡ Energy Mapping** — Pomodoro completion rate by hour-of-day on the home page; read-only insight, no scheduling action
+- **🌙 Sleep Window** — Configurable wind-down time in Settings; events that end past it surface a soft warning during create / drag / resize
+- **↺ Mark as Missed** — Opt-in flag on past events; the calendar sidebar lists what's marked and a modal walks you through rescheduling each via the existing free-slot finder
+- **📝 Class-Day Takeaway Prompt** — When a lecture ends, a dismissible toast captures a two-line takeaway that lands in the journal tagged with the event
 
 ---
 
@@ -258,6 +279,16 @@ All shortcuts are rebindable from **Settings → Keyboard Shortcuts**.
 - Sleep/wake refresh — fires `/sync/run` on window focus when stale > 60s
 - Settings two-pane navigation with section anchors
 
+### ✅ Completed (v2.3)
+- GPA projection slider on Courses + aggregate grade widget on Home
+- Procrastination Radar — wellness toast for assignments due within 7 days with no linked study/focus block
+- Exam Cluster detection — three-or-more-exams-in-five-days banner via `/schedule/analyze`
+- Class-prep auto-blocking — `event_type` + `prep_minutes` on Event; prep buffer expands free-slot search and renders as a leading prep block
+- Energy Mapping widget on the home page — hour-of-day × day-of-week Pomodoro completion rate
+- Sleep window guardrail — soft warning for events past a configurable wind-down time
+- Mark-as-missed flag on past events + sidebar listing + `MissedEventsModal` per-row reschedule
+- Class-day takeaway prompt — `TakeawayToast` after lecture end → `POST /journal/text` tagged with `event_id`
+
 ### 🔜 Upcoming
 - Microsoft Graph (Outlook) connection
 - Tray-mode background sync (5-min cycles when window is closed)
@@ -279,6 +310,7 @@ LoomAssist/
 │   │   ├── scraper.py         # PDF/syllabus scraper
 │   │   ├── embedder.py        # sentence-transformers embedding + cosine search
 │   │   ├── event_resolver.py  # Fuzzy event matching for voice editing
+│   │   ├── exam_cluster.py    # Exam-window detector (Feature 3)
 │   │   ├── auth/
 │   │   │   └── supabase.py    # Supabase Auth REST client (v2.2)
 │   │   └── sync/              # v2.2 cloud sync
@@ -296,17 +328,18 @@ LoomAssist/
 │   ├── src/
 │   │   └── src/               # React source root
 │   │       ├── components/
-│   │       │   ├── calendar/  # DragShader, YearView, EventPill, TodayLineFreshness, …
+│   │       │   ├── calendar/  # DragShader, YearView, EventPill, TodayLineFreshness, ExamClusterBanner, ProcrastinationToast, TakeawayToast (v2.3), …
 │   │       │   ├── connections/ # ProviderPickerModal, CalDAVCredentialsModal, SubscribeDrawerModal (v2.2)
 │   │       │   ├── focus/     # PomodoroPanel, KanbanBoard, …
+│   │       │   ├── home/      # EnergyMappingWidget, GradeWidget, UpNextWidget, WeeklyReviewWidget (v2.3)
 │   │       │   ├── inbox/     # InboxPanel
 │   │       │   ├── journal/   # JournalRecorder
-│   │       │   ├── modals/    # EventEditorModal, AutopilotReviewModal, SyllabusModal, SyncMergeModal (v2.2), …
+│   │       │   ├── modals/    # EventEditorModal, AutopilotReviewModal, SyllabusModal, SyncMergeModal (v2.2), MissedEventsModal (v2.3), …
 │   │       │   ├── topbar/    # AccountAvatar, SyncCenter (v2.2)
 │   │       │   └── shared/    # AppDrawer, TopBar, SourceBadge (v2.2), Icon, …
 │   │       ├── contexts/      # ModalContext, UndoContext, CalendarNavContext, AccountContext (v2.2), SyncContext (v2.2)
 │   │       ├── hooks/         # useShortcuts, useReminders
-│   │       ├── lib/           # eventUtils, keybindConfig, keychain (v2.2 — wraps Tauri keyring commands)
+│   │       ├── lib/           # eventUtils, keybindConfig, keychain (v2.2 — wraps Tauri keyring commands), gradeProjection / missedEvents / sleepWindow / takeawayDismissals / eventClassification (v2.3)
 │   │       ├── pages/         # CalendarPage, TaskBoardPage, FocusPage, InboxPage,
 │   │       │                  # CoursesPage, JournalPage, SettingsPage,
 │   │       │                  # SignInPage / OnboardingPage / AccountSettingsPage (v2.2),

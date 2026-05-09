@@ -7,10 +7,11 @@ from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from typing import Optional, List
+from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from services import scraper
+from services.exam_cluster import detect_exam_clusters as _detect_exam_clusters
 import asyncio
 from faster_whisper import WhisperModel
 import os
@@ -94,7 +95,11 @@ app.add_middleware(CrashMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=[
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -139,15 +144,18 @@ def get_conflicts(
     start: str, end: str, calendar_id: int,
     exclude_event_id: int | None,
     db: Session,
-) -> list:
-    """Return events on the same calendar that overlap [start, end]."""
+) -> list[tuple]:
+    """Return (event, conflict_type) for events on the same calendar that overlap
+    [start, end]. conflict_type is 'event' for direct event-block overlap, or
+    'travel' when the proposed window only intersects another event's travel
+    buffer (the [event_start - travel_minutes, event_start) window)."""
     try:
         start_dt = datetime.fromisoformat(start)
         end_dt   = datetime.fromisoformat(end)
     except ValueError:
         return []
     candidates = db.query(models.Event).filter(models.Event.calendar_id == calendar_id).all()
-    conflicts = []
+    conflicts: list[tuple] = []
     for ev in candidates:
         if exclude_event_id and ev.id == exclude_event_id:
             continue
@@ -156,8 +164,24 @@ def get_conflicts(
             ev_end   = datetime.fromisoformat(ev.end_time)
         except ValueError:
             continue
+        # Direct overlap
         if not (ev_end <= start_dt or ev_start >= end_dt):
-            conflicts.append(ev)
+            conflicts.append((ev, "event"))
+            continue
+        # Travel-buffer overlap: the [ev_start - travel, ev_start) window
+        travel = ev.travel_time_minutes or 0
+        if travel > 0:
+            buffer_start = ev_start - timedelta(minutes=travel)
+            if not (ev_start <= start_dt or buffer_start >= end_dt):
+                conflicts.append((ev, "travel"))
+        # Prep-buffer overlap (lectures only): [ev_start - travel - prep, ev_start - travel)
+        if ev.event_type == "lecture":
+            prep = ev.prep_minutes or 0
+            if prep > 0:
+                prep_end   = ev_start - timedelta(minutes=travel)
+                prep_start = prep_end  - timedelta(minutes=prep)
+                if not (prep_end <= start_dt or prep_start >= end_dt):
+                    conflicts.append((ev, "prep"))
     return conflicts
 
 # ==========================================
@@ -301,7 +325,7 @@ def check_conflicts(payload: ConflictCheckRequest, db: Session = Depends(get_db)
         payload.start_time, payload.end_time,
         payload.calendar_id, payload.exclude_event_id, db,
     )
-    return {"conflicts": [{"id": c.id, "title": c.title} for c in conflicts]}
+    return {"conflicts": [{"id": c.id, "title": c.title, "conflict_type": ct} for c, ct in conflicts]}
 
 def _try_upsert_embedding(event_id: int, title: str, description: Optional[str], db: Session) -> None:
     """Upsert embedding after event write — never blocks the event write on failure."""
@@ -346,7 +370,7 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
     return {
         "event": db_event,
-        "conflicts": [{"id": c.id, "title": c.title} for c in conflicts],
+        "conflicts": [{"id": c.id, "title": c.title, "conflict_type": ct} for c, ct in conflicts],
     }
 
 @app.get("/events/", response_model=list[models.EventRead])
@@ -399,7 +423,7 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
 
     return {
         "event": db_event,
-        "conflicts": [{"id": c.id, "title": c.title} for c in conflicts],
+        "conflicts": [{"id": c.id, "title": c.title, "conflict_type": ct} for c, ct in conflicts],
         "dependents": [{"id": d.id, "title": d.title, "start_time": d.start_time, "end_time": d.end_time} for d in dependents],
     }
 
@@ -463,6 +487,59 @@ def unskip_event_date(event_id: int, body: SkipDateRequest, db: Session = Depend
     db.commit()
     db.refresh(db_event)
     return {"status": "success", "skipped_dates": db_event.skipped_dates}
+
+# ------------------------------------------
+# MISSED EVENTS
+# ------------------------------------------
+# Users explicitly opt-in mark a past event as missed via the EventEditorModal
+# footer; the mark is the nullable Event.missed_at ISO timestamp. Marking is
+# done via the normal full-payload PUT /events/{id} — no dedicated PATCH route,
+# because the editor already round-trips every field on save and the
+# auto-clear-on-save rule (a regular Save clears missed_at) means missed_at
+# was already on the wire either way.
+
+class MissedEventsResponse(BaseModel):
+    items: list[models.EventRead]
+    truncated: bool
+
+@app.get("/events/missed", response_model=MissedEventsResponse)
+def list_missed_events(db: Session = Depends(get_db)):
+    """Return events the user has marked as missed.
+
+    Filter:
+      - missed_at IS NOT NULL          opt-in marker present
+      - deleted_at IS NULL             not tombstoned
+      - connection_calendar_id IS NULL local-only (synced rescheduling would
+                                       push a unilateral move to the provider —
+                                       out of scope for v1)
+      - NOT is_recurring               editor cannot move a single occurrence
+                                       (the only instanceDate-aware path is
+                                       Skip this date) — recurring is a separate
+                                       follow-up feature
+      - NOT is_all_day                 no clock-in semantics; find-free returns
+                                       hour-precision slots
+
+    Legacy rows pre-dating those boolean columns store NULL. SQL three-valued
+    logic makes `NULL != True` evaluate to NULL (so such rows would be silently
+    excluded by `!= True`). We OR with `IS NULL` to include them explicitly.
+
+    Sorted by start_time ascending. Capped at 20; `truncated` flag tells the
+    frontend to render an "and N more" footnote.
+    """
+    from sqlalchemy import or_
+    rows = (
+        db.query(models.Event)
+        .filter(models.Event.missed_at.isnot(None))
+        .filter(models.Event.deleted_at.is_(None))
+        .filter(models.Event.connection_calendar_id.is_(None))
+        .filter(or_(models.Event.is_recurring == False, models.Event.is_recurring.is_(None)))  # noqa: E712
+        .filter(or_(models.Event.is_all_day   == False, models.Event.is_all_day.is_(None)))    # noqa: E712
+        .order_by(models.Event.start_time.asc())
+        .limit(21)
+        .all()
+    )
+    truncated = len(rows) > 20
+    return {"items": rows[:20], "truncated": truncated}
 
 # ==========================================
 # INTEGRATION ROUTES
@@ -1106,7 +1183,8 @@ def find_free_slots(req: FindFreeRequest, db: Session = Depends(get_db)):
             continue
         if ev_s < search_end and ev_e > search_start:
             travel = timedelta(minutes=ev.travel_time_minutes or 0)
-            busy.append((ev_s - travel, ev_e))
+            prep   = timedelta(minutes=ev.prep_minutes or 0) if ev.event_type == "lecture" else timedelta(0)
+            busy.append((ev_s - travel - prep, ev_e))
     busy.sort()
 
     free_slots = []
@@ -1198,7 +1276,8 @@ def _find_free_slots_internal(
             continue
         if ev_s < window_end and ev_e > window_start:
             travel = timedelta(minutes=ev.travel_time_minutes or 0)
-            busy.append((ev_s - travel, ev_e))
+            prep   = timedelta(minutes=ev.prep_minutes or 0) if ev.event_type == "lecture" else timedelta(0)
+            busy.append((ev_s - travel - prep, ev_e))
     busy.sort()
 
     free_slots: list[dict] = []
@@ -1412,6 +1491,7 @@ def resolve_conflict(req: ConflictResolutionRequest, db: Session = Depends(get_d
 # ==========================================
 
 class ScheduleEvent(BaseModel):
+    id: Optional[int] = None
     title: str
     start_time: str
     end_time: str
@@ -1419,10 +1499,45 @@ class ScheduleEvent(BaseModel):
 class ScheduleAnalyzeRequest(BaseModel):
     events: list[ScheduleEvent]
 
-@app.post("/schedule/analyze")
-def analyze_schedule(request: ScheduleAnalyzeRequest):
+WellnessWarningKind = Literal['exam_cluster', 'over_scheduled', 'other']
+
+class WellnessWarning(BaseModel):
+    # context shape by kind:
+    #   exam_cluster:  {event_ids: list[int], titles: list[str],
+    #                   window_start: str (YYYY-MM-DD), window_end: str (YYYY-MM-DD)}
+    #   over_scheduled: (reserved, not yet emitted)
+    #   other:          None
+    message: str
+    kind: WellnessWarningKind
+    context: Optional[dict] = None
+
+class WellnessAnalysisResponse(BaseModel):
+    warnings: list[WellnessWarning]
+
+
+def _exam_cluster_warnings(events: list[ScheduleEvent]) -> list[WellnessWarning]:
+    """Deterministic rule. Pure, fast, LLM-independent."""
+    detections = _detect_exam_clusters(events)
+    warnings: list[WellnessWarning] = []
+    for d in detections:
+        n = len(d.titles)
+        warnings.append(WellnessWarning(
+            message=f"{n} exams within {(datetime.fromisoformat(d.window_end) - datetime.fromisoformat(d.window_start)).days + 1} days — consider rebalancing study time.",
+            kind='exam_cluster',
+            context={
+                "event_ids": d.event_ids,
+                "titles": d.titles,
+                "window_start": d.window_start,
+                "window_end": d.window_end,
+            },
+        ))
+    return warnings
+
+
+def _llm_wellness_warnings(events: list[ScheduleEvent]) -> list[WellnessWarning]:
+    """Existing Ollama-driven warnings. Latency unchanged from prior behavior."""
     try:
-        sorted_events = sorted(request.events, key=lambda e: e.start_time)
+        sorted_events = sorted(events, key=lambda e: e.start_time)
         schedule_text = "\n".join(
             f"{e.start_time[11:16]}-{e.end_time[11:16]}: {e.title}"
             for e in sorted_events
@@ -1442,13 +1557,104 @@ def analyze_schedule(request: ScheduleAnalyzeRequest):
         response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
         content = response['message']['content'].strip()
         match = re.search(r'\[.*\]', content, re.DOTALL)
-        if match:
-            warnings = json.loads(match.group(0))
-            return {"warnings": warnings}
-        return {"warnings": []}
+        if not match:
+            return []
+        raw = json.loads(match.group(0))
+        return [WellnessWarning(message=str(m), kind='other') for m in raw if str(m).strip()]
     except Exception as e:
         logger.warning(f"Schedule analysis failed: {str(e)}")
-        return {"warnings": []}
+        return []
+
+
+@app.post("/schedule/analyze", response_model=WellnessAnalysisResponse)
+def analyze_schedule(request: ScheduleAnalyzeRequest):
+    # Deterministic rules first — they don't depend on the LLM call and never fail.
+    warnings = _exam_cluster_warnings(request.events)
+    warnings.extend(_llm_wellness_warnings(request.events))
+    return WellnessAnalysisResponse(warnings=warnings)
+
+
+@app.post("/schedule/detect-clusters", response_model=WellnessAnalysisResponse)
+def detect_clusters_only(request: ScheduleAnalyzeRequest):
+    """Mutation-triggered deterministic detection. No LLM, fast, idempotent."""
+    return WellnessAnalysisResponse(warnings=_exam_cluster_warnings(request.events))
+
+# ==========================================
+# PROCRASTINATION RADAR
+# ==========================================
+
+class ProcrastinationWarning(BaseModel):
+    assignment_id: int
+    title: str
+    course_name: str
+    due_date: str
+    days_until: int
+    message: str
+
+class ProcrastinationRadarResponse(BaseModel):
+    warnings: list[ProcrastinationWarning]
+
+_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+def _radar_message(title: str, days_until: int, due_dt: datetime) -> str:
+    if days_until == 0:
+        return f"{title} due today — no study time blocked."
+    if days_until == 1:
+        return f"{title} due tomorrow — no study time blocked."
+    if days_until == 7:
+        return f"{title} due in 7 days — no study time blocked."
+    return f"{title} due {_WEEKDAY_NAMES[due_dt.weekday()]} — no study time blocked."
+
+@app.get("/schedule/procrastination-radar", response_model=ProcrastinationRadarResponse)
+def procrastination_radar(db: Session = Depends(get_db)):
+    now = datetime.now()
+    today = now.date()
+    horizon = today + timedelta(days=7)
+    horizon_iso = horizon.isoformat()
+    today_iso = today.isoformat()
+    now_iso = now.isoformat()
+
+    assignments = (
+        db.query(models.Assignment)
+        .filter(models.Assignment.due_date >= today_iso)
+        .filter(models.Assignment.due_date <= horizon_iso)
+        .order_by(models.Assignment.due_date)
+        .all()
+    )
+
+    warnings: list[ProcrastinationWarning] = []
+    for a in assignments:
+        block_count = (
+            db.query(models.Event)
+            .filter(models.Event.assignment_id == a.id)
+            .filter(models.Event.deleted_at.is_(None))
+            .filter(models.Event.start_time >= now_iso)
+            .count()
+        )
+        if block_count > 0:
+            continue
+
+        try:
+            due_dt = datetime.strptime(a.due_date[:10], "%Y-%m-%d")
+        except ValueError:
+            continue
+        days_until = (due_dt.date() - today).days
+        if days_until < 0 or days_until > 7:
+            continue
+
+        course = db.query(models.Course).filter(models.Course.id == a.course_id).first()
+        course_name = course.name if course else ""
+
+        warnings.append(ProcrastinationWarning(
+            assignment_id=a.id,
+            title=a.title,
+            course_name=course_name,
+            due_date=a.due_date[:10],
+            days_until=days_until,
+            message=_radar_message(a.title, days_until, due_dt),
+        ))
+
+    return ProcrastinationRadarResponse(warnings=warnings)
 
 # ==========================================
 # TASK ROUTES (replaces M1 Todo)
@@ -1528,6 +1734,105 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(db_task)
     db.commit()
     return {"status": "success"}
+
+# ==========================================
+# POMODORO SESSIONS / ENERGY MAPPING
+# ==========================================
+
+class PomodoroSessionCreate(BaseModel):
+    completed_at: str
+    duration_minutes: int
+    mode: str
+    task_id: Optional[int] = None
+    task_note: Optional[str] = None
+    round_num: Optional[int] = None
+
+class EnergyMapResponse(BaseModel):
+    grid: List[List[int]]
+    total: int
+    source: str
+    last_session_at: Optional[str] = None
+    weeks: int
+
+@app.post("/pomodoro-sessions", response_model=models.PomodoroSessionRead)
+def create_pomodoro_session(payload: PomodoroSessionCreate, db: Session = Depends(get_db)):
+    try:
+        row = models.PomodoroSession(
+            completed_at=payload.completed_at,
+            duration_minutes=payload.duration_minutes,
+            mode=payload.mode,
+            task_id=payload.task_id,
+            task_note=payload.task_note,
+            round_num=payload.round_num,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400,
+            detail={"error": {"code": "pomodoro_create_failed", "detail": str(e)}})
+
+@app.get("/pomodoro-sessions/energy-map", response_model=EnergyMapResponse)
+def energy_map(weeks: int = 12, proxy: bool = True, db: Session = Depends(get_db)):
+    """
+    Return a 7×24 grid of completion counts (rows = day-of-week Mon..Sun, cols = hour 0..23).
+    Falls back to Event.actual_start (clock-in) and Event.start_time as a proxy energy
+    signal when fewer than 5 work-mode pomodoros exist in the window.
+    """
+    cutoff = (datetime.now() - timedelta(weeks=max(1, weeks))).isoformat()
+
+    grid = [[0 for _ in range(24)] for _ in range(7)]
+
+    pomodoros = (
+        db.query(models.PomodoroSession)
+        .filter(models.PomodoroSession.mode == "work")
+        .filter(models.PomodoroSession.completed_at >= cutoff)
+        .all()
+    )
+
+    last_session_at: Optional[str] = None
+    for p in pomodoros:
+        try:
+            dt = datetime.fromisoformat(p.completed_at)
+        except (ValueError, TypeError):
+            continue
+        grid[dt.weekday()][dt.hour] += 1
+        if last_session_at is None or p.completed_at > last_session_at:
+            last_session_at = p.completed_at
+
+    total = len(pomodoros)
+    source = "pomodoro"
+
+    if proxy and total < 5:
+        # Proxy: bin Event.actual_start (clock-in) first, fall back to start_time.
+        events = (
+            db.query(models.Event)
+            .filter(models.Event.deleted_at.is_(None))
+            .all()
+        )
+        proxy_added = 0
+        for ev in events:
+            iso = ev.actual_start or ev.start_time
+            if not iso or iso < cutoff:
+                continue
+            try:
+                dt = datetime.fromisoformat(iso)
+            except (ValueError, TypeError):
+                continue
+            grid[dt.weekday()][dt.hour] += 1
+            proxy_added += 1
+        if proxy_added > 0:
+            source = "mixed" if total > 0 else "events_proxy"
+
+    return EnergyMapResponse(
+        grid=grid,
+        total=total,
+        source=source,
+        last_session_at=last_session_at,
+        weeks=weeks,
+    )
 
 # ==========================================
 # WEEKLY REVIEW ROUTE
@@ -1628,6 +1933,35 @@ async def create_journal_entry(
     db.refresh(entry)
     return entry
 
+class JournalTextCreate(BaseModel):
+    text: str
+    event_id: Optional[int] = None
+    date: Optional[str] = None     # defaults to today
+    mood: Optional[str] = None
+
+_JOURNAL_TEXT_MAX = 600
+
+@app.post("/journal/text", response_model=models.JournalEntryRead)
+def create_journal_text(payload: JournalTextCreate, db: Session = Depends(get_db)):
+    text_value = (payload.text or "").strip()
+    if not text_value:
+        raise HTTPException(status_code=400, detail={"error": {"code": "empty_text"}})
+    if len(text_value) > _JOURNAL_TEXT_MAX:
+        text_value = text_value[:_JOURNAL_TEXT_MAX]
+    entry_date = payload.date or datetime.now().strftime("%Y-%m-%d")
+    entry = models.JournalEntry(
+        date=entry_date,
+        transcript=text_value,
+        audio_path=None,
+        mood=payload.mood,
+        created_at=datetime.now().isoformat(),
+        event_id=payload.event_id,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
 @app.get("/journal", response_model=list[models.JournalEntryRead])
 def list_journal(
     from_date: Optional[str] = None,
@@ -1656,6 +1990,9 @@ def delete_journal_entry(entry_id: int, db: Session = Depends(get_db)):
 class WeeklyReviewRequest(BaseModel):
     week_start: str  # ISO datetime — the Monday 00:00:00 of the week to review
 
+# DEPRECATED: prefer POST /reviews/weekly which persists the result. This route
+# is retained for backwards compatibility — frontend uses it as the one-shot
+# fallback when no cached row exists yet.
 @app.post("/ai/weekly-review")
 async def weekly_review(req: WeeklyReviewRequest, db: Session = Depends(get_db)):
     week_start = datetime.fromisoformat(req.week_start)
@@ -1714,6 +2051,124 @@ Keep the tone warm and motivating. Do not list every event. Plain text only, no 
         raise HTTPException(status_code=503,
             detail={"error": {"code": "llm_unavailable", "detail": "Could not generate weekly review."}})
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cached weekly reviews — persistent storage of generated reviews
+
+class WeeklyReviewGenRequest(BaseModel):
+    week_start: Optional[str] = None  # ISO date for the Monday; defaults to last Monday
+
+def _last_monday_iso() -> str:
+    today = datetime.now()
+    dow = today.weekday()  # Mon=0, Sun=6
+    days_back = 7 if dow == 0 else dow
+    last_mon = (today - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return last_mon.date().isoformat()
+
+def _compute_weekly_metrics(week_start: datetime, db: Session) -> dict:
+    week_end = week_start + timedelta(days=7)
+    events = db.query(models.Event).filter(
+        models.Event.start_time >= week_start.isoformat(),
+        models.Event.start_time <  week_end.isoformat(),
+    ).all()
+
+    total_minutes = 0
+    minutes_per_day: dict[int, int] = {}
+    minutes_per_timeline: dict[int, int] = {}
+    for ev in events:
+        try:
+            s = datetime.fromisoformat(ev.start_time)
+            e = datetime.fromisoformat(ev.end_time)
+        except ValueError:
+            continue
+        mins = max(0, int((e - s).total_seconds() / 60))
+        total_minutes += mins
+        minutes_per_day[s.weekday()] = minutes_per_day.get(s.weekday(), 0) + mins
+        minutes_per_timeline[ev.calendar_id] = minutes_per_timeline.get(ev.calendar_id, 0) + mins
+
+    busiest_day = None
+    if minutes_per_day:
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        idx = max(minutes_per_day, key=minutes_per_day.get)
+        busiest_day = {"weekday": weekday_names[idx], "hours": round(minutes_per_day[idx] / 60, 1)}
+
+    # Task completion for the week
+    tasks_total = db.query(models.Task).filter(
+        models.Task.added_at >= week_start.isoformat(),
+        models.Task.added_at <  week_end.isoformat(),
+    ).all()
+    completed = sum(1 for t in tasks_total if t.is_complete)
+    total = len(tasks_total)
+    completion_rate = round(completed / total, 2) if total else None
+
+    timeline_names = {c.id: c.name for c in db.query(models.Calendar).all()}
+    hours_per_timeline = {timeline_names.get(tid, f"#{tid}"): round(m / 60, 1) for tid, m in minutes_per_timeline.items()}
+
+    return {
+        "total_hours": round(total_minutes / 60, 1),
+        "busiest_day": busiest_day,
+        "completion_rate": completion_rate,
+        "completed_tasks": completed,
+        "total_tasks": total,
+        "hours_per_timeline": hours_per_timeline,
+    }
+
+@app.get("/reviews/weekly")
+def get_cached_weekly_review(week_start: str, db: Session = Depends(get_db)):
+    # Accept ISO datetime or ISO date — normalise to date for the index lookup.
+    try:
+        ws_date = datetime.fromisoformat(week_start).date().isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"error": {"code": "bad_week_start"}})
+    row = db.query(models.WeeklyReview).filter(models.WeeklyReview.week_start == ws_date).first()
+    if not row:
+        raise HTTPException(status_code=404, detail={"error": {"code": "no_review", "detail": "No cached review for this week."}})
+    return {
+        "id": row.id,
+        "week_start": row.week_start,
+        "markdown": row.markdown,
+        "metrics": json.loads(row.metrics) if row.metrics else {},
+        "generated_at": row.generated_at,
+    }
+
+@app.post("/reviews/weekly")
+async def generate_and_cache_weekly_review(req: WeeklyReviewGenRequest, db: Session = Depends(get_db)):
+    week_start_str = req.week_start or _last_monday_iso()
+    try:
+        ws = datetime.fromisoformat(week_start_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"error": {"code": "bad_week_start"}})
+    ws_date = ws.date().isoformat()
+
+    metrics = _compute_weekly_metrics(ws, db)
+
+    inner = WeeklyReviewRequest(week_start=ws.isoformat())
+    one_shot = await weekly_review(inner, db)
+    markdown = one_shot.get("summary", "")
+
+    existing = db.query(models.WeeklyReview).filter(models.WeeklyReview.week_start == ws_date).first()
+    now_iso = datetime.now().isoformat()
+    if existing:
+        existing.markdown = markdown
+        existing.metrics = json.dumps(metrics)
+        existing.generated_at = now_iso
+    else:
+        existing = models.WeeklyReview(
+            week_start=ws_date,
+            markdown=markdown,
+            metrics=json.dumps(metrics),
+            generated_at=now_iso,
+        )
+        db.add(existing)
+    db.commit()
+    db.refresh(existing)
+    return {
+        "id": existing.id,
+        "week_start": existing.week_start,
+        "markdown": existing.markdown,
+        "metrics": metrics,
+        "generated_at": existing.generated_at,
+    }
+
 # ==========================================
 # DURATION ANALYTICS ROUTES
 # ==========================================
@@ -1771,6 +2226,7 @@ class StudyBlockRequest(BaseModel):
     session_duration_minutes: int = 90
     preferred_hour: int = 18
     skip_weekends: bool = True
+    assignment_id: Optional[int] = None  # Procrastination Radar — links blocks back to Assignment
 
 class StudyBlockPreview(BaseModel):
     title: str
@@ -1778,6 +2234,7 @@ class StudyBlockPreview(BaseModel):
     end_time: str
     description: str
     calendar_id: int
+    assignment_id: Optional[int] = None
 
 @app.post("/study/generate-preview", response_model=list[StudyBlockPreview])
 def generate_study_preview(req: StudyBlockRequest):
@@ -1810,6 +2267,7 @@ def generate_study_preview(req: StudyBlockRequest):
             end_time=end_cursor.isoformat(),
             description=f"Auto-generated study block. Deadline: {req.deadline_date}",
             calendar_id=req.calendar_id,
+            assignment_id=req.assignment_id,
         ))
         cursor += timedelta(days=interval)
 
@@ -2354,10 +2812,16 @@ def delete_course(course_id: int, db: Session = Depends(get_db)):
 # -- Assignments CRUD --
 
 @app.get("/assignments", response_model=list[models.AssignmentRead])
-def list_assignments(course_id: Optional[int] = None, db: Session = Depends(get_db)):
+def list_assignments(
+    course_id: Optional[int] = None,
+    event_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
     q = db.query(models.Assignment)
     if course_id:
         q = q.filter(models.Assignment.course_id == course_id)
+    if event_id is not None:
+        q = q.filter(models.Assignment.event_id == event_id)
     return q.order_by(models.Assignment.due_date).all()
 
 @app.post("/assignments", response_model=models.AssignmentRead)
@@ -4039,5 +4503,168 @@ def sync_review_bulk(body: BulkActionRequest, db: Session = Depends(get_db)):
             n += 1
     db.commit()
     return {"resolved": n}
+
+# ==========================================
+# HABIT ROUTES (Future-features 4A)
+# ==========================================
+
+class HabitCreate(BaseModel):
+    name: str
+    color: Optional[str] = "#6366f1"
+    target_per_week: Optional[int] = 7
+
+class HabitUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    target_per_week: Optional[int] = None
+
+class HabitLog(BaseModel):
+    date: str  # YYYY-MM-DD
+    count: Optional[int] = 1
+
+@app.get("/habits", response_model=List[models.HabitRead])
+def list_habits(db: Session = Depends(get_db)):
+    return db.query(models.Habit).order_by(models.Habit.created_at).all()
+
+@app.post("/habits", response_model=models.HabitRead)
+def create_habit(payload: HabitCreate, db: Session = Depends(get_db)):
+    h = models.Habit(
+        name=payload.name,
+        color=payload.color or "#6366f1",
+        target_per_week=payload.target_per_week or 7,
+        created_at=datetime.now().isoformat(),
+    )
+    db.add(h)
+    db.commit()
+    db.refresh(h)
+    return h
+
+@app.put("/habits/{habit_id}", response_model=models.HabitRead)
+def update_habit(habit_id: int, payload: HabitUpdate, db: Session = Depends(get_db)):
+    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
+    if payload.name is not None: h.name = payload.name
+    if payload.color is not None: h.color = payload.color
+    if payload.target_per_week is not None: h.target_per_week = payload.target_per_week
+    db.commit()
+    db.refresh(h)
+    return h
+
+@app.delete("/habits/{habit_id}")
+def delete_habit(habit_id: int, db: Session = Depends(get_db)):
+    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
+    db.query(models.HabitEntry).filter(models.HabitEntry.habit_id == habit_id).delete()
+    db.delete(h)
+    db.commit()
+    return {"status": "deleted"}
+
+@app.get("/habits/{habit_id}/entries", response_model=List[models.HabitEntryRead])
+def list_habit_entries(habit_id: int, db: Session = Depends(get_db)):
+    return db.query(models.HabitEntry).filter(models.HabitEntry.habit_id == habit_id).all()
+
+@app.post("/habits/{habit_id}/log", response_model=models.HabitEntryRead)
+def log_habit(habit_id: int, payload: HabitLog, db: Session = Depends(get_db)):
+    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
+    existing = db.query(models.HabitEntry).filter(
+        models.HabitEntry.habit_id == habit_id,
+        models.HabitEntry.date == payload.date,
+    ).first()
+    if existing:
+        existing.count = payload.count or 1
+        db.commit()
+        db.refresh(existing)
+        return existing
+    entry = models.HabitEntry(habit_id=habit_id, date=payload.date, count=payload.count or 1)
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+@app.delete("/habits/{habit_id}/entries/{entry_id}")
+def delete_habit_entry(habit_id: int, entry_id: int, db: Session = Depends(get_db)):
+    e = db.query(models.HabitEntry).filter(
+        models.HabitEntry.id == entry_id,
+        models.HabitEntry.habit_id == habit_id,
+    ).first()
+    if not e:
+        raise HTTPException(status_code=404, detail={"error": {"code": "entry_not_found"}})
+    db.delete(e)
+    db.commit()
+    return {"status": "deleted"}
+
+# ==========================================
+# TASK TEMPLATE ROUTES (Future-features 4C)
+# ==========================================
+
+class TaskTemplateCreate(BaseModel):
+    name: str
+    title: str
+    description: Optional[str] = None
+    default_priority: Optional[str] = "low"
+    recurrence_days: Optional[str] = None
+    calendar_id: Optional[int] = None
+
+@app.get("/task-templates", response_model=List[models.TaskTemplateRead])
+def list_task_templates(db: Session = Depends(get_db)):
+    return db.query(models.TaskTemplate).order_by(models.TaskTemplate.created_at).all()
+
+@app.post("/task-templates", response_model=models.TaskTemplateRead)
+def create_task_template(payload: TaskTemplateCreate, db: Session = Depends(get_db)):
+    t = models.TaskTemplate(
+        name=payload.name,
+        title=payload.title,
+        description=payload.description,
+        default_priority=payload.default_priority or "low",
+        recurrence_days=payload.recurrence_days,
+        calendar_id=payload.calendar_id,
+        created_at=datetime.now().isoformat(),
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return t
+
+@app.delete("/task-templates/{tpl_id}")
+def delete_task_template(tpl_id: int, db: Session = Depends(get_db)):
+    t = db.query(models.TaskTemplate).filter(models.TaskTemplate.id == tpl_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail={"error": {"code": "template_not_found"}})
+    db.delete(t)
+    db.commit()
+    return {"status": "deleted"}
+
+# ==========================================
+# AI BRIEFING (Future-features 2C)
+# ==========================================
+
+@app.post("/ai/briefing")
+def ai_briefing(db: Session = Depends(get_db)):
+    """Plain-text summary of today's events, suitable for TTS."""
+    today = datetime.now().date()
+    start = datetime.combine(today, datetime.min.time())
+    end   = start + timedelta(days=1)
+    events = db.query(models.Event).filter(
+        models.Event.start_time >= start.isoformat(),
+        models.Event.start_time <  end.isoformat(),
+    ).order_by(models.Event.start_time).all()
+
+    if not events:
+        return {"text": "You have no events scheduled today."}
+
+    lines = [f"You have {len(events)} event{'s' if len(events) != 1 else ''} today."]
+    for e in events[:5]:
+        try:
+            t = datetime.fromisoformat(e.start_time).strftime("%-I:%M %p")
+        except (ValueError, AttributeError):
+            t = ""
+        lines.append(f"At {t}: {e.title}.")
+    if len(events) > 5:
+        lines.append(f"And {len(events) - 5} more.")
+    return {"text": " ".join(lines)}
 
 # ─────────────────────────────────────────────────────────────────────────────

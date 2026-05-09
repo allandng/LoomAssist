@@ -1,7 +1,7 @@
 import styles from './AppDrawer.module.css';
 import { Icon, Icons } from './Icon';
 
-export type Destination = 'calendar' | 'tasks' | 'focus' | 'inbox' | 'courses' | 'journal' | 'settings';
+export type Destination = 'home' | 'calendar' | 'tasks' | 'focus' | 'inbox' | 'courses' | 'journal' | 'settings';
 
 interface AppDrawerProps {
   active: Destination;
@@ -20,9 +20,20 @@ const NAV_ITEMS: { id: Destination; label: string; icon: React.ReactNode; kbd: s
 ];
 
 export function AppDrawer({ active, onNavigate, inboxCount = 0 }: AppDrawerProps) {
+  const homeActive = active === 'home';
   return (
     <nav className={styles.rail} aria-label="App navigation">
-      <div className={styles.logo} aria-hidden="true">L</div>
+      <button
+        className={`${styles.logoBtn} ${homeActive ? styles.logoBtnActive : ''}`}
+        onClick={() => onNavigate('home')}
+        title="Home"
+        aria-label="Home"
+        aria-current={homeActive ? 'page' : undefined}
+      >
+        {homeActive && <span className={styles.activeBar} aria-hidden="true" />}
+        <span className={styles.logo} aria-hidden="true">L</span>
+      </button>
+      <div className={styles.divider} aria-hidden="true" />
 
       {NAV_ITEMS.map(({ id, label, kbd, icon }) => {
         const isActive = id === active;

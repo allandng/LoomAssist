@@ -1,7 +1,4 @@
 .toast {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
   width: 320px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -12,7 +9,6 @@
   gap: 10px;
   align-items: flex-start;
   box-shadow: 0 10px 24px rgba(0,0,0,0.4);
-  z-index: 50;
 }
 
 .icon {

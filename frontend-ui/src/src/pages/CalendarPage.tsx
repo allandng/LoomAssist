@@ -10,6 +10,14 @@ import styles from './CalendarPage.module.css';
 import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/CalendarSidebar';
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
+import {
+  ExamClusterBanner,
+  getClusterEventIds,
+  isClusterDismissed,
+  markClusterDismissed,
+} from '../components/calendar/ExamClusterBanner';
+import { ProcrastinationToast } from '../components/calendar/ProcrastinationToast';
+import { WarningStack } from '../components/calendar/WarningStack';
 import { YearView } from '../components/calendar/YearView';
 import { DragShader, type DragState, type SelectRange } from '../components/calendar/DragShader';
 import { TodayLineFreshness } from '../components/calendar/TodayLineFreshness';
@@ -18,20 +26,27 @@ import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useReminders } from '../hooks/useReminders';
+import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
+import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
   listCalendars, createCalendar, updateCalendar, deleteCalendar,
   listTemplates,
   analyzeSchedule,
+  detectExamClusters,
+  getProcrastinationRadar,
   extractSyllabus,
   findFreeSlots,
   listTimeBlockTemplates,
   deleteTimeBlockTemplate,
   applyTimeBlockTemplate,
+  getMissedEvents,
 } from '../api';
 import type { FreeSlot } from '../types';
-import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef } from '../types';
+import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef, ProcrastinationWarning, WellnessWarning } from '../types';
+import { getDismissed, dismiss as dismissRadar } from '../lib/radarDismissals';
+import { checkSleepWindow } from '../lib/sleepWindow';
 import { useNotifications } from '../store/notifications';
 
 // ---- FullCalendar view name map ----
@@ -42,6 +57,7 @@ const FC_VIEW: Record<string, string> = {
 // ---- EventPill rendered inside FullCalendar ----
 function EventPill({ info, timelines }: { info: EventContentArg; timelines: Calendar[] }) {
   const ev: Event = info.event.extendedProps.event;
+  const isPrepBlock = !!info.event.extendedProps.isPrepBlock;
   const color = timelineColor(timelines, ev.calendar_id);
   const isSpan = ev.is_all_day;
   const checklist = parseChecklist(ev.checklist);
@@ -56,7 +72,7 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
   const thresholdDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
   let chipLabel = '';
   let isUrgent = false;
-  if (start && start > now) {
+  if (!isPrepBlock && start && start > now) {
     const diffMs = start.getTime() - now.getTime();
     const diffDays = diffMs / (1000 * 60 * 60 * 24);
     if (diffDays <= thresholdDays) {
@@ -69,29 +85,32 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
 
   return (
     <div
-      className={styles.pill}
+      className={`${styles.pill}${isPrepBlock ? ` ${styles.prepPill}` : ''}`}
       style={{
-        background: isSpan ? color : `${color}22`,
+        background: isSpan ? color : `${color}${isPrepBlock ? '11' : '22'}`,
         color: isSpan ? 'white' : color,
         borderLeft: isSpan ? 'none' : `2px solid ${color}`,
       }}
-      draggable
-      onDragStart={e => {
+      draggable={!isPrepBlock}
+      onDragStart={isPrepBlock ? undefined : (e => {
         e.dataTransfer.setData(
           'application/loom-event',
           JSON.stringify({ id: ev.id, title: ev.title }),
         );
         e.dataTransfer.effectAllowed = 'copy';
-      }}
+      })}
     >
       <span className={styles.pillTime}>{startStr}</span>
       <span className={styles.pillTitle} style={{ color: isSpan ? 'white' : 'var(--text-main)' }}>
-        {info.event.title}
+        {isPrepBlock ? `Prep · ${ev.title}` : info.event.title}
       </span>
-      {checklist.length > 0 && (
+      {!isPrepBlock && ev.travel_time_minutes && ev.travel_time_minutes > 0 ? (
+        <span className={styles.travelChip} title={`${ev.travel_time_minutes} min travel buffer`}>→ {ev.travel_time_minutes}m</span>
+      ) : null}
+      {!isPrepBlock && checklist.length > 0 && (
         <span className={styles.pillChk}>{doneCount}/{checklist.length}</span>
       )}
-      {isClockedIn && <span className={styles.clockDot} aria-label="Tracking active" />}
+      {!isPrepBlock && isClockedIn && <span className={styles.clockDot} aria-label="Tracking active" />}
       {chipLabel && (
         <span className={`${styles.deadlineChip}${isUrgent ? ` ${styles.deadlineChipUrgent}` : ''}`}>
           {chipLabel}
@@ -101,12 +120,20 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
   );
 }
 
+// Module-scoped flag for the "Missed → Reschedule" recovery flow. Survives
+// the CalendarPage remount that fires on every event save (App mounts the
+// page with key={reloadKey}, so component-local refs would be reset). Set
+// when the user clicks Reschedule in MissedEventsModal; consumed when the
+// editor closes (either path: save → page remounts and the mount effect
+// reads it; cancel → modal-name transition watcher reads it).
+let pendingMissedRecovery = false;
+
 export function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
   const pendingDateRef = useRef<Date | null>(null);
   const nav = useCalendarNav();
   const { push: pushUndo } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate } = useModal();
+  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, modal } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
@@ -118,6 +145,16 @@ export function CalendarPage() {
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
   const [wellness, setWellness] = useState<{ date: string; message: string } | null>(null);
+  // The detector emits at most one disjoint cluster today; the array shape on
+  // /schedule/* allows more, so we render the first non-dismissed one.
+  const [examClusterWarning, setExamClusterWarning] = useState<WellnessWarning | null>(null);
+  const [radar, setRadar] = useState<ProcrastinationWarning[]>([]);
+  const [radarDismissed, setRadarDismissed] = useState<Record<number, string>>(() => getDismissed());
+
+  // Missed events (loaded on mount; refreshed implicitly via reloadKey remount)
+  const [missedItems, setMissedItems] = useState<Event[]>([]);
+  const [missedTruncated, setMissedTruncated] = useState(false);
+  const prevModalNameRef = useRef<typeof modal.name>(modal.name);
 
   // Sync state
   const [lastSync, setLastSync] = useState<Date | null>(null);
@@ -169,20 +206,55 @@ export function CalendarPage() {
       setLastSync(new Date());
       setSyncStatus('ok');
 
-      // Wellness analysis (debounced — run after first load)
+      // Wellness analysis (debounced — run after first load).
+      // Splits the response: cluster warnings → ExamClusterBanner; everything
+      // else → WellnessToast. Subsequent mutations re-detect via the cheap
+      // /schedule/detect-clusters endpoint (see effect below).
       if (isFirst) {
-        analyzeSchedule(evs.map(e => ({ title: e.title, start_time: e.start_time, end_time: e.end_time }))).then(result => {
-          if (result.warnings?.length) {
-            setWellness({ date: new Date().toISOString().slice(0, 10), message: result.warnings[0] });
+        analyzeSchedule(evs.map(e => ({ id: e.id, title: e.title, start_time: e.start_time, end_time: e.end_time }))).then(result => {
+          const llm = result.warnings.find(w => w.kind !== 'exam_cluster');
+          if (llm) {
+            setWellness({ date: new Date().toISOString().slice(0, 10), message: llm.message });
           }
+          const cluster = result.warnings.find(w => w.kind === 'exam_cluster') ?? null;
+          setExamClusterWarning(cluster);
         }).catch(() => {});
       }
+
+      // Procrastination Radar — cheap SQL, refresh every loadAll so warnings
+      // disappear the moment a study block is scheduled.
+      getProcrastinationRadar()
+        .then(result => setRadar(result.warnings ?? []))
+        .catch(() => {});
     } catch {
       setSyncStatus('error');
     }
   }, []);
 
   useEffect(() => { loadAll(true); }, [loadAll]);
+
+  // Mutation-triggered exam-cluster detection. Skips the very first non-empty
+  // events render (analyzeSchedule already seeds the banner on initial load).
+  // Debounced 250ms so drag-resize churn doesn't fire a request per pixel.
+  const seenInitialEventsRef = useRef(false);
+  const detectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (events.length === 0) return;
+    if (!seenInitialEventsRef.current) {
+      seenInitialEventsRef.current = true;
+      return;
+    }
+    if (detectTimeoutRef.current) clearTimeout(detectTimeoutRef.current);
+    detectTimeoutRef.current = setTimeout(() => {
+      detectExamClusters(events.map(e => ({
+        id: e.id, title: e.title, start_time: e.start_time, end_time: e.end_time,
+      }))).then(result => {
+        const cluster = result.warnings.find(w => w.kind === 'exam_cluster') ?? null;
+        setExamClusterWarning(cluster);
+      }).catch(() => {});
+    }, 250);
+    return () => { if (detectTimeoutRef.current) clearTimeout(detectTimeoutRef.current); };
+  }, [events]);
 
   // ---- Scan handlers ----
   const handleScanFile = useCallback(async (file: File) => {
@@ -295,6 +367,29 @@ export function CalendarPage() {
     pendingDateRef.current = null;
   }, [nav.view]);
 
+  // Cross-page navigation bridge: Home heatmap writes loom_pending_date.
+  // Picked up once on mount; switches to the requested view + date.
+  useEffect(() => {
+    const dateISO = sessionStorage.getItem('loom_pending_date');
+    const viewReq = sessionStorage.getItem('loom_pending_view');
+    if (!dateISO) return;
+    sessionStorage.removeItem('loom_pending_date');
+    sessionStorage.removeItem('loom_pending_view');
+    pendingDateRef.current = new Date(dateISO);
+    if (viewReq === 'Day' || viewReq === 'Week' || viewReq === 'Month' || viewReq === 'Agenda') {
+      nav.setView(viewReq);
+    } else {
+      // Same view; trigger the apply effect manually
+      const api = calRef.current?.getApi();
+      if (api) {
+        api.gotoDate(pendingDateRef.current);
+        nav.setDateLabel(api.view.title);
+        pendingDateRef.current = null;
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleYearDayClick = useCallback((date: Date) => {
     pendingDateRef.current = date;
     nav.setView('Day');
@@ -319,6 +414,53 @@ export function CalendarPage() {
   const handleScheduleSlot = useCallback((startISO: string, endISO: string) => {
     openEventEditor(null, undefined, undefined, startISO, endISO);
   }, [openEventEditor]);
+
+  // ── Missed events ────────────────────────────────────────────────
+  const handleRecoverReschedule = useCallback((ev: Event, suggestedStart: string | null, suggestedEnd: string | null) => {
+    pendingMissedRecovery = true;
+    openEventEditor(ev, undefined, undefined, suggestedStart ?? undefined, suggestedEnd ?? undefined);
+  }, [openEventEditor]);
+
+  const handleOpenMissed = useCallback(() => {
+    openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
+  }, [openMissedEvents, missedItems, missedTruncated, handleRecoverReschedule]);
+
+  // Initial load + after-save reload (page remounts on reloadKey).
+  useEffect(() => {
+    let cancelled = false;
+    getMissedEvents()
+      .then(({ items, truncated }) => {
+        if (cancelled) return;
+        setMissedItems(items);
+        setMissedTruncated(truncated);
+        // Save-during-recovery path: page just remounted after editor save.
+        // Re-open the modal with the refreshed list (the saved event is gone
+        // from the list because the editor's auto-clear-on-save sent
+        // missed_at=null, so the GET filter excludes it now).
+        if (pendingMissedRecovery) {
+          pendingMissedRecovery = false;
+          if (items.length > 0) {
+            openMissedEvents(items, truncated, handleRecoverReschedule);
+          }
+        }
+      })
+      .catch(() => { /* silently ignore — sidebar shows empty state */ });
+    return () => { cancelled = true; };
+  }, [openMissedEvents, handleRecoverReschedule]);
+
+  // Cancel-during-recovery path: editor closes without save, so the page does
+  // NOT remount. Detect the modal-name transition and re-open the modal with
+  // the current (unchanged) list.
+  useEffect(() => {
+    const prev = prevModalNameRef.current;
+    prevModalNameRef.current = modal.name;
+    if (prev === 'event-editor' && modal.name === null && pendingMissedRecovery) {
+      pendingMissedRecovery = false;
+      if (missedItems.length > 0) {
+        openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
+      }
+    }
+  }, [modal.name, missedItems, missedTruncated, openMissedEvents, handleRecoverReschedule]);
 
   // Wire TopBar sync status
   useEffect(() => {
@@ -405,6 +547,13 @@ export function CalendarPage() {
   // Reminders
   useReminders(events, addNotification);
 
+  // Class-day journal prompts (lectures, labs, office hours)
+  const [activeTakeaway, setActiveTakeaway] = useState<EndedOccurrence | null>(null);
+  const handleEnded = useCallback((occ: EndedOccurrence) => {
+    setActiveTakeaway((current) => current ?? occ);
+  }, []);
+  useEventEndPrompts(events, handleEnded);
+
   // ---- Handlers ----
   const toggleTimeline = useCallback((id: number) => {
     setHiddenTimelineIds(prev => {
@@ -424,6 +573,7 @@ export function CalendarPage() {
 
   // ---- FullCalendar event handlers (memoized to avoid FC re-renders) ----
   const handleEventDrop = useCallback(async (arg: EventDropArg) => {
+    if (arg.event.extendedProps.isPrepBlock) { arg.revert(); return; }
     const ev: Event = arg.event.extendedProps.event;
     const prevStart = arg.oldEvent.start!;
     const prevEnd   = arg.oldEvent.end ?? new Date(prevStart.getTime() + 3_600_000);
@@ -442,6 +592,16 @@ export function CalendarPage() {
     try {
       await updateEvent(ev.id, payload);
       await loadAll();
+      const sw = checkSleepWindow(payload.start_time, payload.end_time, !!ev.is_all_day);
+      if (sw) {
+        addNotification({
+          type: 'warning',
+          title: 'Past sleep window',
+          message: sw.message,
+          collapseKey: 'sleep-window',
+          autoRemoveMs: 6000,
+        });
+      }
     } catch {
       arg.revert();
       addNotification({ type: 'error', title: 'Move failed', message: 'Could not update event.' });
@@ -481,6 +641,7 @@ export function CalendarPage() {
   }, []);
 
   const handleEventResize = useCallback(async (arg: EventResizeDoneArg) => {
+    if (arg.event.extendedProps.isPrepBlock) { arg.revert(); return; }
     const ev: Event = arg.event.extendedProps.event;
     const prevEnd  = arg.oldEvent.end!;
     const newEnd   = arg.event.end!;
@@ -494,6 +655,16 @@ export function CalendarPage() {
     try {
       await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });
       await loadAll();
+      const sw = checkSleepWindow(ev.start_time, newEnd.toISOString(), !!ev.is_all_day);
+      if (sw) {
+        addNotification({
+          type: 'warning',
+          title: 'Past sleep window',
+          message: sw.message,
+          collapseKey: 'sleep-window',
+          autoRemoveMs: 6000,
+        });
+      }
     } catch {
       arg.revert();
       addNotification({ type: 'error', title: 'Resize failed', message: 'Could not update event.' });
@@ -593,6 +764,116 @@ export function CalendarPage() {
       addNotification({ type: 'error', title: 'Delete failed', message: 'Some events could not be deleted.' });
     }
   }, [selectedEventIds, events, pushUndo, loadAll, addNotification]);
+
+  // ---- Snooze: shifts selected events forward by N days. Triggered via the
+  // `loom-snooze-selected` window event from App.tsx's keyboard shortcuts.
+  const snoozeSelected = useCallback(async (days: number) => {
+    if (selectedEventIds.size === 0) {
+      addNotification({ type: 'info', title: 'Nothing selected', message: 'Click an event first to snooze it.', autoRemoveMs: 2500 });
+      return;
+    }
+    const ids = [...selectedEventIds];
+    const targets = events.filter(e => ids.includes(e.id));
+    if (targets.length === 0) return;
+
+    const shiftMs = days * 24 * 60 * 60 * 1000;
+    const updates = targets.map(ev => {
+      const newStart = new Date(new Date(ev.start_time).getTime() + shiftMs).toISOString();
+      const newEnd   = new Date(new Date(ev.end_time).getTime()   + shiftMs).toISOString();
+      return { ev, payload: { ...ev, start_time: newStart, end_time: newEnd } };
+    });
+
+    pushUndo({
+      label: `Snooze ${ids.length} event(s) ${days > 0 ? `+${days}d` : `${days}d`}`,
+      undo: async () => {
+        for (const { ev } of updates) await updateEvent(ev.id, ev);
+        await loadAll();
+      },
+      redo: async () => {
+        for (const { ev, payload } of updates) await updateEvent(ev.id, payload);
+        await loadAll();
+      },
+    });
+
+    try {
+      for (const { ev, payload } of updates) await updateEvent(ev.id, payload);
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Snooze failed', message: 'Could not update events.' });
+    }
+  }, [selectedEventIds, events, pushUndo, loadAll, addNotification]);
+
+  useEffect(() => {
+    const handler = (e: globalThis.Event) => {
+      const detail = (e as CustomEvent<{ days: number }>).detail;
+      if (detail) void snoozeSelected(detail.days);
+    };
+    window.addEventListener('loom-snooze-selected', handler as EventListener);
+    return () => window.removeEventListener('loom-snooze-selected', handler as EventListener);
+  }, [snoozeSelected]);
+
+  // Pattern-based suggestion: bucket the trailing 8 weeks by (weekday, 2h slot).
+  // If a recurring slot has ≥5 occurrences and the matching slot in the next 7
+  // days is empty, suggest blocking it. One per session, gated by sessionStorage.
+  useEffect(() => {
+    if (events.length === 0) return;
+    if (sessionStorage.getItem('loom_pattern_suggested') === '1') return;
+
+    const now = new Date();
+    const eightWeeksAgo = new Date(now.getTime() - 8 * 7 * 86_400_000);
+    const buckets = new Map<string, { count: number; weekday: number; bin: number; sample: string }>();
+
+    for (const ev of events) {
+      const d = new Date(ev.start_time);
+      if (isNaN(d.getTime()) || d < eightWeeksAgo || d > now) continue;
+      const wd  = d.getDay();
+      const bin = Math.floor(d.getHours() / 2) * 2;
+      const key = `${wd}:${bin}`;
+      const existing = buckets.get(key);
+      if (existing) existing.count++;
+      else buckets.set(key, { count: 1, weekday: wd, bin, sample: ev.title });
+    }
+
+    // Find the next 7 days' usage — skip if a slot is already filled
+    const upcoming = new Set<string>();
+    const sevenDaysOut = new Date(now.getTime() + 7 * 86_400_000);
+    for (const ev of events) {
+      const d = new Date(ev.start_time);
+      if (isNaN(d.getTime()) || d < now || d > sevenDaysOut) continue;
+      upcoming.add(`${d.getDay()}:${Math.floor(d.getHours() / 2) * 2}`);
+    }
+
+    // Score: prefer most-used unfilled slot
+    const candidates = [...buckets.values()]
+      .filter(b => b.count >= 5 && !upcoming.has(`${b.weekday}:${b.bin}`))
+      .sort((a, b) => b.count - a.count);
+    if (candidates.length === 0) return;
+
+    const top = candidates[0];
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const startStr = `${String(top.bin).padStart(2, '0')}:00`;
+    const endStr   = `${String(top.bin + 2).padStart(2, '0')}:00`;
+    const dayName  = dayNames[top.weekday];
+
+    sessionStorage.setItem('loom_pattern_suggested', '1');
+
+    // Find next occurrence of that weekday at that hour
+    const nextDate = new Date(now);
+    const daysUntil = (top.weekday - now.getDay() + 7) % 7 || 7;
+    nextDate.setDate(now.getDate() + daysUntil);
+    nextDate.setHours(top.bin, 0, 0, 0);
+    const nextEnd = new Date(nextDate.getTime() + 2 * 3_600_000);
+
+    addNotification({
+      type: 'info',
+      title: `${dayName} ${startStr}–${endStr} is normally busy`,
+      message: `You usually have something here (${top.count}× in last 8 weeks). Block it this week?`,
+      actionable: true,
+      actionLabel: 'Block it',
+      actionFn: () => openEventEditor(null, undefined, undefined, nextDate.toISOString(), nextEnd.toISOString()),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events.length]);
 
   // ---- Timeline actions ----
   const handleNewTimeline = useCallback(async () => {
@@ -736,11 +1017,22 @@ export function CalendarPage() {
         onNewTimeBlockTemplate={handleNewTimeBlockTemplate}
         onApplyTimeBlockTemplate={handleApplyTimeBlockTemplate}
         onDeleteTimeBlockTemplate={handleDeleteTimeBlockTemplate}
+        missedCount={missedItems.length}
+        onOpenMissed={handleOpenMissed}
       />
 
       <div ref={mainRef} className={styles.main}>
         {nav.view === 'Year' && (
-          <YearView events={events} onDayClick={handleYearDayClick} onMonthClick={handleYearMonthClick} />
+          <YearView
+            events={events}
+            timelines={timelines}
+            onDayClick={handleYearDayClick}
+            onMonthClick={handleYearMonthClick}
+            onEventClick={(eid) => {
+              const ev = events.find(e => e.id === eid);
+              if (ev) openEventEditor(ev);
+            }}
+          />
         )}
         <div style={{ display: nav.view === 'Year' ? 'none' : undefined, height: '100%' }}>
         {nav.view === 'Week' && (
@@ -792,9 +1084,40 @@ export function CalendarPage() {
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />
         )}
         </div>
-        {wellness && (
-          <WellnessToast date={wellness.date} message={wellness.message} />
-        )}
+        <WarningStack>
+          {examClusterWarning && !isClusterDismissed(getClusterEventIds(examClusterWarning)) && (
+            <ExamClusterBanner
+              warning={examClusterWarning}
+              onDismiss={() => {
+                markClusterDismissed(getClusterEventIds(examClusterWarning));
+                setExamClusterWarning(null);
+              }}
+            />
+          )}
+          {wellness && (
+            <WellnessToast date={wellness.date} message={wellness.message} />
+          )}
+          {activeTakeaway && (
+            <TakeawayToast
+              key={`${activeTakeaway.event.id}:${activeTakeaway.occurrenceDate}`}
+              event={activeTakeaway.event}
+              occurrenceDate={activeTakeaway.occurrenceDate}
+              onClose={() => setActiveTakeaway(null)}
+            />
+          )}
+          {radar
+            .filter(w => radarDismissed[w.assignment_id] !== w.due_date)
+            .map(w => (
+              <ProcrastinationToast
+                key={w.assignment_id}
+                warning={w}
+                onDismiss={() => {
+                  dismissRadar(w.assignment_id, w.due_date);
+                  setRadarDismissed(prev => ({ ...prev, [w.assignment_id]: w.due_date }));
+                }}
+              />
+            ))}
+        </WarningStack>
       </div>
     </div>
   );

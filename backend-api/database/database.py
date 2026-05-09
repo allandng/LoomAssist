@@ -50,9 +50,13 @@ def run_migrations():
                 "actual_end":   "TEXT",
                 "location": "TEXT",
                 "travel_time_minutes": "INTEGER",
+                "event_type":   "TEXT",
+                "prep_minutes": "INTEGER",
                 "reminder_source": "TEXT DEFAULT 'none'",
                 "depends_on_event_id": "INTEGER",
                 "depends_offset_minutes": "INTEGER",
+                "assignment_id": "INTEGER",
+                "missed_at": "TEXT",
             }
             
             for col_name, col_type in new_columns.items():
@@ -104,6 +108,19 @@ def run_migrations():
                     mood TEXT,
                     created_at TEXT NOT NULL
                 )
+            """))
+            result = conn.execute(text("PRAGMA table_info(journalentry)")).fetchall()
+            journal_cols = [row[1] for row in result]
+            journal_new = {
+                "event_id": "INTEGER",
+            }
+            for col_name, col_type in journal_new.items():
+                if col_name not in journal_cols:
+                    conn.execute(text(f"ALTER TABLE journalentry ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to journalentry table.")
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_journalentry_event_id
+                ON journalentry(event_id)
             """))
         except Exception as e:
             logging.error(f"Migration error on journalentry table: {e}")
@@ -365,6 +382,99 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on calendar created_via_sync: {e}")
 
+        # Future-features 3A: course timeline columns
+        try:
+            result = conn.execute(text("PRAGMA table_info(calendar)")).fetchall()
+            cal_cols = [row[1] for row in result]
+            course_cols = {
+                "is_course":   "INTEGER DEFAULT 0",
+                "course_code": "TEXT",
+                "term_start":  "TEXT",
+                "term_end":    "TEXT",
+            }
+            for col_name, col_type in course_cols.items():
+                if col_name not in cal_cols:
+                    conn.execute(text(f"ALTER TABLE calendar ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to calendar table.")
+        except Exception as e:
+            logging.error(f"Migration error on calendar course cols: {e}")
+
+        # Future-features 3C: per-task grade + weight
+        try:
+            result = conn.execute(text("PRAGMA table_info(task)")).fetchall()
+            task_cols = [row[1] for row in result]
+            grade_cols = {
+                "grade":  "REAL",
+                "weight": "REAL",
+            }
+            for col_name, col_type in grade_cols.items():
+                if col_name not in task_cols:
+                    conn.execute(text(f"ALTER TABLE task ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to task table.")
+        except Exception as e:
+            logging.error(f"Migration error on task grade cols: {e}")
+
+        # Future-features 4A: habit + habit entry tables
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS habit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    color TEXT NOT NULL DEFAULT '#6366f1',
+                    target_per_week INTEGER NOT NULL DEFAULT 7,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS habitentry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    habit_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 1
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_habitentry_habit_date
+                ON habitentry(habit_id, date)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on habit tables: {e}")
+
+        # Future-features 4C: recurring task templates
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tasktemplate (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    default_priority TEXT DEFAULT 'low',
+                    recurrence_days TEXT,
+                    calendar_id INTEGER,
+                    created_at TEXT NOT NULL
+                )
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on tasktemplate table: {e}")
+
+        # WeeklyReview table (cached generated review per Mon–Sun window)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS weeklyreview (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    week_start TEXT NOT NULL,
+                    markdown TEXT NOT NULL,
+                    metrics TEXT NOT NULL DEFAULT '{}',
+                    generated_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_weeklyreview_week
+                ON weeklyreview(week_start)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on weeklyreview table: {e}")
+
         # Phase 14c: last_modified + deleted_at on event and task
         try:
             result = conn.execute(text("PRAGMA table_info(event)")).fetchall()
@@ -379,6 +489,97 @@ def run_migrations():
                     conn.execute(text(f"ALTER TABLE task ADD COLUMN {col} TEXT"))
         except Exception as e:
             logging.error(f"Migration error on sync columns: {e}")
+
+        # Energy Mapping: PomodoroSession table
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS pomodorosession (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    completed_at TEXT NOT NULL,
+                    duration_minutes INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    task_id INTEGER,
+                    task_note TEXT,
+                    round_num INTEGER
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_pomodorosession_completed_at
+                ON pomodorosession(completed_at)
+            """))
+        except Exception as e:
+            logging.error(f"Migration error on pomodorosession table: {e}")
+
+        # Feature 10: Group Project Tracker — projects, people, project_members,
+        # plus nullable additive columns on Course / Assignment / AvailabilityRequest.
+        # See docs/projects-design.md.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS project (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    course_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    color TEXT NOT NULL DEFAULT '#6366f1',
+                    archived_at TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_project_course_id
+                ON project(course_id)
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS person (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT,
+                    phone TEXT,
+                    notes TEXT,
+                    archived_at TEXT,
+                    is_self INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS projectmember (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL,
+                    person_id INTEGER NOT NULL,
+                    role TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_projectmember_project
+                ON projectmember(project_id)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_projectmember_person
+                ON projectmember(person_id)
+            """))
+            # Course.kind ('course' default | 'independent' singleton)
+            result = conn.execute(text("PRAGMA table_info(course)")).fetchall()
+            course_cols = [row[1] for row in result]
+            if "kind" not in course_cols:
+                conn.execute(text("ALTER TABLE course ADD COLUMN kind TEXT DEFAULT 'course'"))
+                logging.info("Migration: added column 'kind' to course table.")
+            # Assignment.project_id, Assignment.assignee_person_id
+            result = conn.execute(text("PRAGMA table_info(assignment)")).fetchall()
+            asg_cols = [row[1] for row in result]
+            asg_new = {"project_id": "INTEGER", "assignee_person_id": "INTEGER"}
+            for col_name, col_type in asg_new.items():
+                if col_name not in asg_cols:
+                    conn.execute(text(f"ALTER TABLE assignment ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to assignment table.")
+            # AvailabilityRequest.recipients_json (JSON list of {person_id, name, email})
+            result = conn.execute(text("PRAGMA table_info(availabilityrequest)")).fetchall()
+            av_cols = [row[1] for row in result]
+            if "recipients_json" not in av_cols:
+                conn.execute(text("ALTER TABLE availabilityrequest ADD COLUMN recipients_json TEXT"))
+                logging.info("Migration: added column 'recipients_json' to availabilityrequest table.")
+        except Exception as e:
+            logging.error(f"Migration error on Feature 10 tables: {e}")
 
     logging.info("Migration check complete.")
 

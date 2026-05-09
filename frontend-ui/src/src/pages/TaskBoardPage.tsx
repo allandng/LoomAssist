@@ -5,6 +5,8 @@ import { TLDot } from '../components/shared/TLDot';
 import { SectionLabel } from '../components/shared/SectionLabel';
 import { listTasks, listCalendars, listEvents, updateTask, deleteTask, runAutopilot } from '../api';
 import { DensityHeatmap } from '../components/shared/DensityHeatmap';
+import { HabitsPanel } from '../components/tasks/HabitsPanel';
+import { TaskTemplatesPanel } from '../components/tasks/TaskTemplatesPanel';
 import type { Task, Calendar, Event } from '../types';
 import { parseChecklist } from '../lib/eventUtils';
 import { useModal } from '../contexts/ModalContext';
@@ -264,6 +266,14 @@ export function TaskBoardPage() {
           <SectionLabel>Activity</SectionLabel>
           <div className={styles.heatmapWrap}>
             <DensityHeatmap events={events} />
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <HabitsPanel />
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <TaskTemplatesPanel timelines={timelines} />
           </div>
         </div>
       </div>

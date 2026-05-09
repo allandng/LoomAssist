@@ -18,6 +18,9 @@ import {
 import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
 import { SuggestionChip } from '../shared/SuggestionChip';
 import { parseChecklist } from '../../lib/eventUtils';
+import { isExamLike, stripExamWord } from '../../lib/eventClassification';
+import { checkSleepWindow } from '../../lib/sleepWindow';
+import { getMissedButtonState } from '../../lib/missedEvents';
 
 function formatDT(dtLocal: string): string {
   if (!dtLocal) return '';
@@ -138,6 +141,8 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   );
   const [location, setLocation]     = useState(event?.location ?? '');
   const [travelTime, setTravelTime] = useState<number>(event?.travel_time_minutes ?? 0);
+  const [eventType, setEventType]   = useState<'' | 'lecture' | 'lab' | 'office_hours' | 'other'>(event?.event_type ?? '');
+  const [prepMinutes, setPrepMinutes] = useState<number>(event?.prep_minutes ?? 0);
   const [description, setDescription] = useState(event?.description ?? '');
   const [checklist, setChecklist]   = useState<ChecklistItem[]>(parseChecklist(event?.checklist ?? ''));
 
@@ -170,6 +175,9 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   // Duration tracking
   const [actualStart, setActualStart] = useState<string | null>(event?.actual_start ?? null);
   const [actualEnd,   setActualEnd]   = useState<string | null>(event?.actual_end   ?? null);
+
+  // "Missed" opt-in marker — drives the footer Mark/Unmark button.
+  const [missedAt, setMissedAt] = useState<string | null>(event?.missed_at ?? null);
 
   // Load task board status for existing events
   useEffect(() => {
@@ -209,7 +217,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   }, []);
 
   // ---- Submit ----
-  const buildPayload = useCallback(() => {
+  // Auto-clear-on-save: when called with no opts (the regular handleSubmit
+  // path), `missed_at` goes out as null. Saving a marked event via the regular
+  // Save button therefore unmarks it — the user implicitly recovered it.
+  // The Mark/Unmark button passes an explicit value via opts.
+  const buildPayload = useCallback((opts?: { missedAt?: string | null }) => {
     const start = allDay ? `${startVal}T00:00:00` : new Date(startVal).toISOString();
     const end   = allDay ? `${endVal}T23:59:59`   : new Date(endVal).toISOString();
     return {
@@ -224,6 +236,8 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       depends_offset_minutes: dependsOffset,
       location: location || null,
       travel_time_minutes: travelTime || null,
+      event_type: eventType || null,
+      prep_minutes: eventType === 'lecture' ? (prepMinutes || null) : null,
       description,
       checklist: JSON.stringify(checklist),
       is_recurring: recurring,
@@ -234,15 +248,16 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       external_uid: event?.external_uid ?? '',
       timezone: event?.timezone ?? 'local',
       per_day_times: event?.per_day_times ?? '',
+      missed_at: opts?.missedAt ?? null,
     };
   }, [title, allDay, startVal, endVal, calendarId, reminder, location, travelTime,
-      description, checklist, recurring, recurDays, recurEnd, skipDates, event]);
+      eventType, prepMinutes, description, checklist, recurring, recurDays, recurEnd, skipDates, event]);
 
   const handleSubmit = useCallback(async () => {
     if (!title.trim()) return;
 
     const payload = buildPayload();
-    let conflicts: Array<{ id: number; title: string }> = [];
+    let conflicts: Array<{ id: number; title: string; conflict_type?: 'event' | 'travel' | 'prep' }> = [];
     let createdEvent: Event | null = null;
 
     if (isEdit && event) {
@@ -281,7 +296,14 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     }
 
     if (conflicts.length) {
-      const names = conflicts.map(c => `"${c.title}"`).join(', ');
+      const names = conflicts.map(c => {
+        const label = c.conflict_type === 'travel'
+          ? `the travel buffer for "${c.title}"`
+          : c.conflict_type === 'prep'
+            ? `the prep buffer for "${c.title}"`
+            : `"${c.title}"`;
+        return label;
+      }).join(', ');
       setConflictWarning(`Overlaps with: ${names}`);
       setNeedsConfirm(true);
       setSuggestions([]);
@@ -305,11 +327,21 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       }).catch(() => { /* silently ignore */ });
     }
 
+    const sw = checkSleepWindow(payload.start_time, payload.end_time, !!payload.is_all_day);
+    if (sw) {
+      addNotification({
+        type: 'warning',
+        title: 'Past sleep window',
+        message: sw.message,
+        collapseKey: 'sleep-window',
+        autoRemoveMs: 6000,
+      });
+    }
+
     onSaved();
 
-    const EXAM_KEYWORDS = /\b(exam|test|final|midterm|quiz|assignment|due)\b/i;
-    if (!isEdit && createdEvent && EXAM_KEYWORDS.test(createdEvent.title)) {
-      openStudyBlock(createdEvent, createdEvent.title.replace(EXAM_KEYWORDS, '').trim());
+    if (!isEdit && createdEvent && isExamLike(createdEvent.title)) {
+      openStudyBlock(createdEvent, stripExamWord(createdEvent.title));
     } else {
       close();
     }
@@ -328,6 +360,21 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     onSaved();
     close();
   }, [event, pushUndo, onSaved, close]);
+
+  const handleMarkToggle = useCallback(async () => {
+    if (!event) return;
+    const previous = missedAt;
+    const next = previous ? null : new Date().toISOString();
+    await updateEvent(event.id, buildPayload({ missedAt: next }));
+    setMissedAt(next);
+    pushUndo({
+      label: previous ? `Unmark "${event.title}"` : `Mark "${event.title}" as missed`,
+      undo: async () => { await updateEvent(event.id, buildPayload({ missedAt: previous })); },
+      redo: async () => { await updateEvent(event.id, buildPayload({ missedAt: next })); },
+    });
+    onSaved();
+    close();
+  }, [event, missedAt, buildPayload, pushUndo, onSaved, close]);
 
   const handleSkipDate = useCallback(async () => {
     if (!event || !instanceDate) return;
@@ -480,7 +527,26 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           </div>
         </div>
 
-        {/* Location + Travel time */}
+        {/* Event type (gates prep buffer) */}
+        <div>
+          <FieldLabel>Event type</FieldLabel>
+          <div className={styles.timelineSelect}>
+            <select
+              className={styles.selectInline}
+              value={eventType}
+              onChange={e => setEventType(e.target.value as typeof eventType)}
+            >
+              <option value="">None</option>
+              <option value="lecture">Lecture</option>
+              <option value="lab">Lab</option>
+              <option value="office_hours">Office Hours</option>
+              <option value="other">Other</option>
+            </select>
+            <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
+          </div>
+        </div>
+
+        {/* Location + Travel time + Prep (lectures only) */}
         <div className={styles.locationRow}>
           <input
             className={`loom-field ${styles.locationInput}`}
@@ -500,6 +566,20 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             />
             <span className={styles.travelLabel}>min travel</span>
           </div>
+          {eventType === 'lecture' && !allDay && (
+            <div className={styles.travelWrap}>
+              <input
+                className={`loom-field ${styles.travelInput}`}
+                type="number"
+                min={0}
+                step={5}
+                placeholder="0"
+                value={prepMinutes || ''}
+                onChange={e => setPrepMinutes(Number(e.target.value))}
+              />
+              <span className={styles.travelLabel}>min prep</span>
+            </div>
+          )}
         </div>
 
         {/* Phase v3.0: Provenance — only renders when this event came from sync */}
@@ -709,6 +789,15 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
         )}
         <button className="loom-btn-ghost" onClick={handleSaveAsTemplate}>Save as template</button>
         <div style={{ flex: 1 }} />
+        {(() => {
+          const missedBtn = getMissedButtonState(event, missedAt);
+          if (!isEdit || !missedBtn.visible) return null;
+          return (
+            <button className="loom-btn-ghost" onClick={handleMarkToggle}>
+              {missedBtn.label}
+            </button>
+          );
+        })()}
         {isEdit && (
           <button className={styles.deleteBtn} onClick={handleDelete}>Delete</button>
         )}

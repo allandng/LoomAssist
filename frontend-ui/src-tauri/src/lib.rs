@@ -1,4 +1,4 @@
-use std::{env, fs, panic, sync::{Arc, Mutex}, thread, time::{SystemTime, UNIX_EPOCH, Duration}};
+use std::{env, fs, panic, process::Command, sync::{Arc, Mutex}, thread, time::{SystemTime, UNIX_EPOCH, Duration}};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -31,6 +31,21 @@ fn keychain_get(slot: String) -> Result<Option<String>, String> {
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Speak the given text via the macOS `say` command. Future-features 2C
+/// (daily morning briefing). Spawns and detaches; the frontend doesn't block
+/// on this — playback continues even if the call returns immediately.
+#[tauri::command]
+fn speak_briefing(text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    Command::new("say")
+        .arg(text)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -208,6 +223,7 @@ pub fn run() {
             keychain_set,
             keychain_get,
             keychain_delete,
+            speak_briefing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

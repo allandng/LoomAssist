@@ -3,6 +3,7 @@ import styles from './CalendarSidebar.module.css';
 import { Icon, Icons } from '../shared/Icon';
 import { Kbd } from '../shared/Kbd';
 import { SectionLabel } from '../shared/SectionLabel';
+import { useModal } from '../../contexts/ModalContext';
 import type { Calendar, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
 
 export interface ScanEventEdit {
@@ -49,6 +50,8 @@ interface CalendarSidebarProps {
   onNewTimeBlockTemplate: () => void;
   onApplyTimeBlockTemplate: (tplId: number, weekMondayDate: string) => void;
   onDeleteTimeBlockTemplate: (id: number) => void;
+  missedCount: number;
+  onOpenMissed: () => void;
 }
 
 // ── Scan event card ──────────────────────────────────────────────
@@ -157,8 +160,11 @@ export function CalendarSidebar({
   onNewTimeBlockTemplate,
   onApplyTimeBlockTemplate,
   onDeleteTimeBlockTemplate,
+  missedCount,
+  onOpenMissed,
 }: CalendarSidebarProps) {
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
+  const { openTimelineEditor } = useModal();
   const [renamingId,  setRenamingId]  = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameRef  = useRef<HTMLInputElement>(null);
@@ -325,6 +331,7 @@ export function CalendarSidebar({
                   {menuOpenFor === t.id && (
                     <div className={styles.tlMenu}>
                       <button onClick={() => startRename(t)}>Rename</button>
+                      <button onClick={() => { setMenuOpenFor(null); openTimelineEditor(t.id); }}>Edit…</button>
                       <button onClick={() => { setMenuOpenFor(null); onDeleteTimeline(t.id); }}>Delete</button>
                     </div>
                   )}
@@ -510,6 +517,21 @@ export function CalendarSidebar({
               )}
             </div>
           )}
+
+          {/* Missed events */}
+          <SectionLabel right={
+            missedCount > 0 ? <span className={styles.tplCount}>{missedCount}</span> : undefined
+          }>
+            Missed
+          </SectionLabel>
+          <div className={styles.missedPanel}>
+            {missedCount === 0
+              ? <p className={styles.schedulerEmpty}>Nothing marked as missed.</p>
+              : <button className={styles.missedOpenBtn} onClick={onOpenMissed}>
+                  Review {missedCount} missed
+                </button>
+            }
+          </div>
         </div>
       )}
 

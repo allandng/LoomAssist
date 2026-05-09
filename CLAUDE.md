@@ -98,6 +98,7 @@ cd frontend-ui/src && npm run test:watch
 - `sync/ics_normalize.py` (v2.2) — iCal ↔ event-payload conversion. Reused by both CalDAV and the existing ICS importer path.
 - `sync/runner.py` (v2.2) — single asyncio task started in FastAPI `lifespan`. Iterates enabled connections every 5 min; broadcasts `{conn_id, phase, review_count}` over the SSE stream. The **only place** that creates `SyncReviewItem` rows. Uses `_pull_google_paginated` (8 pages × 250 events per cycle).
 - `sync/keychain_bridge.py` (v2.2) — in-memory token cache populated by the frontend via `POST /connections/{id}/token`. Falls back to a `security find-generic-password` shell-out on macOS so tokens survive a backend restart.
+- `exam_cluster.py` (Feature 3) — pure-function exam-window detector. `detect_exam_clusters()` + `is_exam_like(title)`. Folds into `_exam_cluster_warnings` consumed by `/schedule/analyze`.
 
 **Database session pattern** — all routes use `db: Session = Depends(get_db)` where `get_db` yields a SQLAlchemy `SessionLocal`. Use `db.query(Model).filter(...).first()` — the codebase uses SQLAlchemy ORM style throughout, not SQLModel's `db.exec(select(...))`.
 
@@ -150,6 +151,9 @@ cd frontend-ui/src && npm run test:watch
 | `external_id` | str | v2.2: provider's stable id (Google: `event.id`; CalDAV: resource href). UNIQUE INDEX `(connection_calendar_id, external_id) WHERE external_id IS NOT NULL` |
 | `external_etag` | str | v2.2: provider concurrency token; sent as `If-Match` on PUT |
 | `last_synced_at` | str | v2.2: drives the QuickPeek/EventEditor freshness label |
+| `event_type` | str | Feature 4: nullable. `"lecture"` \| `"lab"` \| `"office_hours"` \| `"other"`. Drives prep-block expansion |
+| `prep_minutes` | int | Feature 4: nullable lecture-only prep buffer; expands busy windows backward in free-slot search |
+| `missed_at` | str | Feature 7: nullable ISO datetime; opt-in marker set from EventEditor footer. Auto-cleared on regular Save |
 
 ### `Calendar` (Timeline)
 | Field | Type | Notes |
@@ -202,6 +206,7 @@ cd frontend-ui/src && npm run test:watch
 | `receiver_name` | str | set when recipient responds |
 | `created_at` | str | ISO datetime |
 | `expires_at` | str | ISO datetime — link expiry |
+| `recipients_json` | str | Feature 10: optional JSON `[{person_id, name, email}]` for project-driven pre-fill. Receivers still self-identify. |
 
 ### `JournalEntry` (Phase 12)
 | Field | Type | Notes |
@@ -212,6 +217,7 @@ cd frontend-ui/src && npm run test:watch
 | `audio_path` | str | local file path, null if audio not saved |
 | `mood` | str | `"great"` \| `"ok"` \| `"rough"` \| null |
 | `created_at` | str | ISO datetime |
+| `event_id` | int | Feature 8: nullable indexed FK to the originating event for class-day takeaways |
 
 ### `Subscription` (Phase 9)
 | Field | Type | Notes |
@@ -236,6 +242,7 @@ cd frontend-ui/src && npm run test:watch
 | `timeline_id` | int | default Calendar for this course |
 | `grade_weights` | str | JSON `[{"name":"Midterm","weight":30},...]` |
 | `color` | str | hex |
+| `kind` | str | Feature 10: `'course'` (default) \| `'independent'`. Singleton 'independent' row is the catch-all for uncourseed group projects. |
 
 ### `Assignment` (Phase 8)
 | Field | Type | Notes |
@@ -248,6 +255,8 @@ cd frontend-ui/src && npm run test:watch
 | `score` | float | null until graded |
 | `max_score` | float | |
 | `event_id` | int | if scheduled on calendar |
+| `project_id` | int | Feature 10: nullable FK → Project. NULL = personal-only. Indexed. |
+| `assignee_person_id` | int | Feature 10: nullable FK → Person. Drives "My Deliverables" widget when matched against the `is_self` Person. Indexed. |
 
 ### `EventEmbedding` (Phase 6)
 | Field | Type | Notes |
@@ -346,6 +355,49 @@ cd frontend-ui/src && npm run test:watch
 | `created_at` | str | |
 | | | INDEX `(connection_id, incoming_hash)` |
 
+### `Project` (Feature 10 — group project tracker)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `course_id` | int FK | → Course.id (required). Points to the singleton `kind='independent'` row for uncourseed projects. Indexed. |
+| `name` | str | |
+| `description` | str | nullable |
+| `color` | str | hex; default `#6366f1` |
+| `archived_at` | str | nullable ISO datetime; archived projects hide by default |
+| `created_at` | str | |
+
+### `Person` (Feature 10 — local-only contact)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `name` | str | required |
+| `email` | str | nullable; only required for availability use |
+| `phone` | str | nullable |
+| `notes` | str | nullable |
+| `archived_at` | str | nullable |
+| `is_self` | bool | exactly one row may be true; enforced at the route layer (`POST /people/{id}/set-self` clears all other rows). Drives the "My Deliverables" widget. **Never linked to `Account`** — this is a local-only contact list. |
+| `created_at` | str | |
+
+### `ProjectMember` (Feature 10 — Project ↔ Person M:N join)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `project_id` | int FK | → Project.id. Indexed. |
+| `person_id` | int FK | → Person.id. Indexed. |
+| `role` | str | nullable; free-form (`"lead"`, `"writer"`, …) |
+| `created_at` | str | |
+
+### `PomodoroSession` (Feature 5 — energy-mapping source)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `completed_at` | str | indexed ISO datetime, local tz |
+| `duration_minutes` | int | actual elapsed work duration |
+| `mode` | str | `"work"` \| `"short-break"` \| `"long-break"` |
+| `task_id` | int | indexed; no FK (Task pattern) |
+| `task_note` | str | denormalized snapshot of the task title at completion |
+| `round_num` | int | nullable position within a Pomodoro cycle |
+
 ## Backend API Routes
 
 ### Events
@@ -357,6 +409,7 @@ cd frontend-ui/src && npm run test:watch
 | DELETE | `/events/{id}` | Delete event; nullifies dependents' `depends_on_event_id` |
 | POST | `/events/check-conflicts` | Dry-run conflict check; returns `{ conflicts }` |
 | POST | `/events/{id}/cascade-dependents` | Recompute and apply times for all dependent events |
+| GET | `/events/missed` | Feature 7: list events flagged via `missed_at`; truncated flag at 20 |
 
 ### Smart Scheduling
 | Method | Path | Description |
@@ -365,6 +418,7 @@ cd frontend-ui/src && npm run test:watch
 | POST | `/schedule/analyze` | Wellness analysis; returns `{ warnings: string[] }` |
 | POST | `/schedule/resolve-conflict` | AI suggests up to 3 rescheduling alternatives |
 | POST | `/schedule/autopilot` | Auto-schedule tasks into free slots; returns `{ proposals, overflow }` |
+| GET | `/schedule/procrastination-radar` | Feature 2: assignments due within 7 days that have no linked study/focus blocks; returns warning list |
 
 ### NLP / AI
 | Method | Path | Description |
@@ -388,6 +442,13 @@ cd frontend-ui/src && npm run test:watch
 | POST | `/journal` | Multipart: audio → Whisper transcription → saved entry |
 | GET | `/journal?from_date=...&to_date=...` | List entries with optional date filter |
 | DELETE | `/journal/{id}` | Delete entry |
+| POST | `/journal/text` | Feature 8: text-mode journal entry; accepts optional `event_id` for class-day takeaways |
+
+### Pomodoro Sessions (Feature 5)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/pomodoro-sessions` | Persist a completed Pomodoro session; returns the saved row |
+| GET | `/pomodoro-sessions/energy-map?weeks=12&proxy=true` | Aggregate completion rate by hour-of-day × day-of-week for the EnergyMappingWidget |
 
 ### Inbox (Phase 4)
 | Method | Path | Description |
@@ -541,7 +602,7 @@ For multipart or binary responses (backup export, journal audio), use raw `fetch
 3. Register it in `ModalRoot.tsx`
 4. Wrap the component in `<ModalShell>` and `<ModalFooter>` from `./ModalShell`
 
-Current modal names: `event-editor`, `availability`, `availability-response`, `ics-import`, `syllabus`, `settings`, `timeline-editor`, `template-editor`, `weekly-review`, `study-block`, `time-block-template`, `autopilot-review`, `sync-merge` (v2.2), `provider-picker` (v2.2), `caldav-credentials` (v2.2), `subscribe-drawer` (v2.2).
+Current modal names: `event-editor`, `availability`, `availability-response`, `ics-import`, `syllabus`, `settings`, `timeline-editor`, `template-editor`, `weekly-review`, `study-block`, `time-block-template`, `autopilot-review`, `sync-merge` (v2.2), `provider-picker` (v2.2), `caldav-credentials` (v2.2), `subscribe-drawer` (v2.2), `missed-events` (Feature 7).
 
 **Notification system** — non-React pub/sub in `store/notifications.tsx`. Call `addNotification({ type, title, message, autoRemoveMs?, collapseKey? })` from anywhere — no hook needed. Types: `info` | `success` | `warning` | `error` | `progress`. Actionable notifications accept `actionLabel` + `actionFn`. v2.2: pass `collapseKey` (e.g. the connection's display name) to coalesce noisy sources — three or more sharing a key collapse into a single summary row.
 
@@ -562,6 +623,20 @@ Current modal names: `event-editor`, `availability`, `availability-response`, `i
 **AccountAvatar** (v2.2) — `components/topbar/AccountAvatar.tsx`, rightmost element in the top bar. Shows a greyscale initials chip in local mode and an indigo-tinted avatar when signed in. Click → `/settings/account`.
 
 **SourceBadge** (v2.2) — `components/shared/SourceBadge.tsx`. Renders a single monochrome glyph + connection display name + "synced 2m ago". Mounts in two places only: (a) the bottom of `QuickPeek` (variant `inline`), (b) the metadata cluster in `EventEditorModal` (variant `editor`, with an inline link to the connection's settings page). **Never** on the event pill — the pill anatomy is sacred per the Guardrail.
+
+**MissedEventsModal** (Feature 7) — `components/modals/MissedEventsModal.tsx` walks events flagged via `Event.missed_at` and offers per-row reschedule via the existing `findFreeSlots` flow. Modal name is `'missed-events'`. Companion helper `lib/missedEvents.ts:getMissedButtonState` powers the EventEditor mark/unmark footer button.
+
+**ExamClusterBanner** (Feature 3) — `components/calendar/ExamClusterBanner.tsx` surfaces the wellness warning when three or more exam-type events fall within a 5-day window. Detection lives backend-side in `services/exam_cluster.py` and arrives via existing `/schedule/analyze` warnings; classification helper is `lib/eventClassification.ts`.
+
+**ProcrastinationToast** (Feature 2) — `components/calendar/ProcrastinationToast.tsx` renders the wellness toast for assignments due within 7 days that have no linked study/focus block. Polled from `GET /schedule/procrastination-radar` via `getProcrastinationRadar` in `api.ts`.
+
+**TakeawayToast** (Feature 8) — `components/calendar/TakeawayToast.tsx` mounts on `CalendarPage` and prompts a two-line takeaway when a lecture event ends. Per-event dismissal state lives in `lib/takeawayDismissals.ts` (one prompt per event, no re-prompt after explicit dismiss). Submits via `POST /journal/text` with `event_id`.
+
+**EnergyMappingWidget** (Feature 5) — `components/home/EnergyMappingWidget.tsx`, a read-only widget on `pages/HomePage.tsx`. Reads `GET /pomodoro-sessions/energy-map` and renders a hour-of-day × day-of-week heatmap of completion rate. No scheduling action.
+
+**GradeWidget / GPA Projection** (Feature 1) — `components/home/GradeWidget.tsx` and the `lib/gradeProjection.ts:projectCourseGrade` helper. CoursesPage exposes the per-course slider; the home widget aggregates current weighted grades across courses. Reuses the existing `GET /courses/{id}/grade` route — no new endpoint.
+
+**Sleep Window** (Feature 6) — `lib/sleepWindow.ts:checkSleepWindow` + `loadSleepWindowPrefs` (localStorage-backed, no schema change). Settings UI lives in `pages/SettingsPage.tsx`; the EventEditor and CalendarPage drag/resize hooks consume the helper to surface a soft warning notification when an event ends past the configured wind-down time.
 
 **Keychain bridge** — `lib/keychain.ts` wraps the Tauri commands defined in `src-tauri/src/lib.rs` (`keychain_set`, `keychain_get`, `keychain_delete`) using the `keyring = "3"` crate. Slot format: `com.loomassist.{kind}` where kind is `supabase` or `connection.{uuid}`. In the Vite browser preview (no Tauri), the wrapper falls back to `sessionStorage` so flows still work end-to-end during dev.
 

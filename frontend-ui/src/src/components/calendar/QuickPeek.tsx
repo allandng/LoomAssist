@@ -42,6 +42,17 @@ export function QuickPeek({ event, timelines, anchorX, anchorY }: QuickPeekProps
     ? 'All day'
     : `${startDT.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${endDT.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 
+  // Clock-in tracking summary
+  let trackedRow: string | null = null;
+  if (event.actual_start) {
+    const actStart = new Date(event.actual_start);
+    const actEnd   = event.actual_end ? new Date(event.actual_end) : new Date();
+    const actualMin = Math.max(0, Math.round((actEnd.getTime() - actStart.getTime()) / 60_000));
+    const plannedMin = Math.max(1, Math.round((endDT.getTime() - startDT.getTime()) / 60_000));
+    const live = event.actual_end ? '' : ' (live)';
+    trackedRow = `Tracked: ${actualMin}m vs. planned ${plannedMin}m${live}`;
+  }
+
   return (
     <div
       ref={ref}
@@ -55,6 +66,34 @@ export function QuickPeek({ event, timelines, anchorX, anchorY }: QuickPeekProps
       <div className={styles.title}>{event.title}</div>
       <div className={styles.time}>{datePart} · {timePart}</div>
 
+      {event.location && (
+        <div className={styles.metaRow}>
+          <Icon d={Icons.pin} size={11} stroke="var(--text-muted)" />
+          <span>{event.location}</span>
+        </div>
+      )}
+
+      {event.travel_time_minutes && event.travel_time_minutes > 0 ? (
+        <div className={styles.metaRow}>
+          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
+          <span>{event.travel_time_minutes} min travel buffer</span>
+        </div>
+      ) : null}
+
+      {event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0 ? (
+        <div className={styles.metaRow}>
+          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
+          <span>{event.prep_minutes} min prep buffer</span>
+        </div>
+      ) : null}
+
+      {trackedRow && (
+        <div className={styles.metaRow}>
+          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
+          <span>{trackedRow}</span>
+        </div>
+      )}
+
       {event.description && (
         <div
           className={styles.desc}
@@ -62,30 +101,47 @@ export function QuickPeek({ event, timelines, anchorX, anchorY }: QuickPeekProps
         />
       )}
 
-      {checklist.length > 0 && (
-        <>
-          <div className={styles.checklistHeader}>
-            CHECKLIST · {done} / {checklist.length}
+      {(() => {
+        if (checklist.length === 0) return null;
+        const readings = checklist.filter(c => c.isReading);
+        const tasks    = checklist.filter(c => !c.isReading);
+        const renderItem = (item: typeof checklist[number], i: number) => (
+          <div key={i} className={`${styles.checkItem} ${item.done ? styles.checkItemDone : ''}`}>
+            <span
+              className={styles.checkBox}
+              style={{
+                borderColor: item.done ? 'var(--text-dim)' : 'var(--border-strong)',
+                background: item.done ? 'var(--text-dim)' : 'transparent',
+              }}
+            >
+              {item.done && <Icon d={Icons.check} size={8} stroke="var(--bg-main)" strokeWidth={3} />}
+            </span>
+            {item.text}
           </div>
-          {checklist.slice(0, 5).map((item, i) => (
-            <div key={i} className={`${styles.checkItem} ${item.done ? styles.checkItemDone : ''}`}>
-              <span
-                className={styles.checkBox}
-                style={{
-                  borderColor: item.done ? 'var(--text-dim)' : 'var(--border-strong)',
-                  background: item.done ? 'var(--text-dim)' : 'transparent',
-                }}
-              >
-                {item.done && <Icon d={Icons.check} size={8} stroke="var(--bg-main)" strokeWidth={3} />}
-              </span>
-              {item.text}
-            </div>
-          ))}
-          {checklist.length > 5 && (
-            <div className={styles.checkMore}>+{checklist.length - 5} more</div>
-          )}
-        </>
-      )}
+        );
+        return (
+          <>
+            {readings.length > 0 && (
+              <>
+                <div className={styles.checklistHeader}>
+                  READINGS · {readings.filter(r => r.done).length} / {readings.length}
+                </div>
+                {readings.slice(0, 5).map(renderItem)}
+                {readings.length > 5 && <div className={styles.checkMore}>+{readings.length - 5} more</div>}
+              </>
+            )}
+            {tasks.length > 0 && (
+              <>
+                <div className={styles.checklistHeader}>
+                  CHECKLIST · {done} / {checklist.length}
+                </div>
+                {tasks.slice(0, 5).map(renderItem)}
+                {tasks.length > 5 && <div className={styles.checkMore}>+{tasks.length - 5} more</div>}
+              </>
+            )}
+          </>
+        );
+      })()}
 
       <SourceBadge
         connectionCalendarId={event.connection_calendar_id}

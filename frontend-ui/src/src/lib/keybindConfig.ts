@@ -15,17 +15,23 @@ export type KeybindAction =
   | 'view_day'
   | 'view_agenda'
   | 'new_event'
-  | 'today';
+  | 'today'
+  | 'snooze_day'
+  | 'snooze_week'
+  | 'command_palette';
 
 export const KEYBIND_DEFAULTS: Record<KeybindAction, KeybindDef> = {
-  sidebar_toggle: { key: 'b',  label: 'B',  description: 'Toggle sidebar' },
-  focus_mode:     { key: 'f',  label: 'F',  description: 'Go to Focus Mode' },
-  view_month:     { key: '1',  label: '1',  description: 'Month view / go to Calendar' },
-  view_week:      { key: '2',  label: '2',  description: 'Week view' },
-  view_day:       { key: '3',  label: '3',  description: 'Day view' },
-  view_agenda:    { key: '4',  label: '4',  description: 'Agenda view' },
-  new_event:      { key: 'n',  label: 'N',  description: 'New event' },
-  today:          { key: 't',  label: 'T',  description: 'Go to today' },
+  sidebar_toggle:  { key: 'b',          label: 'B',           description: 'Toggle sidebar' },
+  focus_mode:      { key: 'f',          label: 'F',           description: 'Go to Focus Mode' },
+  view_month:      { key: '1',          label: '1',           description: 'Month view / go to Calendar' },
+  view_week:       { key: '2',          label: '2',           description: 'Week view' },
+  view_day:        { key: '3',          label: '3',           description: 'Day view' },
+  view_agenda:     { key: '4',          label: '4',           description: 'Agenda view' },
+  new_event:       { key: 'n',          label: 'N',           description: 'New event' },
+  today:           { key: 't',          label: 'T',           description: 'Go to today' },
+  snooze_day:      { key: 'arrowright', label: '→',           description: 'Snooze selected event +1 day' },
+  snooze_week:     { key: 'arrowright', shift: true, label: '→', description: 'Snooze selected event +1 week' },
+  command_palette: { key: 'k',          meta: true, label: 'K', description: 'Open command palette' },
 };
 
 const LS_KEY = 'loom-keybinds';

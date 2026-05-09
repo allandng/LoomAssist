@@ -6,6 +6,7 @@ import {
 } from '../api';
 import type { Course, Assignment, GradeWeight } from '../types';
 import { Icon, Icons } from '../components/shared/Icon';
+import { projectCourseGrade } from '../lib/gradeProjection';
 
 export function CoursesPage() {
   const [courses, setCourses]           = useState<Course[]>([]);
@@ -15,6 +16,7 @@ export function CoursesPage() {
   const [adding, setAdding]             = useState(false);
   const [newName, setNewName]           = useState('');
   const [newCode, setNewCode]           = useState('');
+  const [assumedPct, setAssumedPct]     = useState(80);
 
   const loadCourses = useCallback(() => { listCourses().then(setCourses).catch(() => {}); }, []);
   useEffect(() => { loadCourses(); }, [loadCourses]);
@@ -22,13 +24,14 @@ export function CoursesPage() {
   const selected = courses.find(c => c.id === selectedId) ?? null;
 
   async function loadCourseDetail(id: number) {
-    const [asgns, g] = await Promise.all([listAssignments(id), getCourseGrade(id)]);
+    const [asgns, g] = await Promise.all([listAssignments({ course_id: id }), getCourseGrade(id)]);
     setAssignments(asgns);
     setGrade(g);
   }
 
   async function handleSelectCourse(id: number) {
     setSelectedId(id);
+    setAssumedPct(80);
     await loadCourseDetail(id);
   }
 
@@ -119,26 +122,64 @@ export function CoursesPage() {
           {selected.instructor && <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>Instructor: {selected.instructor}</div>}
 
           {/* Grade summary */}
-          {grade && (
-            <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)', marginBottom: 8 }}>
-                Current Grade: <span style={{ color: grade.grade !== null && grade.grade >= 70 ? 'var(--success)' : 'var(--error)' }}>{grade.grade !== null ? `${grade.grade}%` : 'N/A'}</span>
-              </div>
-              {Object.entries(grade.breakdown).map(([cat, pct]) => (
-                <div key={cat} style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 }}>
-                  {cat}: {pct !== null ? `${pct}%` : '—'}
+          {grade && (() => {
+            const weights: GradeWeight[] = (() => { try { return JSON.parse(selected.grade_weights); } catch { return []; } })();
+            const projection = projectCourseGrade(assignments, weights, assumedPct);
+            return (
+              <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)', marginBottom: 8 }}>
+                  Current Grade: <span style={{ color: grade.grade !== null && grade.grade >= 70 ? 'var(--success)' : 'var(--error)' }}>{grade.grade !== null ? `${grade.grade}%` : 'N/A'}</span>
                 </div>
-              ))}
-              {(() => {
-                const weights: GradeWeight[] = (() => { try { return JSON.parse(selected.grade_weights); } catch { return []; } })();
-                return weights.length > 0 && (
+                {Object.entries(grade.breakdown).map(([cat, pct]) => (
+                  <div key={cat} style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 }}>
+                    {cat}: {pct !== null ? `${pct}%` : '—'}
+                  </div>
+                ))}
+
+                {/* Projection */}
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 10 }}>
+                  {projection.remainingCount > 0 ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 150 }}>
+                          If I score {assumedPct}% on remaining
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={assumedPct}
+                          onChange={e => setAssumedPct(Number(e.target.value))}
+                          aria-label="Assumed score on remaining work"
+                          style={{ flex: 1, accentColor: 'var(--accent)' }}
+                        />
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-main)' }}>
+                        Projected final:{' '}
+                        <span style={{ color: projection.projected !== null && projection.projected >= 70 ? 'var(--success)' : 'var(--error)' }}>
+                          {projection.projected !== null ? `${projection.projected}%` : 'N/A'}
+                        </span>
+                        <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>
+                          ({projection.remainingCount} remaining)
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                      All assignments scored — projection equals current grade.
+                    </div>
+                  )}
+                </div>
+
+                {weights.length > 0 && (
                   <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
                     Weights: {weights.map(w => `${w.name} ${w.weight}%`).join(' · ')}
                   </div>
-                );
-              })()}
-            </div>
-          )}
+                )}
+              </div>
+            );
+          })()}
 
           {/* Assignments */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>

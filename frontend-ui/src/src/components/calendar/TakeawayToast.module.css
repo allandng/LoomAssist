@@ -1,0 +1,134 @@
+.toast {
+  width: 320px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.headerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.dismiss {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dismiss:hover {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.textarea {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-main);
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.counter {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.muteBtn {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  margin-right: auto;
+}
+
+.muteBtn:hover {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.skipBtn,
+.saveBtn {
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-main);
+}
+
+.skipBtn:hover {
+  background: var(--bg-subtle);
+}
+
+.saveBtn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.saveBtn:hover {
+  filter: brightness(1.1);
+}
+
+.saveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

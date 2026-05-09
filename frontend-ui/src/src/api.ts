@@ -16,6 +16,7 @@ import type {
   TimeBlockTemplate,
   TimeBlockDef,
   InboxItem,
+  ProcrastinationWarning,
 } from './types';
 
 const BASE = 'http://localhost:8000';
@@ -33,7 +34,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 // ---- Events ----
 
-export interface ConflictInfo { id: number; title: string }
+export interface ConflictInfo { id: number; title: string; conflict_type?: 'event' | 'travel' }
 
 export const listEvents = (): Promise<Event[]> =>
   req('GET', '/events/');
@@ -66,6 +67,24 @@ export const getDurationStats = (): Promise<{ entries: DurationStat[] }> =>
 
 export const getWeeklyReview = (weekStart: string): Promise<WeeklyReviewResult> =>
   req('POST', '/ai/weekly-review', { week_start: weekStart });
+
+export interface CachedWeeklyReview {
+  id: number;
+  week_start: string;
+  markdown: string;
+  metrics: Record<string, unknown>;
+  generated_at: string;
+}
+
+export const getCachedWeeklyReview = async (weekStart: string): Promise<CachedWeeklyReview | null> => {
+  const res = await fetch(`${BASE}/reviews/weekly?week_start=${encodeURIComponent(weekStart)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw Object.assign(new Error(`GET /reviews/weekly → ${res.status}`), { status: res.status });
+  return res.json();
+};
+
+export const generateWeeklyReview = (weekStart?: string): Promise<CachedWeeklyReview> =>
+  req('POST', '/reviews/weekly', { week_start: weekStart ?? null });
 
 export const inferReminder = (
   title: string,
@@ -221,6 +240,11 @@ export const findFreeSlots = (payload: {
 }): Promise<{ slots: FreeSlot[]; duration_minutes: number }> =>
   req('POST', '/schedule/find-free', payload);
 
+// ---- Missed events ----
+
+export const getMissedEvents = (): Promise<{ items: Event[]; truncated: boolean }> =>
+  req('GET', '/events/missed');
+
 // ---- Natural Language Datetime Parser ----
 
 export const parseDateTime = (
@@ -253,9 +277,17 @@ export const applyVoiceIntent = (payload: {
 // ---- Analytics ----
 
 export const analyzeSchedule = (
-  events: Array<{ title: string; start_time: string; end_time: string }>
+  events: Array<{ id?: number; title: string; start_time: string; end_time: string }>
 ): Promise<WellnessAnalysis> =>
   req('POST', '/schedule/analyze', { events });
+
+export const detectExamClusters = (
+  events: Array<{ id?: number; title: string; start_time: string; end_time: string }>
+): Promise<WellnessAnalysis> =>
+  req('POST', '/schedule/detect-clusters', { events });
+
+export const getProcrastinationRadar = (): Promise<{ warnings: ProcrastinationWarning[] }> =>
+  req('GET', '/schedule/procrastination-radar');
 
 // ---- Logging ----
 
@@ -331,6 +363,17 @@ export async function createJournalEntry(
   return res.json();
 }
 
+export const createJournalText = (
+  text: string,
+  opts?: { event_id?: number; date?: string; mood?: 'great' | 'ok' | 'rough' | null },
+): Promise<import('./types').JournalEntry> =>
+  req('POST', '/journal/text', {
+    text,
+    event_id: opts?.event_id,
+    date: opts?.date,
+    mood: opts?.mood,
+  });
+
 export const listJournal = (from?: string, to?: string): Promise<import('./types').JournalEntry[]> => {
   const params = new URLSearchParams();
   if (from) params.set('from_date', from);
@@ -373,8 +416,15 @@ export const updateCourse = (id: number, payload: Omit<import('./types').Course,
 export const deleteCourse = (id: number): Promise<void> =>
   req('DELETE', `/courses/${id}`);
 
-export const listAssignments = (courseId?: number): Promise<import('./types').Assignment[]> =>
-  req('GET', courseId ? `/assignments?course_id=${courseId}` : '/assignments');
+export const listAssignments = (
+  filter?: { course_id?: number; event_id?: number },
+): Promise<import('./types').Assignment[]> => {
+  const params = new URLSearchParams();
+  if (filter?.course_id !== undefined) params.set('course_id', String(filter.course_id));
+  if (filter?.event_id !== undefined) params.set('event_id', String(filter.event_id));
+  const qs = params.toString();
+  return req('GET', qs ? `/assignments?${qs}` : '/assignments');
+};
 
 export const createAssignment = (payload: Omit<import('./types').Assignment, 'id'>): Promise<import('./types').Assignment> =>
   req('POST', '/assignments', payload);
@@ -652,3 +702,78 @@ export const rejectReview = (id: string, remember = false): Promise<{ ok: boolea
   req('POST', `/sync/review/${id}/reject`, { remember });
 
 export const SYNC_EVENTS_URL = `${BASE}/sync/events`;
+
+// ── Future-features 4A: Habits ────────────────────────────────────────────
+
+export const listHabits = (): Promise<import('./types').Habit[]> =>
+  req('GET', '/habits');
+
+export const createHabit = (
+  payload: { name: string; color?: string; target_per_week?: number },
+): Promise<import('./types').Habit> =>
+  req('POST', '/habits', payload);
+
+export const updateHabit = (
+  id: number,
+  payload: { name?: string; color?: string; target_per_week?: number },
+): Promise<import('./types').Habit> =>
+  req('PUT', `/habits/${id}`, payload);
+
+export const deleteHabit = (id: number): Promise<void> =>
+  req('DELETE', `/habits/${id}`);
+
+export const listHabitEntries = (id: number): Promise<import('./types').HabitEntry[]> =>
+  req('GET', `/habits/${id}/entries`);
+
+export const logHabit = (
+  id: number,
+  date: string,
+  count = 1,
+): Promise<import('./types').HabitEntry> =>
+  req('POST', `/habits/${id}/log`, { date, count });
+
+export const deleteHabitEntry = (habitId: number, entryId: number): Promise<void> =>
+  req('DELETE', `/habits/${habitId}/entries/${entryId}`);
+
+// ── Future-features 4C: Task templates ────────────────────────────────────
+
+export const listTaskTemplates = (): Promise<import('./types').TaskTemplate[]> =>
+  req('GET', '/task-templates');
+
+export const createTaskTemplate = (
+  payload: Omit<import('./types').TaskTemplate, 'id' | 'created_at'>,
+): Promise<import('./types').TaskTemplate> =>
+  req('POST', '/task-templates', payload);
+
+export const deleteTaskTemplate = (id: number): Promise<void> =>
+  req('DELETE', `/task-templates/${id}`);
+
+// ── Future-features 2C: AI briefing ───────────────────────────────────────
+
+export const getBriefing = (): Promise<{ text: string }> =>
+  req('POST', '/ai/briefing', {});
+
+// ── Energy Mapping ────────────────────────────────────────────────────────
+
+export interface PomodoroSessionInput {
+  completed_at: string;
+  duration_minutes: number;
+  mode: 'work' | 'short-break' | 'long-break';
+  task_id?: number | null;
+  task_note?: string | null;
+  round_num?: number | null;
+}
+
+export interface EnergyMap {
+  grid: number[][];                                  // 7×24, rows = Mon..Sun
+  total: number;                                     // # of work pomodoros in window
+  source: 'pomodoro' | 'events_proxy' | 'mixed';
+  last_session_at: string | null;
+  weeks: number;
+}
+
+export const recordPomodoroSession = (s: PomodoroSessionInput): Promise<unknown> =>
+  req('POST', '/pomodoro-sessions', s);
+
+export const getEnergyMap = (weeks = 12): Promise<EnergyMap> =>
+  req('GET', `/pomodoro-sessions/energy-map?weeks=${weeks}`);

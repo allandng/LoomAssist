@@ -168,6 +168,37 @@
   50%       { opacity: 0.55; }
 }
 
+.travelChip {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0,
+    transparent 3px,
+    rgba(255, 255, 255, 0.06) 3px,
+    rgba(255, 255, 255, 0.06) 5px
+  );
+}
+
+.prepPill {
+  opacity: 0.65;
+  font-style: italic;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 4px,
+    rgba(255, 255, 255, 0.04) 4px,
+    rgba(255, 255, 255, 0.04) 6px
+  );
+}
+
 .clockDot {
   display: inline-block;
   width: 8px;

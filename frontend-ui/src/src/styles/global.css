@@ -41,3 +41,77 @@ body.light-mode {
   --text-muted:  #475569;
   --text-dim:    #94A3B8;
 }
+
+/* High-contrast mode — text/background contrast ≥ 7:1 */
+body.high-contrast {
+  --bg-main:       #000000;
+  --bg-panel:      #0A0A0A;
+  --bg-elevated:   #161616;
+  --bg-subtle:     #1F1F1F;
+  --border:        #4A4A4A;
+  --border-strong: #888888;
+  --text-main:     #FFFFFF;
+  --text-muted:    #E0E0E0;
+  --text-dim:      #B0B0B0;
+  --accent:        #C7B6FF;
+  --accent-soft:   rgba(199, 182, 255, 0.22);
+}
+
+/* Dyslexia-friendly font (OpenDyslexic). Bundled locally — see fonts.css. */
+body.font-dyslexic {
+  --font-sans: 'OpenDyslexic', 'Inter', -apple-system, sans-serif;
+}
+
+/* Reduced motion: respect the OS pref by suppressing decorative animations
+   and the longer eases. Functional transitions still work but feel instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print: drop chrome and let the calendar surface fill the page. The Print
+   action shows whatever the calendar is currently displaying (Day, Week, etc).
+   Body class `print-mode-agenda` is set just before window.print() to force a
+   list-friendly layout. */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    overflow: visible !important;
+  }
+  /* Hide app chrome */
+  nav[aria-label="App navigation"],
+  header[class*="bar"],
+  aside[class*="sidebar"],
+  div[class*="ContextSidebar"],
+  div[class*="NotifPanel"],
+  div[class*="InboxPanel"],
+  div[class*="ModalRoot"] {
+    display: none !important;
+  }
+  /* Stretch the main content area */
+  div[class*="main"],
+  div[class*="content"] {
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .fc, .fc-view-harness, .fc-scroller {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  /* Reset event pill colors for legibility on paper */
+  .loom-event {
+    background: white !important;
+    color: black !important;
+    border: 1px solid #888 !important;
+  }
+}

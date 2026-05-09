@@ -17,10 +17,18 @@ export function parsePerDayTimes(raw: string): Record<number, { start: string; e
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
-/** Parse checklist JSON silently. */
-export function parseChecklist(raw: string): Array<{ text: string; done: boolean }> {
+/** Parse checklist JSON silently. Items prefixed with `📖 ` are flagged
+ *  isReading (no schema change — Option A from features 3D). */
+export function parseChecklist(raw: string): Array<{ text: string; done: boolean; isReading?: boolean }> {
   if (!raw) return [];
-  try { return JSON.parse(raw); } catch { return []; }
+  try {
+    const items = JSON.parse(raw) as Array<{ text: string; done: boolean }>;
+    return items.map(it => ({
+      text: it.text,
+      done: it.done,
+      isReading: typeof it.text === 'string' && it.text.trimStart().startsWith('📖'),
+    }));
+  } catch { return []; }
 }
 
 /** Parse comma-sep YYYY-MM-DD skipped_dates. */
@@ -67,12 +75,29 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
         borderColor: color,
       }];
     }
-    return [{
+    const out: EventInput[] = [{
       ...base,
       id: String(event.id),
       start: event.start_time,
       end: event.end_time,
     }];
+    if (event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0) {
+      const occStart = new Date(event.start_time);
+      const prepStart = new Date(occStart.getTime() - event.prep_minutes * 60_000);
+      out.push({
+        ...base,
+        id: `${event.id}_prep`,
+        start: prepStart.toISOString(),
+        end: occStart.toISOString(),
+        backgroundColor: `${color}11`,
+        borderColor: color,
+        textColor: color,
+        classNames: ['loom-event', 'loom-prep-block'],
+        extendedProps: { event, isPrepBlock: true },
+        editable: false,
+      });
+    }
+    return out;
   }
 
   // Recurring
@@ -129,6 +154,22 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
           end: occEnd.toISOString(),
           extendedProps: { event, instanceDate: dateStr },
         });
+
+        if (event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0 && !event.is_all_day) {
+          const prepStart = new Date(occStart.getTime() - event.prep_minutes * 60_000);
+          results.push({
+            ...base,
+            id: `${event.id}_${dateStr}_prep`,
+            start: prepStart.toISOString(),
+            end: occStart.toISOString(),
+            backgroundColor: `${color}11`,
+            borderColor: color,
+            textColor: color,
+            classNames: ['loom-event', 'loom-prep-block'],
+            extendedProps: { event, instanceDate: dateStr, isPrepBlock: true },
+            editable: false,
+          });
+        }
       }
     }
     addDay(cursor);
@@ -167,8 +208,10 @@ export function buildFCEvents(
 /** Render description with @mention and link highlighting (returns HTML string). */
 export function renderDescription(desc: string): string {
   if (!desc) return '';
+  const escMap: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  let html = desc.replace(/[&<>"']/g, c => escMap[c]);
   // @[EventName] mentions
-  let html = desc.replace(/@\[([^\]]+)\]/g, (_, name) =>
+  html = html.replace(/@\[([^\]]+)\]/g, (_, name) =>
     `<mark class="loom-mention">@${name}</mark>`
   );
   // [Link Text](url)

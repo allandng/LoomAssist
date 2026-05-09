@@ -10,6 +10,32 @@
   flex-shrink: 0;
 }
 
+.logoBtn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  border-radius: 10px;
+  transition: background 120ms;
+}
+
+.logoBtn:hover {
+  background: var(--bg-elevated);
+}
+
+.logoBtnActive {
+  background: var(--accent-soft);
+}
+
+.logoBtnActive:hover {
+  background: var(--accent-soft);
+}
+
 .logo {
   width: 32px;
   height: 32px;
@@ -21,7 +47,13 @@
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 13px;
-  margin-bottom: 14px;
+}
+
+.divider {
+  width: 24px;
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0 6px;
 }
 
 .navBtn {

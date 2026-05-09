@@ -16,3 +16,15 @@ Thumbs.db
 
 # SQLite database
 backend-api/loom.sqlite3
+
+# Working-note markdown — keep canonical docs tracked, ignore everything else.
+# Every currently-tracked .md file is explicitly un-ignored below.
+# When you add a new doc that should be tracked, add a matching `!` line.
+*.md
+!CHANGELOG.md
+!CLAUDE.md
+!README.md
+!design-wireframes/uploads/loomassist_wireframe_prompt.md
+!docs/react-migration-plan.md
+!docs/v2-migration-notes.md
+!frontend-ui/src/README.md

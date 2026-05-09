@@ -110,3 +110,42 @@
   height: 10px;
   border-radius: 2px;
 }
+
+/* Trailing 12 weeks variant */
+.tw12MonthRow {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  height: 12px;
+}
+
+.tw12MonthLabel {
+  grid-row: 1;
+  text-align: left;
+}
+
+.tw12Grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(7, 1fr);
+  grid-auto-flow: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.tw12Cell {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 80ms;
+}
+
+.tw12Cell:hover {
+  transform: scale(1.3);
+}

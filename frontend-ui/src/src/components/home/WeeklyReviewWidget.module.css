@@ -1,0 +1,45 @@
+.widget {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.heading {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.body {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-main);
+  white-space: pre-wrap;
+}
+
+.body :global(a) {
+  color: var(--accent);
+}
+
+.empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.emptyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}

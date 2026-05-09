@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { ModalShell, ModalFooter } from './ModalShell';
 import { useModal } from '../../contexts/ModalContext';
 import { useUndo } from '../../contexts/UndoContext';
 import { useNotifications } from '../../store/notifications';
-import { getStudyBlockPreview, confirmStudyBlocks } from '../../api';
+import { getStudyBlockPreview, confirmStudyBlocks, listAssignments } from '../../api';
 import type { Event, StudyBlockPreview } from '../../types';
 import styles from './StudyBlockModal.module.css';
 
@@ -34,8 +34,17 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
   const [selected, setSelected]             = useState<Set<number>>(new Set());
   const [loading, setLoading]               = useState(false);
   const [confirming, setConfirming]         = useState(false);
+  const [assignmentId, setAssignmentId]     = useState<number | null>(null);
 
   const deadlineDate = deadlineEvent.start_time.slice(0, 10);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAssignments({ event_id: deadlineEvent.id })
+      .then(rows => { if (!cancelled && rows.length === 1) setAssignmentId(rows[0].id); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [deadlineEvent.id]);
 
   const handlePreview = useCallback(async () => {
     setLoading(true);
@@ -48,6 +57,7 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
         session_duration_minutes: sessionDuration,
         preferred_hour: preferredHour,
         skip_weekends: skipWeekends,
+        assignment_id: assignmentId,
       });
       setPreview(blocks);
       setSelected(new Set(blocks.map((_, i) => i)));
@@ -56,7 +66,7 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
     } finally {
       setLoading(false);
     }
-  }, [subject, deadlineEvent, deadlineDate, numSessions, sessionDuration, preferredHour, skipWeekends, addNotification]);
+  }, [subject, deadlineEvent, deadlineDate, numSessions, sessionDuration, preferredHour, skipWeekends, assignmentId, addNotification]);
 
   const toggleBlock = useCallback((idx: number) => {
     setSelected(prev => {

@@ -12,6 +12,7 @@ import { AppDrawer, type Destination } from './components/shared/AppDrawer';
 import { TopBar } from './components/shared/TopBar';
 import { ContextSidebar } from './components/sidebar/ContextSidebar';
 import { CalendarPage } from './pages/CalendarPage';
+import { HomePage } from './pages/HomePage';
 import { TaskBoardPage, TaskBoardSidebarContent } from './pages/TaskBoardPage';
 import { FocusPage, FocusSidebarContent } from './pages/FocusPage';
 import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
@@ -38,20 +39,24 @@ import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavConte
 import { useModal } from './contexts/ModalContext';
 import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
+import { CommandPalette } from './components/CommandPalette';
 import { NotifPanel } from './components/NotifPanel';
-import { getCrashFlag, exportLogs, getWeeklyReview, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
+import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
-  calendar: '/calendar', tasks: '/tasks', focus: '/focus', inbox: '/inbox', courses: '/courses', journal: '/journal', settings: '/settings',
+  home: '/home', calendar: '/calendar', tasks: '/tasks', focus: '/focus', inbox: '/inbox', courses: '/courses', journal: '/journal', settings: '/settings',
 };
 const PATH_TO_DEST: Record<string, Destination> = {
-  '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/courses': 'courses', '/journal': 'journal', '/settings': 'settings',
+  '/home': 'home', '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/courses': 'courses', '/journal': 'journal', '/settings': 'settings',
 };
 
-// Apply saved theme before first render to avoid flash
+// Apply saved theme + font before first render to avoid flash
 if (typeof document !== 'undefined') {
-  document.body.classList.toggle('light-mode', localStorage.getItem('loom-theme') === 'light');
+  const theme = localStorage.getItem('loom-theme');
+  document.body.classList.toggle('light-mode',     theme === 'light');
+  document.body.classList.toggle('high-contrast',  theme === 'high-contrast');
+  document.body.classList.toggle('font-dyslexic',  localStorage.getItem('loom_font_dyslexic') === 'true');
 }
 
 function readSidebarCollapsed(): boolean {
@@ -67,7 +72,7 @@ function Shell() {
 
   // First-launch redirect: route to /onboarding once.
   useEffect(() => {
-    if (!localStorage.getItem('loom:onboarded') && location.pathname === '/calendar') {
+    if (!localStorage.getItem('loom:onboarded') && (location.pathname === '/home' || location.pathname === '/calendar')) {
       navigate('/onboarding', { replace: true });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,7 +80,7 @@ function Shell() {
 
   // Look up the destination from the path. /settings/* sub-routes still resolve to 'settings'.
   const pathRoot = '/' + (location.pathname.split('/')[1] || '');
-  const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'calendar';
+  const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'home';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [reloadKey, setReloadKey] = useState(0);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
@@ -83,6 +88,7 @@ function Shell() {
   // Inbox panel state (Phase 4)
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [appTimelines, setAppTimelines] = useState<import('./types').Calendar[]>([]);
 
   useEffect(() => {
@@ -226,31 +232,60 @@ function Shell() {
 
   const { openEventEditor, openWeeklyReview } = useModal();
 
-  // Monday auto-trigger: show weekly review notification once per week
+  // Boot-time briefing: if the user opted in, fetch today's agenda from the
+  // backend and (a) speak it via the macOS `say` Tauri command, (b) post it
+  // as a notification so it's also visible. Once per session.
+  useEffect(() => {
+    if (localStorage.getItem('loom_speak_briefing') !== 'true') return;
+    if (sessionStorage.getItem('loom_briefing_played') === '1') return;
+    sessionStorage.setItem('loom_briefing_played', '1');
+    (async () => {
+      try {
+        const { text } = await getBriefing();
+        addNotification({ type: 'info', title: 'Today', message: text, autoRemoveMs: 8000 });
+        const tauri = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args: object) => Promise<unknown> } } }).__TAURI__;
+        if (tauri?.core?.invoke) {
+          tauri.core.invoke('speak_briefing', { text }).catch(() => {});
+        }
+      } catch {
+        // backend may be down on boot — silent
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sunday ≥ 21:00 auto-trigger: ensure a cached weekly review exists for the
+  // just-ending week, then fire one notification per week.
   useEffect(() => {
     const now = new Date();
-    if (now.getDay() !== 1) return; // only on Mondays
+    if (now.getDay() !== 0 || now.getHours() < 21) return; // only Sun 9pm onward
 
     const isoWeek = getISOWeek(now);
     const storageKey = 'loom_last_review_week';
-    if (localStorage.getItem(storageKey) === isoWeek) return; // already shown this week
+    if (localStorage.getItem(storageKey) === isoWeek) return; // already triggered this week
 
-    const reviewWeekStart = lastMonday(now); // the Monday 7 days ago
-    getWeeklyReview(reviewWeekStart.toISOString())
-      .then(result => {
+    const reviewWeekStart = lastMonday(now); // Monday at the start of the just-ending week
+    const weekStartISO = reviewWeekStart.toISOString();
+
+    (async () => {
+      try {
+        let row = await getCachedWeeklyReview(weekStartISO);
+        if (!row) {
+          row = await generateWeeklyReview(weekStartISO);
+        }
         addNotification({
           type: 'info',
-          title: 'Weekly Review',
-          message: result.summary.length > 100
-            ? result.summary.slice(0, 97) + '…'
-            : result.summary,
+          title: 'Your weekly review is ready',
+          message: row.markdown.length > 100 ? row.markdown.slice(0, 97) + '…' : row.markdown,
           actionable: true,
-          actionLabel: 'Open full review',
-          actionFn: () => openWeeklyReview(result.summary, reviewWeekStart.toISOString()),
+          actionLabel: 'Open',
+          actionFn: () => openWeeklyReview(row!.markdown, weekStartISO),
         });
         localStorage.setItem(storageKey, isoWeek);
-      })
-      .catch(() => {}); // fail silently — not critical
+      } catch {
+        // fail silently — not critical
+      }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useShortcuts(useMemo(() => [
@@ -262,13 +297,16 @@ function Shell() {
     { key: keybinds.view_agenda.key,    ctrl: keybinds.view_agenda.ctrl,    meta: keybinds.view_agenda.meta,    shift: keybinds.view_agenda.shift,    handler: () => dest === 'calendar' ? nav.setView('Agenda') : undefined },
     { key: keybinds.new_event.key,      ctrl: keybinds.new_event.ctrl,      meta: keybinds.new_event.meta,      shift: keybinds.new_event.shift,      handler: () => openEventEditor() },
     { key: keybinds.today.key,          ctrl: keybinds.today.ctrl,          meta: keybinds.today.meta,          shift: keybinds.today.shift,          handler: () => nav.goToday() },
+    { key: keybinds.snooze_week.key,    ctrl: keybinds.snooze_week.ctrl,    meta: keybinds.snooze_week.meta,    shift: keybinds.snooze_week.shift,    handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })); } },
+    { key: keybinds.snooze_day.key,     ctrl: keybinds.snooze_day.ctrl,     meta: keybinds.snooze_day.meta,     shift: keybinds.snooze_day.shift,     handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })); } },
     { key: 'i', ctrl: false, meta: false, shift: false, handler: () => setInboxOpen(o => !o) },
+    { key: keybinds.command_palette.key, ctrl: keybinds.command_palette.ctrl, meta: keybinds.command_palette.meta, shift: keybinds.command_palette.shift, force: true, handler: (e) => { e.preventDefault(); setPaletteOpen(o => !o); } },
   ], [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
 
-  const topBarKind = (dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
+  const topBarKind = (dest === 'home' ? 'home' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
-  // Calendar sidebar is rendered inside CalendarPage itself; other routes use ContextSidebar
-  const showContextSidebar = dest !== 'calendar';
+  // Calendar sidebar is rendered inside CalendarPage itself; Home has no sidebar; other routes use ContextSidebar
+  const showContextSidebar = dest !== 'calendar' && dest !== 'home';
 
   return (
     <div className={styles.shell}>
@@ -311,6 +349,7 @@ function Shell() {
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
           <Routes>
+            <Route path="/home"                        element={<HomePage />} />
             <Route path="/calendar"                   element={<CalendarPage key={reloadKey} />} />
             <Route path="/calendar/sync-review"        element={<SyncReviewPage />} />
             <Route path="/tasks"                       element={<TaskBoardPage />} />
@@ -322,9 +361,10 @@ function Shell() {
             <Route path="/settings/account"            element={<AccountSettingsPage />} />
             <Route path="/settings/connections"        element={<ConnectionsSettingsPage />} />
             <Route path="/settings/connections/:id"    element={<ConnectionDetailPage />} />
-            <Route path="*"                            element={<Navigate to="/calendar" replace />} />
+            <Route path="*"                            element={<Navigate to="/home" replace />} />
           </Routes>
           <ModalRoot onSaved={() => setReloadKey(k => k + 1)} />
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         </div>
       </div>
     </div>

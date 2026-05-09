@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import type { Event } from '../../types';
+import type { Event, Calendar } from '../../types';
 import styles from './YearView.module.css';
 
 const MONTH_NAMES = [
@@ -21,9 +21,12 @@ interface YearViewProps {
   events: Event[];
   onDayClick: (date: Date) => void;
   onMonthClick: (date: Date) => void;
+  timelines?: Calendar[];
+  onEventClick?: (eventId: number) => void;
 }
 
-export function YearView({ events, onDayClick, onMonthClick }: YearViewProps) {
+export function YearView({ events, onDayClick, onMonthClick, timelines = [], onEventClick }: YearViewProps) {
+  const [mode, setMode] = useState<'year' | 'semester'>('year');
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
@@ -48,8 +51,40 @@ export function YearView({ events, onDayClick, onMonthClick }: YearViewProps) {
         <button className={styles.navBtn} onClick={() => setYear(y => y - 1)}>‹</button>
         <span className={styles.yearLabel}>{year}</span>
         <button className={styles.navBtn} onClick={() => setYear(y => y + 1)}>›</button>
+        <div style={{ marginLeft: 16, display: 'inline-flex', gap: 4, padding: 2, background: 'var(--bg-elevated)', borderRadius: 6 }}>
+          <button
+            onClick={() => setMode('year')}
+            style={{
+              padding: '4px 10px', fontSize: 11, fontWeight: 600,
+              borderRadius: 4, border: 'none', cursor: 'pointer',
+              background: mode === 'year' ? 'var(--accent)' : 'transparent',
+              color: mode === 'year' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            Year
+          </button>
+          <button
+            onClick={() => setMode('semester')}
+            style={{
+              padding: '4px 10px', fontSize: 11, fontWeight: 600,
+              borderRadius: 4, border: 'none', cursor: 'pointer',
+              background: mode === 'semester' ? 'var(--accent)' : 'transparent',
+              color: mode === 'semester' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            Semester
+          </button>
+        </div>
       </div>
 
+      {mode === 'semester' ? (
+        <SemesterView
+          year={year}
+          events={events}
+          timelines={timelines}
+          onEventClick={onEventClick}
+        />
+      ) : (
       <div className={styles.grid}>
         {Array.from({ length: 12 }, (_, m) => {
           const cells = monthDays(year, m);
@@ -88,6 +123,77 @@ export function YearView({ events, onDayClick, onMonthClick }: YearViewProps) {
           );
         })}
       </div>
+      )}
+    </div>
+  );
+}
+
+interface SemesterViewProps {
+  year: number;
+  events: Event[];
+  timelines: Calendar[];
+  onEventClick?: (eventId: number) => void;
+}
+
+function SemesterView({ year, events, timelines, onEventClick }: SemesterViewProps) {
+  const courseTimelines = timelines.filter(t => t.is_course && t.term_start && t.term_end);
+
+  if (courseTimelines.length === 0) {
+    return (
+      <div style={{ padding: '32px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
+        No course timelines yet. Mark a timeline as a course in its Edit menu (with a term start and end) to see it here.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '12px 16px 32px', display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto' }}>
+      {courseTimelines.map(tl => {
+        const start = new Date(tl.term_start!);
+        const end   = new Date(tl.term_end!);
+        const totalMs = end.getTime() - start.getTime();
+        if (totalMs <= 0) return null;
+        const tlEvents = events.filter(ev => {
+          if (ev.calendar_id !== tl.id) return false;
+          const evDate = new Date(ev.start_time);
+          return evDate >= start && evDate <= end && evDate.getFullYear() === year;
+        });
+
+        return (
+          <div key={tl.id} style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: tl.color, display: 'inline-block' }} />
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-main)' }}>{tl.name}</span>
+              {tl.course_code && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{tl.course_code}</span>}
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {start.toLocaleDateString([], { month: 'short', day: 'numeric' })} – {end.toLocaleDateString([], { month: 'short', day: 'numeric' })}
+              </span>
+            </div>
+            <div style={{ position: 'relative', height: 32, background: 'var(--bg-subtle)', borderRadius: 4 }}>
+              {tlEvents.map(ev => {
+                const evDate = new Date(ev.start_time);
+                const pct = ((evDate.getTime() - start.getTime()) / totalMs) * 100;
+                return (
+                  <button
+                    key={ev.id}
+                    onClick={() => onEventClick?.(ev.id)}
+                    title={`${ev.title} — ${evDate.toLocaleDateString()}`}
+                    style={{
+                      position: 'absolute',
+                      left: `${pct}%`,
+                      top: 4, bottom: 4, width: 6,
+                      background: tl.color,
+                      border: 'none', borderRadius: 2,
+                      cursor: 'pointer', padding: 0,
+                      transform: 'translateX(-50%)',
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

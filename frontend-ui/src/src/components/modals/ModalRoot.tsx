@@ -12,7 +12,9 @@ import { CounterProposalModal } from './CounterProposalModal';
 import { WeeklyReviewModal } from './WeeklyReviewModal';
 import { StudyBlockModal } from './StudyBlockModal';
 import { TimeBlockTemplateModal } from './TimeBlockTemplateModal';
+import { TimelineEditorModal } from './TimelineEditorModal';
 import { AutopilotReviewModal } from './AutopilotReviewModal';
+import { MissedEventsModal } from './MissedEventsModal';
 import { SyncMergeModal } from './SyncMergeModal';
 import { ProviderPickerModal } from '../connections/ProviderPickerModal';
 import { CalDAVCredentialsModal } from '../connections/CalDAVCredentialsModal';
@@ -66,6 +68,13 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           onSaved={onSaved}
         />
       );
+    case 'timeline-editor':
+      return (
+        <TimelineEditorModal
+          timelineId={modal.props.timelineId as number | undefined}
+          onSaved={onSaved}
+        />
+      );
     case 'time-block-template':
       return (
         <TimeBlockTemplateModal
@@ -81,6 +90,14 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           overflow={(modal.props.overflow as AutopilotOverflow[]) ?? []}
           timelines={(modal.props.timelines as Calendar[]) ?? timelines}
           onApplied={modal.props.onApplied as () => void}
+        />
+      );
+    case 'missed-events':
+      return (
+        <MissedEventsModal
+          items={(modal.props.items as Event[]) ?? []}
+          truncated={(modal.props.truncated as boolean) ?? false}
+          onReschedule={modal.props.onReschedule as Parameters<typeof MissedEventsModal>[0]['onReschedule']}
         />
       );
     case 'sync-merge':

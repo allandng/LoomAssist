@@ -4,11 +4,12 @@ import styles from './TopBar.module.css';
 import { Icon, Icons } from './Icon';
 import { Kbd } from './Kbd';
 
-type TopBarKind = 'calendar' | 'tasks' | 'focus' | 'settings';
+type TopBarKind = 'home' | 'calendar' | 'tasks' | 'focus' | 'settings';
 type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
 
 const VIEWS: CalendarView[] = ['Month', 'Week', 'Day', 'Year', 'Agenda'];
 const PAGE_TITLES: Record<TopBarKind, string> = {
+  home:     'Home',
   calendar: 'Calendar',
   tasks:    'Task Board',
   focus:    'Focus Mode',

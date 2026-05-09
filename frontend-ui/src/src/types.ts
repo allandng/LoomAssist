@@ -5,6 +5,11 @@ export interface Calendar {
   name: string;
   description: string;
   color: string; // hex, default '#6366f1'
+  // Future-features 3A: course timeline metadata
+  is_course?: boolean;
+  course_code?: string | null;
+  term_start?: string | null;  // ISO date
+  term_end?:   string | null;  // ISO date
 }
 
 export interface Event {
@@ -29,6 +34,8 @@ export interface Event {
   actual_end?:   string | null;
   location?: string | null;
   travel_time_minutes?: number | null;
+  event_type?: 'lecture' | 'lab' | 'office_hours' | 'other' | null;
+  prep_minutes?: number | null;
   reminder_source?: 'user' | 'inferred' | 'none' | null;
   depends_on_event_id?: number | null;
   depends_offset_minutes?: number | null;
@@ -37,6 +44,9 @@ export interface Event {
   external_id?: string | null;
   external_etag?: string | null;
   last_synced_at?: string | null;
+  // "Missed" opt-in marker — ISO timestamp set when the user marks the event
+  // as missed via the EventEditorModal footer. Auto-cleared on a normal save.
+  missed_at?: string | null;
 }
 
 export interface EventTemplate {
@@ -61,6 +71,37 @@ export interface Task {
   due_date: string;   // ISO date, nullable
   estimated_minutes?: number | null;
   deadline?: string | null;
+  // Future-features 3C: grade tracker
+  grade?:  number | null;
+  weight?: number | null;
+}
+
+// Future-features 4A: habits
+export interface Habit {
+  id: number;
+  name: string;
+  color: string;
+  target_per_week: number;
+  created_at: string;
+}
+
+export interface HabitEntry {
+  id: number;
+  habit_id: number;
+  date: string;   // YYYY-MM-DD
+  count: number;
+}
+
+// Future-features 4C: task templates
+export interface TaskTemplate {
+  id: number;
+  name: string;
+  title: string;
+  description: string | null;
+  default_priority: 'high' | 'med' | 'low';
+  recurrence_days: string | null;
+  calendar_id: number | null;
+  created_at: string;
 }
 
 export interface JournalEntry {
@@ -70,6 +111,7 @@ export interface JournalEntry {
   audio_path: string | null;
   mood: 'great' | 'ok' | 'rough' | null;
   created_at: string;
+  event_id: number | null;
 }
 
 export interface Subscription {
@@ -145,6 +187,7 @@ export interface StudyBlockPreview {
   end_time: string;
   description: string;
   calendar_id: number;
+  assignment_id?: number | null;
 }
 
 export interface StudyBlockRequest {
@@ -155,6 +198,16 @@ export interface StudyBlockRequest {
   session_duration_minutes?: number;
   preferred_hour?: number;
   skip_weekends?: boolean;
+  assignment_id?: number | null;
+}
+
+export interface ProcrastinationWarning {
+  assignment_id: number;
+  title: string;
+  course_name: string;
+  due_date: string;
+  days_until: number;
+  message: string;
 }
 
 export interface AvailabilityRequest {
@@ -209,8 +262,16 @@ export interface PerDayTime {
   end: string;   // HH:MM
 }
 
+export type WellnessWarningKind = 'exam_cluster' | 'over_scheduled' | 'other';
+
+export interface WellnessWarning {
+  message: string;
+  kind: WellnessWarningKind;
+  context?: Record<string, unknown>;
+}
+
 export interface WellnessAnalysis {
-  warnings: string[];
+  warnings: WellnessWarning[];
 }
 
 export interface LogEntry {

@@ -4,6 +4,7 @@ import { Icon, Icons } from '../shared/Icon';
 import { TLDot } from '../shared/TLDot';
 import type { Task, Calendar } from '../../types';
 import { timelineColor } from '../../lib/eventUtils';
+import { recordPomodoroSession } from '../../api';
 
 function emitPomodoroState(state: string) {
   try {
@@ -97,6 +98,16 @@ export function PomodoroPanel({ activeTaskId, tasks, timelines }: PomodoroPanelP
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         task: activeTask?.note ?? 'Untitled task',
       }, ...prev].slice(0, 10));
+
+      // Persist for the Energy Map widget — fire-and-forget; never block the UI.
+      recordPomodoroSession({
+        completed_at: new Date().toISOString(),
+        duration_minutes: settings.work,
+        mode: 'work',
+        task_id: activeTaskId ?? null,
+        task_note: activeTask?.note ?? null,
+        round_num: round,
+      }).catch(err => console.warn('pomodoro persist failed', err));
 
       if (settings.desktopNotif && Notification.permission === 'granted') {
         new Notification('Pomodoro complete!', { body: 'Time for a break.' });
