@@ -48,6 +48,9 @@ from services.lan.exchange import _auto_sync_loop
 from services.ai import whisper, embedder
 from services.ai.embedder import try_upsert_event_embedding
 from services.ai.briefing import compute_briefing
+from services.ai.parse_datetime import parse_nl_datetime
+from services.ai.reminders import infer_reminder as _infer_reminder  # alias avoids shadowing the route handler `infer_reminder(req)` below
+from services.ai.wellness import compute_llm_wellness_warnings
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -744,21 +747,8 @@ class DatetimeParseRequest(BaseModel):
 
 @app.post("/parse/datetime")
 async def parse_datetime_nl(req: DatetimeParseRequest):
-    now_str = datetime.now().isoformat()
-    prompt = (
-        f'Today is {now_str}.\n'
-        f'The user typed: "{req.input}"\n\n'
-        'Parse this into an ISO 8601 datetime string (YYYY-MM-DDTHH:MM:SS).\n'
-        'If no time is specified, use 09:00:00.\n'
-        '"afternoon" = 14:00, "morning" = 09:00, "evening" = 18:00, "night" = 20:00.\n'
-        'Respond with ONLY the ISO datetime string. No explanation.'
-    )
     try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        raw = response['message']['content'].strip()
-        parsed = datetime.fromisoformat(raw)
-        display = parsed.strftime("%a %b %d, %Y at %I:%M %p")
-        return {"iso": parsed.isoformat(), "display": display}
+        return parse_nl_datetime(req.input)
     except (ValueError, KeyError):
         raise HTTPException(status_code=422,
             detail={"error": {"code": "parse_failed", "detail": f"Could not parse: {req.input!r}"}})
@@ -1274,43 +1264,11 @@ def _exam_cluster_warnings(events: list[ScheduleEvent]) -> list[WellnessWarning]
     return warnings
 
 
-def _llm_wellness_warnings(events: list[ScheduleEvent]) -> list[WellnessWarning]:
-    """Existing Ollama-driven warnings. Latency unchanged from prior behavior."""
-    try:
-        sorted_events = sorted(events, key=lambda e: e.start_time)
-        schedule_text = "\n".join(
-            f"{e.start_time[11:16]}-{e.end_time[11:16]}: {e.title}"
-            for e in sorted_events
-        )
-        prompt = (
-            "You are a wellness assistant reviewing a daily schedule.\n"
-            f"Schedule:\n{schedule_text}\n"
-            "Identify any of these issues (only if clearly present):\n\n"
-            "No meal break (no 30+ min gap between 11am-2pm)\n"
-            "Back-to-back events with no buffer (events end and start within 5 minutes)\n"
-            "No commute time before first event if it starts before 9am\n"
-            "No break in 4+ consecutive hours of events\n\n"
-            "Respond ONLY as a JSON array of short warning strings (max 12 words each).\n"
-            "If no issues found, respond with: []\n"
-            'Example: ["No lunch break planned between 11am and 2pm"]'
-        )
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        content = response['message']['content'].strip()
-        match = re.search(r'\[.*\]', content, re.DOTALL)
-        if not match:
-            return []
-        raw = json.loads(match.group(0))
-        return [WellnessWarning(message=str(m), kind='other') for m in raw if str(m).strip()]
-    except Exception as e:
-        logger.warning(f"Schedule analysis failed: {str(e)}")
-        return []
-
-
 @app.post("/schedule/analyze", response_model=WellnessAnalysisResponse)
 def analyze_schedule(request: ScheduleAnalyzeRequest):
     # Deterministic rules first — they don't depend on the LLM call and never fail.
     warnings = _exam_cluster_warnings(request.events)
-    warnings.extend(_llm_wellness_warnings(request.events))
+    warnings.extend(WellnessWarning(**w) for w in compute_llm_wellness_warnings(request.events))
     return WellnessAnalysisResponse(warnings=warnings)
 
 
@@ -1532,30 +1490,6 @@ class InferReminderRequest(BaseModel):
 class InferReminderResponse(BaseModel):
     minutes: int
     rationale: str
-
-_REMINDER_ALLOWED = {0, 5, 10, 15, 30, 60, 1440}
-
-def _infer_reminder(title: str, description: Optional[str]) -> dict:
-    """Call Ollama to suggest a reminder lead time. Returns {minutes, rationale}."""
-    desc_part = f" Description: {description}" if description else ""
-    prompt = (
-        f"Given an event titled '{title}'.{desc_part} "
-        "Suggest a reminder lead time in minutes from this fixed list: "
-        "0, 5, 10, 15, 30, 60, 1440. "
-        'Respond ONLY as JSON {"minutes": <int>, "rationale": "<one sentence>"}. '
-        "No markdown, no extra text."
-    )
-    response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-    content = response['message']['content'].strip()
-    match = re.search(r'\{.*?\}', content, re.DOTALL)
-    if not match:
-        return {"minutes": 15, "rationale": "Default reminder"}
-    data = json.loads(match.group(0))
-    minutes = int(data.get("minutes", 15))
-    if minutes not in _REMINDER_ALLOWED:
-        # Snap to nearest allowed value
-        minutes = min(_REMINDER_ALLOWED, key=lambda x: abs(x - minutes))
-    return {"minutes": minutes, "rationale": data.get("rationale", "")}
 
 @app.post("/ai/infer-reminder", response_model=InferReminderResponse)
 def infer_reminder(req: InferReminderRequest):
