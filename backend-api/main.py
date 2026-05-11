@@ -34,6 +34,11 @@ from database import models
 from core.deps import get_db, _check_rate
 from core.middleware import CrashMiddleware
 from core.validation import validate_event_times, validate_calendar_exists, _detect_circular
+from services.scheduling.conflicts import get_conflicts
+from services.scheduling.find_free import _find_free_slots_internal
+from services.scheduling.autopilot import compute_autopilot_proposals
+from services.scheduling.procrastination import compute_procrastination_warnings
+from services.scheduling.duration_stats import compute_duration_stats
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -148,50 +153,6 @@ app.add_middleware(
 )
 
 model = WhisperModel("base.en", device="cpu", compute_type="int8")
-
-def get_conflicts(
-    start: str, end: str, calendar_id: int,
-    exclude_event_id: int | None,
-    db: Session,
-) -> list[tuple]:
-    """Return (event, conflict_type) for events on the same calendar that overlap
-    [start, end]. conflict_type is 'event' for direct event-block overlap, or
-    'travel' when the proposed window only intersects another event's travel
-    buffer (the [event_start - travel_minutes, event_start) window)."""
-    try:
-        start_dt = datetime.fromisoformat(start)
-        end_dt   = datetime.fromisoformat(end)
-    except ValueError:
-        return []
-    candidates = db.query(models.Event).filter(models.Event.calendar_id == calendar_id).all()
-    conflicts: list[tuple] = []
-    for ev in candidates:
-        if exclude_event_id and ev.id == exclude_event_id:
-            continue
-        try:
-            ev_start = datetime.fromisoformat(ev.start_time)
-            ev_end   = datetime.fromisoformat(ev.end_time)
-        except ValueError:
-            continue
-        # Direct overlap
-        if not (ev_end <= start_dt or ev_start >= end_dt):
-            conflicts.append((ev, "event"))
-            continue
-        # Travel-buffer overlap: the [ev_start - travel, ev_start) window
-        travel = ev.travel_time_minutes or 0
-        if travel > 0:
-            buffer_start = ev_start - timedelta(minutes=travel)
-            if not (ev_start <= start_dt or buffer_start >= end_dt):
-                conflicts.append((ev, "travel"))
-        # Prep-buffer overlap (lectures only): [ev_start - travel - prep, ev_start - travel)
-        if ev.event_type == "lecture":
-            prep = ev.prep_minutes or 0
-            if prep > 0:
-                prep_end   = ev_start - timedelta(minutes=travel)
-                prep_start = prep_end  - timedelta(minutes=prep)
-                if not (prep_end <= start_dt or prep_start >= end_dt):
-                    conflicts.append((ev, "prep"))
-    return conflicts
 
 # ==========================================
 # LOGGING ENDPOINTS
@@ -1246,61 +1207,7 @@ def reindex_embeddings(db: Session = Depends(get_db)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _find_free_slots_internal(
-    db: Session,
-    window_start: datetime,
-    window_end: datetime,
-    duration_minutes: int,
-    working_hours_start: int,
-    working_hours_end: int,
-) -> list[dict]:
-    """Shared free-slot finder used by both the public endpoint and conflict resolver."""
-    duration = timedelta(minutes=duration_minutes)
-    events   = db.query(models.Event).all()
-    busy: list[tuple[datetime, datetime]] = []
-    for ev in events:
-        try:
-            ev_s = datetime.fromisoformat(ev.start_time)
-            ev_e = datetime.fromisoformat(ev.end_time)
-        except ValueError:
-            continue
-        if ev_s < window_end and ev_e > window_start:
-            travel = timedelta(minutes=ev.travel_time_minutes or 0)
-            prep   = timedelta(minutes=ev.prep_minutes or 0) if ev.event_type == "lecture" else timedelta(0)
-            busy.append((ev_s - travel - prep, ev_e))
-    busy.sort()
-
-    free_slots: list[dict] = []
-    cursor = window_start.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
-    if cursor < window_start:
-        cursor = window_start
-    remainder = cursor.minute % 15
-    if remainder:
-        cursor += timedelta(minutes=(15 - remainder))
-    cursor = cursor.replace(second=0, microsecond=0)
-
-    while cursor + duration <= window_end and len(free_slots) < 5:
-        slot_end = cursor + duration
-        day_end = cursor.replace(hour=working_hours_end, minute=0, second=0, microsecond=0)
-        if cursor.hour < working_hours_start:
-            cursor = cursor.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
-            continue
-        if cursor >= day_end or slot_end > day_end:
-            # Past working hours — jump to next day's start
-            next_day = cursor + timedelta(days=1)
-            cursor = next_day.replace(hour=working_hours_start, minute=0, second=0, microsecond=0)
-            continue
-        if not any(b_s < slot_end and b_e > cursor for b_s, b_e in busy):
-            free_slots.append({"start": cursor.isoformat(), "end": slot_end.isoformat()})
-            cursor = slot_end
-        else:
-            cursor += timedelta(minutes=15)
-    return free_slots
-
-
 # ── Phase 7: Time-Blocking Autopilot ─────────────────────────────────────────
-
-_PRIORITY_ORDER = {"high": 0, "med": 1, "low": 2}
 
 class AutopilotRequest(BaseModel):
     window_start: str
@@ -1332,79 +1239,14 @@ def run_autopilot(req: AutopilotRequest, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=422, detail={"error": {"code": "invalid_window"}})
 
-    # Tasks with estimated_minutes, not complete, sorted by deadline then priority
-    tasks = (
-        db.query(models.Task)
-        .filter(models.Task.estimated_minutes != None, models.Task.is_complete == False)  # noqa: E711
-        .all()
+    proposals_raw, overflow_raw = compute_autopilot_proposals(
+        db, window_start, window_end,
+        req.working_hours_start, req.working_hours_end,
     )
-    tasks.sort(key=lambda t: (
-        t.deadline or "9999-12-31",
-        _PRIORITY_ORDER.get(t.priority or "low", 2),
-    ))
-
-    proposals: list[AutopilotProposal] = []
-    overflow:  list[AutopilotOverflow]  = []
-
-    # Local busy list — includes proposals already made (so tasks don't overlap each other)
-    local_busy: list[tuple[datetime, datetime]] = []
-
-    for task in tasks:
-        dur = task.estimated_minutes or 60
-
-        # Build busy list from DB events + already-proposed slots
-        db_events = db.query(models.Event).all()
-        busy: list[tuple[datetime, datetime]] = []
-        for ev in db_events:
-            try:
-                ev_s = datetime.fromisoformat(ev.start_time)
-                ev_e = datetime.fromisoformat(ev.end_time)
-            except ValueError:
-                continue
-            if ev_s < window_end and ev_e > window_start:
-                busy.append((ev_s, ev_e))
-        busy.extend(local_busy)
-        busy.sort()
-
-        slots = _find_free_slots_internal(
-            db, window_start, window_end, dur,
-            req.working_hours_start, req.working_hours_end,
-        )
-        # Override busy list: _find_free_slots_internal queries the DB; we need to
-        # also exclude local_busy — re-filter its results manually
-        valid_slots = []
-        duration_td = timedelta(minutes=dur)
-        for s in slots:
-            slot_start = datetime.fromisoformat(s["start"])
-            slot_end   = slot_start + duration_td
-            if not any(b_s < slot_end and b_e > slot_start for b_s, b_e in local_busy):
-                valid_slots.append(s)
-
-        if not valid_slots:
-            reason = "no free slot found in window"
-            if task.deadline and datetime.fromisoformat(task.deadline + "T23:59:59") < window_end:
-                reason = f"cannot fit before deadline {task.deadline}"
-            overflow.append(AutopilotOverflow(
-                task_id=task.id,
-                task_title=task.note or f"Task {task.id}",
-                reason=reason,
-            ))
-            continue
-
-        chosen = valid_slots[0]
-        chosen_start = datetime.fromisoformat(chosen["start"])
-        chosen_end   = datetime.fromisoformat(chosen["end"])
-        local_busy.append((chosen_start, chosen_end))
-
-        proposals.append(AutopilotProposal(
-            task_id=task.id,
-            task_title=task.note or f"Task {task.id}",
-            start=chosen["start"],
-            end=chosen["end"],
-            rationale=f"Earliest free {dur}-min slot",
-        ))
-
-    return AutopilotResponse(proposals=proposals, overflow=overflow)
+    return AutopilotResponse(
+        proposals=[AutopilotProposal(**p) for p in proposals_raw],
+        overflow=[AutopilotOverflow(**o) for o in overflow_raw],
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1584,67 +1426,12 @@ class ProcrastinationWarning(BaseModel):
 class ProcrastinationRadarResponse(BaseModel):
     warnings: list[ProcrastinationWarning]
 
-_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-def _radar_message(title: str, days_until: int, due_dt: datetime) -> str:
-    if days_until == 0:
-        return f"{title} due today — no study time blocked."
-    if days_until == 1:
-        return f"{title} due tomorrow — no study time blocked."
-    if days_until == 7:
-        return f"{title} due in 7 days — no study time blocked."
-    return f"{title} due {_WEEKDAY_NAMES[due_dt.weekday()]} — no study time blocked."
-
 @app.get("/schedule/procrastination-radar", response_model=ProcrastinationRadarResponse)
 def procrastination_radar(db: Session = Depends(get_db)):
-    now = datetime.now()
-    today = now.date()
-    horizon = today + timedelta(days=7)
-    horizon_iso = horizon.isoformat()
-    today_iso = today.isoformat()
-    now_iso = now.isoformat()
-
-    assignments = (
-        db.query(models.Assignment)
-        .filter(models.Assignment.due_date >= today_iso)
-        .filter(models.Assignment.due_date <= horizon_iso)
-        .order_by(models.Assignment.due_date)
-        .all()
+    warnings_raw = compute_procrastination_warnings(db, datetime.now())
+    return ProcrastinationRadarResponse(
+        warnings=[ProcrastinationWarning(**w) for w in warnings_raw],
     )
-
-    warnings: list[ProcrastinationWarning] = []
-    for a in assignments:
-        block_count = (
-            db.query(models.Event)
-            .filter(models.Event.assignment_id == a.id)
-            .filter(models.Event.deleted_at.is_(None))
-            .filter(models.Event.start_time >= now_iso)
-            .count()
-        )
-        if block_count > 0:
-            continue
-
-        try:
-            due_dt = datetime.strptime(a.due_date[:10], "%Y-%m-%d")
-        except ValueError:
-            continue
-        days_until = (due_dt.date() - today).days
-        if days_until < 0 or days_until > 7:
-            continue
-
-        course = db.query(models.Course).filter(models.Course.id == a.course_id).first()
-        course_name = course.name if course else ""
-
-        warnings.append(ProcrastinationWarning(
-            assignment_id=a.id,
-            title=a.title,
-            course_name=course_name,
-            due_date=a.due_date[:10],
-            days_until=days_until,
-            message=_radar_message(a.title, days_until, due_dt),
-        ))
-
-    return ProcrastinationRadarResponse(warnings=warnings)
 
 # ==========================================
 # TASK ROUTES (replaces M1 Todo)
@@ -2186,23 +1973,7 @@ def clock_event(event_id: int, payload: ClockPayload, db: Session = Depends(get_
 
 @app.get("/stats/duration")
 def duration_stats(db: Session = Depends(get_db)):
-    events = db.query(models.Event).filter(models.Event.actual_end != None).all()
-    stats = []
-    for e in events:
-        if not e.actual_start or not e.actual_end:
-            continue
-        planned = (datetime.fromisoformat(e.end_time) -
-                   datetime.fromisoformat(e.start_time)).seconds / 60
-        actual  = (datetime.fromisoformat(e.actual_end) -
-                   datetime.fromisoformat(e.actual_start)).seconds / 60
-        stats.append({
-            "id": e.id, "title": e.title,
-            "calendar_id": e.calendar_id,
-            "planned_minutes": round(planned),
-            "actual_minutes":  round(actual),
-            "delta_minutes":   round(actual - planned),
-        })
-    return {"entries": stats}
+    return {"entries": compute_duration_stats(db)}
 
 # ==========================================
 # STUDY BLOCK AUTO-GENERATOR ROUTES
