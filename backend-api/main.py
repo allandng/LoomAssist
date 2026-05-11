@@ -14,7 +14,6 @@ from services.exam_cluster import detect_exam_clusters as _detect_exam_clusters
 import asyncio
 import gc
 from contextlib import asynccontextmanager
-from faster_whisper import WhisperModel
 import os
 import tempfile
 import ollama
@@ -46,6 +45,9 @@ from services.lan.certs import _generate_self_signed_cert, _cert_fingerprint
 from services.lan.pairing import _pairing_codes, _get_or_create_device_id
 from services.lan.discovery import _maybe_start_mdns, stop_mdns, _discovered_peers
 from services.lan.exchange import _auto_sync_loop
+from services.ai import whisper, embedder
+from services.ai.embedder import try_upsert_event_embedding
+from services.ai.briefing import compute_briefing
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -100,15 +102,14 @@ async def lifespan(app: FastAPI):
 
         stop_mdns()
 
-        # Drop the WhisperModel ref — keeps the attr extant (so routes can
-        # gracefully fail post-shutdown rather than AttributeError) but lets
-        # CTranslate2's worker pool be released by GC below.
+        # Release on-device AI singletons so CTranslate2's worker pool and
+        # the sentence-transformers model can be GC'd on uvicorn --reload / quit.
+        # `whisper.release_model()` is the canonical release; `model = None`
+        # is back-compat for test_lifespan_stage0 which asserts main.model is
+        # None post-shutdown.
+        whisper.release_model()
+        embedder.release_model()
         model = None
-        try:
-            from services import embedder as _emb
-            _emb._model = None
-        except Exception:
-            pass
         gc.collect()
 
 
@@ -154,7 +155,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = WhisperModel("base.en", device="cpu", compute_type="int8")
+model = whisper.get_model()  # eager-load via service; main.model stays as a module attr for test_lifespan_stage0 compat
 
 # ==========================================
 # LOGGING ENDPOINTS
@@ -280,19 +281,6 @@ def check_conflicts(payload: ConflictCheckRequest, db: Session = Depends(get_db)
     )
     return {"conflicts": [{"id": c.id, "title": c.title, "conflict_type": ct} for c, ct in conflicts]}
 
-def _try_upsert_embedding(event_id: int, title: str, description: Optional[str], db: Session) -> None:
-    """Upsert embedding after event write — never blocks the event write on failure."""
-    try:
-        from services.embedder import upsert_event_embedding
-        upsert_event_embedding(event_id, title, description, db)
-    except Exception as e:
-        logger.warning(f"Embedding upsert failed for event {event_id}: {e}")
-        try:
-            db.rollback()
-        except Exception:
-            pass
-
-
 @app.post("/events/")
 def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     validate_calendar_exists(event.calendar_id, db)
@@ -319,7 +307,7 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
-    _try_upsert_embedding(db_event.id, db_event.title, db_event.description, db)
+    try_upsert_event_embedding(db_event.id, db_event.title, db_event.description, db)
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
     return {
         "event": db_event,
@@ -366,7 +354,7 @@ def update_event(event_id: int, event: models.EventBase, db: Session = Depends(g
 
     db.commit()
     db.refresh(db_event)
-    _try_upsert_embedding(db_event.id, db_event.title, db_event.description, db)
+    try_upsert_event_embedding(db_event.id, db_event.title, db_event.description, db)
     conflicts = get_conflicts(db_event.start_time, db_event.end_time, db_event.calendar_id, db_event.id, db)
 
     # Return any dependents so frontend can offer cascade
@@ -397,7 +385,7 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
     db.delete(db_event)
     db.commit()
     try:
-        from services.embedder import delete_event_embedding
+        from services.ai.embedder import delete_event_embedding
         delete_event_embedding(event_id_to_delete, db)
     except Exception:
         pass
@@ -1093,7 +1081,7 @@ class SemanticSearchResult(BaseModel):
 @app.get("/search/semantic")
 def semantic_search(q: str, k: int = 10, db: Session = Depends(get_db)):
     try:
-        from services.embedder import search as embedding_search
+        from services.ai.embedder import search as embedding_search
         hits = embedding_search(q, k, db)
     except Exception as e:
         logger.error(f"Semantic search error: {e}")
@@ -1110,7 +1098,7 @@ def semantic_search(q: str, k: int = 10, db: Session = Depends(get_db)):
 @app.post("/search/reindex")
 def reindex_embeddings(db: Session = Depends(get_db)):
     try:
-        from services.embedder import upsert_event_embedding
+        from services.ai.embedder import upsert_event_embedding
         events = db.query(models.Event).all()
         count = 0
         for ev in events:
@@ -4067,26 +4055,6 @@ def delete_task_template(tpl_id: int, db: Session = Depends(get_db)):
 @app.post("/ai/briefing")
 def ai_briefing(db: Session = Depends(get_db)):
     """Plain-text summary of today's events, suitable for TTS."""
-    today = datetime.now().date()
-    start = datetime.combine(today, datetime.min.time())
-    end   = start + timedelta(days=1)
-    events = db.query(models.Event).filter(
-        models.Event.start_time >= start.isoformat(),
-        models.Event.start_time <  end.isoformat(),
-    ).order_by(models.Event.start_time).all()
-
-    if not events:
-        return {"text": "You have no events scheduled today."}
-
-    lines = [f"You have {len(events)} event{'s' if len(events) != 1 else ''} today."]
-    for e in events[:5]:
-        try:
-            t = datetime.fromisoformat(e.start_time).strftime("%-I:%M %p")
-        except (ValueError, AttributeError):
-            t = ""
-        lines.append(f"At {t}: {e.title}.")
-    if len(events) > 5:
-        lines.append(f"And {len(events) - 5} more.")
-    return {"text": " ".join(lines)}
+    return compute_briefing(db)
 
 # ─────────────────────────────────────────────────────────────────────────────

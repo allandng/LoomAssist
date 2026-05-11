@@ -1,13 +1,28 @@
-"""
-Phase 6 — on-device semantic search via sentence-transformers.
-Model loads lazily on first call; never fetches from the network at runtime
-once the model is cached (set TRANSFORMERS_OFFLINE=1 to verify).
+"""On-device semantic search via sentence-transformers + safe-write wrapper.
+
+Lazy-loads the all-MiniLM-L6-v2 model on first embedding call. Never fetches
+from the network at runtime once the model is cached (set TRANSFORMERS_OFFLINE=1
+to verify). The sentence-transformers import lives inside _get_model() so an
+import failure or missing model package doesn't block module load.
+
+The single home for the embedding dependency post-1A.6. Stage 2's local-apply
+sync code path can choose to call try_upsert_event_embedding after applying a
+remote-origin write, or skip — the dependency is explicit at the call site.
+
+Moved from services/embedder.py in Stage 1 (substep 1A.6). The new
+try_upsert_event_embedding() subsumes main.py's original _try_upsert_embedding
+wrapper.
 """
 from __future__ import annotations
 import numpy as np
 from datetime import datetime
 from sqlalchemy.orm import Session
+
 from database import models
+from loom_logger import get_logger
+
+
+logger = get_logger("ai.embedder")
 
 _MODEL_NAME = "all-MiniLM-L6-v2"
 _model = None  # lazy singleton
@@ -19,6 +34,12 @@ def _get_model():
         from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer(_MODEL_NAME)
     return _model
+
+
+def release_model() -> None:
+    """Null the singleton so sentence-transformers' model can be GC'd. Idempotent."""
+    global _model
+    _model = None
 
 
 def embed(text: str) -> np.ndarray:
@@ -57,6 +78,26 @@ def delete_event_embedding(event_id: int, db: Session) -> None:
     if row:
         db.delete(row)
         db.commit()
+
+
+def try_upsert_event_embedding(event_id: int, title: str, description: str | None, db: Session) -> None:
+    """Safely upsert; never blocks the event write on embedding failure.
+
+    Wraps upsert_event_embedding() with try/except + db.rollback(). The
+    sentence-transformers import (inside _get_model()) is naturally protected
+    by this outer try — an import failure surfaces as a swallowed Exception
+    and the event write proceeds.
+
+    Subsumes main.py's original _try_upsert_embedding wrapper (1A.6).
+    """
+    try:
+        upsert_event_embedding(event_id, title, description, db)
+    except Exception as e:
+        logger.warning(f"Embedding upsert failed for event {event_id}: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def search(query: str, k: int, db: Session) -> list[tuple[int, float]]:
