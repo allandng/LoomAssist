@@ -39,6 +39,7 @@ from services.scheduling.find_free import _find_free_slots_internal
 from services.scheduling.autopilot import compute_autopilot_proposals
 from services.scheduling.procrastination import compute_procrastination_warnings
 from services.scheduling.duration_stats import compute_duration_stats
+from services.crypto.backup import _encrypt_backup, _decrypt_backup
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -2787,38 +2788,6 @@ class BackupExportRequest(BaseModel):
 class BackupImportResponse(BaseModel):
     success: bool
     message: str
-
-def _encrypt_backup(data: bytes, passphrase: str) -> bytes:
-    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    import secrets as _secrets
-    salt = _secrets.token_bytes(32)
-    kdf = Scrypt(salt=salt, length=32, n=16384, r=8, p=1)
-    key = kdf.derive(passphrase.encode("utf-8"))
-    aesgcm = AESGCM(key)
-    nonce = _secrets.token_bytes(12)
-    ciphertext = aesgcm.encrypt(nonce, data, None)
-    # Format: 4-byte version | 32-byte salt | 12-byte nonce | ciphertext
-    return b"LBK1" + salt + nonce + ciphertext
-
-def _decrypt_backup(data: bytes, passphrase: str) -> bytes:
-    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.exceptions import InvalidTag
-    if len(data) < 4 + 32 + 12 + 16:
-        raise ValueError("File too short")
-    if data[:4] != b"LBK1":
-        raise ValueError("Not a .loombackup file")
-    salt = data[4:36]
-    nonce = data[36:48]
-    ciphertext = data[48:]
-    kdf = Scrypt(salt=salt, length=32, n=16384, r=8, p=1)
-    key = kdf.derive(passphrase.encode("utf-8"))
-    aesgcm = AESGCM(key)
-    try:
-        return aesgcm.decrypt(nonce, ciphertext, None)
-    except InvalidTag:
-        raise ValueError("Wrong passphrase or corrupted backup")
 
 @app.post("/backup/export")
 def export_backup(req: BackupExportRequest):
