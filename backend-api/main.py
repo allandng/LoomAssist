@@ -16,7 +16,6 @@ import gc
 from contextlib import asynccontextmanager
 import os
 import tempfile
-import ollama
 import json
 import re
 from datetime import datetime, timedelta
@@ -51,6 +50,11 @@ from services.ai.briefing import compute_briefing
 from services.ai.parse_datetime import parse_nl_datetime
 from services.ai.reminders import infer_reminder as _infer_reminder  # alias avoids shadowing the route handler `infer_reminder(req)` below
 from services.ai.wellness import compute_llm_wellness_warnings
+from services.ai.syllabus import extract_syllabus_events
+from services.ai.intent import extract_intent, execute_intent
+from services.ai.conflict_resolver import resolve_conflict_suggestions
+from services.ai.weekly_review import compute_weekly_metrics as _compute_weekly_metrics, generate_weekly_narrative
+from services.ai.inbox_propose import propose_inbox_slot
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -572,25 +576,6 @@ def export_timelines(calendar_ids: str, format: str = "json", db: Session = Depe
     else:
         raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "Format must be json or ics."}})
 
-def extract_syllabus_events(text: str) -> list:
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"""
-    Today is {today}. Extract all assignments, exams, and due dates from this syllabus text. 
-    Return ONLY a JSON array of objects with 'title' and 'date' (YYYY-MM-DD format). Do not include preamble or markdown formatting.
-    Syllabus text: {text}
-    """
-    
-    try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        content = response['message']['content'].strip()
-        match = re.search(r'\[.*\]', content, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return []
-    except Exception as e:
-        logger.error(f"Syllabus LLM extraction error: {str(e)}")
-        return []
-
 @app.post("/documents/extract-syllabus/")
 async def extract_syllabus(file: UploadFile = File(...)):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
@@ -760,105 +745,6 @@ async def parse_datetime_nl(req: DatetimeParseRequest):
 # ==========================================
 # INTENT ENGINE
 # ==========================================
-def extract_intent(sentence: str) -> dict:
-    """Ask Llama to classify the user's voice/text command into a structured intent."""
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prompt = (
-        f"Current time: {current_time}\n"
-        "Classify the following command and extract parameters.\n"
-        "Return ONLY JSON (no markdown) matching one of:\n"
-        '  {"action":"create_event","parameters":{"title":"...","date":"YYYY-MM-DD","time":"HH:MM","duration_minutes":60}}\n'
-        '  {"action":"move_event","parameters":{"event_query":"...","new_start":"ISO datetime"}}\n'
-        '  {"action":"cancel_event","parameters":{"event_query":"..."}}\n'
-        '  {"action":"resize_event","parameters":{"event_query":"...","new_duration_minutes":30}}\n'
-        f'Command: "{sentence}"'
-    )
-    try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        content = response['message']['content'].strip()
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return {"action": "parse_error", "detail": "No JSON in LLM response"}
-    except Exception as e:
-        logger.error(f"LLM intent extraction error: {e}")
-        return {"action": "parse_error", "detail": str(e)}
-
-
-def execute_intent(intent: dict, db: Session) -> dict:
-    from services.event_resolver import resolve_event_by_query
-    action = intent.get("action")
-    params = intent.get("parameters", {})
-
-    if action == "create_event":
-        title    = params.get("title", "New Event")
-        date_str = params.get("date", datetime.now().strftime("%Y-%m-%d"))
-        time_str = params.get("time", "09:00")
-        dur      = int(params.get("duration_minutes") or 60)
-        try:
-            start_dt = datetime.fromisoformat(f"{date_str}T{time_str}")
-        except ValueError:
-            start_dt = datetime.now()
-        end_dt = start_dt + timedelta(minutes=dur)
-        # Use first available calendar
-        cal = db.query(models.Calendar).first()
-        if not cal:
-            return {"action": action, "status": "error", "detail": "No calendar found"}
-        db_event = models.Event(
-            title=title,
-            start_time=start_dt.isoformat(),
-            end_time=end_dt.isoformat(),
-            calendar_id=cal.id,
-            reminder_source="none",
-        )
-        db.add(db_event)
-        db.commit()
-        db.refresh(db_event)
-        return {"action": action, "status": "created", "event_id": db_event.id, "event": db_event.model_dump()}
-
-    if action in ("move_event", "cancel_event", "resize_event"):
-        query     = params.get("event_query", "")
-        when_hint = params.get("new_start") or None
-        best, candidates = resolve_event_by_query(query, when_hint, db)
-
-        if not candidates:
-            return {"action": action, "status": "not_found", "detail": f"No event matching '{query}'"}
-
-        if best is None:
-            return {
-                "action": action, "status": "ambiguous",
-                "candidates": [{"id": e.id, "title": e.title, "start_time": e.start_time} for e in candidates[:5]],
-            }
-
-        proposed_change: dict = {}
-        if action == "move_event":
-            new_start_str = params.get("new_start", "")
-            try:
-                new_start = datetime.fromisoformat(new_start_str)
-                orig_dur  = (datetime.fromisoformat(best.end_time) - datetime.fromisoformat(best.start_time))
-                proposed_change = {"start_time": new_start.isoformat(), "end_time": (new_start + orig_dur).isoformat()}
-            except ValueError:
-                return {"action": action, "status": "error", "detail": "Could not parse new_start"}
-
-        elif action == "cancel_event":
-            proposed_change = {"delete": True}
-
-        elif action == "resize_event":
-            new_dur = int(params.get("new_duration_minutes") or 30)
-            new_end = datetime.fromisoformat(best.start_time) + timedelta(minutes=new_dur)
-            proposed_change = {"end_time": new_end.isoformat()}
-
-        return {
-            "action": action,
-            "status": "pending_confirm",
-            "resolved_event_id": best.id,
-            "resolved_event": {"id": best.id, "title": best.title, "start_time": best.start_time, "end_time": best.end_time},
-            "proposed_change": proposed_change,
-        }
-
-    return {"action": action, "status": "error", "detail": f"Unknown action '{action}'"}
-
-
 # ==========================================
 # QUICK-ADD INTENT ROUTE (Phase 5 extended)
 # ==========================================
@@ -1182,36 +1068,12 @@ def resolve_conflict(req: ConflictResolutionRequest, db: Session = Depends(get_d
         req.working_hours_start, req.working_hours_end,
     )
 
-    if not candidates:
-        return ConflictResolutionResponse(suggestions=[])
-
-    conflict_titles = ", ".join(c.get("title", "?") for c in req.conflicts)
-    event_title     = req.event.get("title", "this event")
-    slots_text      = "\n".join(
-        f'{i+1}. {s["start"]} — {s["end"]}' for i, s in enumerate(candidates[:5])
+    raw = resolve_conflict_suggestions(
+        req.event.get("title", "this event"),
+        [c.get("title", "?") for c in req.conflicts],
+        candidates,
     )
-    prompt = (
-        f'Event "{event_title}" conflicts with: {conflict_titles}.\n'
-        f"Pick the best 3 alternatives from these free slots and explain each in one sentence:\n"
-        f"{slots_text}\n"
-        'Respond ONLY as JSON array: [{"start":"ISO","end":"ISO","rationale":"..."},...]. '
-        "No markdown, no extra text. Limit to 3 items."
-    )
-
-    try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        content  = response['message']['content'].strip()
-        match    = re.search(r'\[.*\]', content, re.DOTALL)
-        if not match:
-            raise ValueError("no JSON array in response")
-        raw = json.loads(match.group(0))
-        suggestions = [Suggestion(**item) for item in raw[:3] if "start" in item and "end" in item]
-    except Exception as e:
-        logger.warning(f"resolve-conflict LLM error, falling back to top slots: {e}")
-        suggestions = [Suggestion(start=s["start"], end=s["end"], rationale="Available slot")
-                       for s in candidates[:3]]
-
-    return ConflictResolutionResponse(suggestions=suggestions)
+    return ConflictResolutionResponse(suggestions=[Suggestion(**s) for s in raw])
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1615,56 +1477,8 @@ class WeeklyReviewRequest(BaseModel):
 @app.post("/ai/weekly-review")
 async def weekly_review(req: WeeklyReviewRequest, db: Session = Depends(get_db)):
     week_start = datetime.fromisoformat(req.week_start)
-    week_end   = week_start + timedelta(days=7)
-    next_end   = week_end   + timedelta(days=7)
-
-    past_events = db.query(models.Event).filter(
-        models.Event.start_time >= week_start.isoformat(),
-        models.Event.start_time <  week_end.isoformat(),
-    ).all()
-
-    upcoming_events = db.query(models.Event).filter(
-        models.Event.start_time >= week_end.isoformat(),
-        models.Event.start_time <  next_end.isoformat(),
-    ).all()
-
-    past_summary     = [{"title": e.title, "start": e.start_time} for e in past_events]
-    upcoming_summary = [{"title": e.title, "start": e.start_time} for e in upcoming_events]
-
-    # Phase 12: include journal entries if any
-    journal_entries = db.query(models.JournalEntry).filter(
-        models.JournalEntry.date >= week_start.strftime("%Y-%m-%d"),
-        models.JournalEntry.date <  week_end.strftime("%Y-%m-%d"),
-    ).all()
-    journal_block = ""
-    if journal_entries:
-        transcripts = [f"- [{e.date}] {e.transcript}" for e in journal_entries]
-        journal_block = "\n\nJournal reflections from last week:\n" + "\n".join(transcripts)
-
-    prompt = f"""You are a friendly productivity assistant for a student/developer using a local calendar app.
-
-Last week's events:
-{json.dumps(past_summary, indent=2)}
-
-Upcoming week's events:
-{json.dumps(upcoming_summary, indent=2)}{journal_block}
-
-Write a SHORT weekly review (3-5 sentences max). Include:
-1. One sentence summarising what last week looked like (themes, workload).
-2. One observation — e.g. busiest day, a recurring topic, or if it was light.
-3. One sentence previewing the week ahead with a practical focus tip.
-{("4. A brief 'Reflections' note drawn from the journal entries." if journal_entries else "")}
-
-Keep the tone warm and motivating. Do not list every event. Plain text only, no markdown."""
-
     try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        summary = response['message']['content'].strip()
-        return {
-            "summary": summary,
-            "past_count": len(past_events),
-            "upcoming_count": len(upcoming_events),
-        }
+        return generate_weekly_narrative(week_start, db)
     except Exception as e:
         logger.warning(f"Weekly review LLM error: {e}")
         raise HTTPException(status_code=503,
@@ -1682,54 +1496,6 @@ def _last_monday_iso() -> str:
     days_back = 7 if dow == 0 else dow
     last_mon = (today - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
     return last_mon.date().isoformat()
-
-def _compute_weekly_metrics(week_start: datetime, db: Session) -> dict:
-    week_end = week_start + timedelta(days=7)
-    events = db.query(models.Event).filter(
-        models.Event.start_time >= week_start.isoformat(),
-        models.Event.start_time <  week_end.isoformat(),
-    ).all()
-
-    total_minutes = 0
-    minutes_per_day: dict[int, int] = {}
-    minutes_per_timeline: dict[int, int] = {}
-    for ev in events:
-        try:
-            s = datetime.fromisoformat(ev.start_time)
-            e = datetime.fromisoformat(ev.end_time)
-        except ValueError:
-            continue
-        mins = max(0, int((e - s).total_seconds() / 60))
-        total_minutes += mins
-        minutes_per_day[s.weekday()] = minutes_per_day.get(s.weekday(), 0) + mins
-        minutes_per_timeline[ev.calendar_id] = minutes_per_timeline.get(ev.calendar_id, 0) + mins
-
-    busiest_day = None
-    if minutes_per_day:
-        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        idx = max(minutes_per_day, key=minutes_per_day.get)
-        busiest_day = {"weekday": weekday_names[idx], "hours": round(minutes_per_day[idx] / 60, 1)}
-
-    # Task completion for the week
-    tasks_total = db.query(models.Task).filter(
-        models.Task.added_at >= week_start.isoformat(),
-        models.Task.added_at <  week_end.isoformat(),
-    ).all()
-    completed = sum(1 for t in tasks_total if t.is_complete)
-    total = len(tasks_total)
-    completion_rate = round(completed / total, 2) if total else None
-
-    timeline_names = {c.id: c.name for c in db.query(models.Calendar).all()}
-    hours_per_timeline = {timeline_names.get(tid, f"#{tid}"): round(m / 60, 1) for tid, m in minutes_per_timeline.items()}
-
-    return {
-        "total_hours": round(total_minutes / 60, 1),
-        "busiest_day": busiest_day,
-        "completion_rate": completion_rate,
-        "completed_tasks": completed,
-        "total_tasks": total,
-        "hours_per_timeline": hours_per_timeline,
-    }
 
 @app.get("/reviews/weekly")
 def get_cached_weekly_review(week_start: str, db: Session = Depends(get_db)):
@@ -2466,39 +2232,11 @@ def propose_inbox_item(item_id: int, db: Session = Depends(get_db)):
     window_end = now + timedelta(days=7)
     candidates = _find_free_slots_internal(db, now, window_end, 60, 9, 18)
 
-    slots_text = "\n".join(f'{i+1}. {s["start"]}' for i, s in enumerate(candidates[:3])) if candidates else "no candidates"
-    prompt = (
-        f'Schedule this task: "{item.text}"\n'
-        f"Available slots (next 7 days, during working hours):\n{slots_text}\n"
-        'Pick the most appropriate slot and estimate duration. '
-        'Respond ONLY as JSON: {"proposed_start":"ISO","proposed_duration":60,"rationale":"one sentence"}. '
-        "No markdown."
-    )
-
-    try:
-        response = ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': prompt}])
-        content  = response['message']['content'].strip()
-        match    = re.search(r'\{.*?\}', content, re.DOTALL)
-        if not match:
-            raise ValueError("no JSON in response")
-        data = json.loads(match.group(0))
-        proposed_start    = data.get("proposed_start") or (candidates[0]["start"] if candidates else None)
-        proposed_duration = int(data.get("proposed_duration") or 60)
-        rationale         = data.get("rationale", "Best available slot")
-    except Exception as e:
-        logger.warning(f"inbox propose LLM error: {e}")
-        proposed_start    = candidates[0]["start"] if candidates else None
-        proposed_duration = 60
-        rationale         = "First available slot"
-
-    item.proposed_start    = proposed_start
-    item.proposed_duration = proposed_duration
+    proposal = propose_inbox_slot(item.text, candidates)
+    item.proposed_start    = proposal["proposed_start"]
+    item.proposed_duration = proposal["proposed_duration"]
     db.commit()
-    return InboxProposeResponse(
-        proposed_start=proposed_start,
-        proposed_duration=proposed_duration,
-        rationale=rationale,
-    )
+    return InboxProposeResponse(**proposal)
 
 @app.post("/inbox/{item_id}/schedule", response_model=models.InboxItemRead)
 def schedule_inbox_item(item_id: int, body: InboxScheduleRequest, db: Session = Depends(get_db)):
