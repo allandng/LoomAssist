@@ -27,6 +27,13 @@ def chat(prompt: str) -> str:
     every call-site in the backend repeats. Response-shape parsing
     (regex / ``json.loads``) stays in each caller because prompt formats
     differ.
+
+    Dispatched via ``ollama.chat(...)`` attribute lookup (NOT an aliased
+    import like ``from ollama import chat``) so it remains patchable under
+    ``unittest.mock.patch("ollama.chat", ...)``. Do NOT "optimize" this
+    back to an aliased import — `test_weekly_review.py` and any future
+    ``patch("ollama.chat", ...)``-style test will silently bypass the
+    wrapper if the binding happens at import time.
     """
     response = ollama.chat(model=MODEL, messages=[{"role": "user", "content": prompt}])
     return response["message"]["content"]
