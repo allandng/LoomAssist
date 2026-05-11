@@ -1,3 +1,4 @@
+import _runtime_env  # noqa: F401  MUST be first import — sets env vars before torch/CT2/tokenizers load
 from loom_logger import get_logger, write_crash_snapshot, LOG_FILE, CRASH_FLAG
 import logging
 logging.basicConfig(handlers=[])  # suppress root handler noise
@@ -5,22 +6,20 @@ logging.basicConfig(handlers=[])  # suppress root handler noise
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
 from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from services import scraper
 from services.exam_cluster import detect_exam_clusters as _detect_exam_clusters
 import asyncio
+import gc
+from contextlib import asynccontextmanager
 from faster_whisper import WhisperModel
 import os
 import tempfile
 import ollama
 import json
 import re
-import time as _time
-from collections import defaultdict
 from datetime import datetime, timedelta
 from sqlmodel import select
 from sqlalchemy import text
@@ -32,6 +31,9 @@ import uuid
 from pathlib import Path
 from database.database import SessionLocal, engine, create_db_and_tables, run_migrations, migrate_todo_to_task
 from database import models
+from core.deps import get_db, _check_rate
+from core.middleware import CrashMiddleware
+from core.validation import validate_event_times, validate_calendar_exists, _detect_circular
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -42,53 +44,93 @@ migrate_todo_to_task()
 # Then create any brand-new tables (including task)
 create_db_and_tables()
 
-app = FastAPI(title="Loom Backend API")
+# ── Stage 0: lifespan-managed background tasks ──────────────────────────────
+# Long-running asyncio task handles, stored at module scope so the lifespan
+# finally-block can cancel them. Without this, fire-and-forget tasks
+# accumulate across uvicorn --reload cycles and contribute to leaked-semaphore
+# warnings on quit.
+_subscription_task: "Optional[asyncio.Task]" = None
+_auto_sync_task: "Optional[asyncio.Task]" = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Single source for startup + shutdown logic. Replaces the deprecated
+    @app.on_event handlers. See CLAUDE.md → Backend lifecycle.
+
+    The WhisperModel singleton is instantiated at module-import time (below)
+    so existing tests that stub `faster_whisper` and import `main` keep
+    working. Lifespan shutdown still nulls it out to release CTranslate2's
+    worker pool on uvicorn --reload / app quit."""
+    global model, _subscription_task, _auto_sync_task
+
+    # ── Startup ──────────────────────────────────────────────────────────────
+    _subscription_task = asyncio.create_task(_subscription_refresher_loop())
+    _auto_sync_task    = asyncio.create_task(_auto_sync_loop())
+    _sync_runner.start()
+    _maybe_start_mdns()
+
+    try:
+        yield
+    finally:
+        # ── Shutdown ────────────────────────────────────────────────────────
+        for t in (_subscription_task, _auto_sync_task):
+            if t is not None:
+                t.cancel()
+        await asyncio.gather(
+            *(t for t in (_subscription_task, _auto_sync_task) if t is not None),
+            return_exceptions=True,
+        )
+        _subscription_task = None
+        _auto_sync_task = None
+
+        await _sync_runner.stop()
+
+        if _zeroconf_instance is not None:
+            try:
+                _zeroconf_instance.unregister_all_services()
+                _zeroconf_instance.close()
+            except Exception:
+                pass
+
+        # Drop the WhisperModel ref — keeps the attr extant (so routes can
+        # gracefully fail post-shutdown rather than AttributeError) but lets
+        # CTranslate2's worker pool be released by GC below.
+        model = None
+        try:
+            from services import embedder as _emb
+            _emb._model = None
+        except Exception:
+            pass
+        gc.collect()
+
+
+app = FastAPI(title="Loom Backend API", lifespan=lifespan)
 
 logger = get_logger("main")
 
 
-@app.on_event("startup")
-async def start_subscription_refresher():
-    """Background loop: refresh iCal subscriptions on schedule (Phase 9)."""
-    async def _loop():
-        import asyncio as _asyncio
-        while True:
-            await _asyncio.sleep(60)  # check every minute
-            try:
-                with SessionLocal() as db:
-                    subs = db.query(models.Subscription).filter(models.Subscription.enabled == True).all()  # noqa: E712
-                    for sub in subs:
-                        if not sub.last_synced:
-                            should_refresh = True
-                        else:
-                            try:
-                                last = datetime.fromisoformat(sub.last_synced)
-                                should_refresh = (datetime.now() - last).total_seconds() >= sub.refresh_minutes * 60
-                            except ValueError:
-                                should_refresh = True
-                        if should_refresh:
-                            await _refresh_subscription(sub, db)
-            except Exception as e:
-                logger.error(f"Subscription refresher loop error: {e}")
-
-    import asyncio as _asyncio
-    _asyncio.create_task(_loop())
-
-
-class CrashMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
+async def _subscription_refresher_loop():
+    """Background loop: refresh iCal subscriptions on schedule (Phase 9).
+    Started + cancelled by the FastAPI lifespan in this file."""
+    while True:
+        await asyncio.sleep(60)  # check every minute
         try:
-            return await call_next(request)
-        except Exception as exc:
-            get_logger("crash").critical(
-                f"Unhandled {request.method} {request.url.path}",
-                exc_info=True,
-            )
-            write_crash_snapshot(type(exc), exc, exc.__traceback__)
-            return JSONResponse(
-                status_code=500,
-                content={"error": {"code": "internal_error", "detail": "An unexpected error occurred."}},
-            )
+            with SessionLocal() as db:
+                subs = db.query(models.Subscription).filter(models.Subscription.enabled == True).all()  # noqa: E712
+                for sub in subs:
+                    if not sub.last_synced:
+                        should_refresh = True
+                    else:
+                        try:
+                            last = datetime.fromisoformat(sub.last_synced)
+                            should_refresh = (datetime.now() - last).total_seconds() >= sub.refresh_minutes * 60
+                        except ValueError:
+                            should_refresh = True
+                    if should_refresh:
+                        await _refresh_subscription(sub, db)
+        except Exception as e:
+            logger.error(f"Subscription refresher loop error: {e}")
 
 
 app.add_middleware(CrashMiddleware)
@@ -106,39 +148,6 @@ app.add_middleware(
 )
 
 model = WhisperModel("base.en", device="cpu", compute_type="int8")
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-def validate_event_times(start_time: str, end_time: str):
-    """Raises HTTPException 422 if times are invalid. Only called on new/edited events."""
-    try:
-        start = datetime.fromisoformat(start_time)
-        end = datetime.fromisoformat(end_time)
-    except ValueError:
-        raise HTTPException(status_code=422,
-            detail={'error': {'code': 'invalid_time_format',
-                              'detail': 'start_time and end_time must be valid ISO 8601 strings.'}})
-    if end <= start:
-        raise HTTPException(status_code=422,
-            detail={'error': {'code': 'invalid_time_range',
-                              'detail': 'end_time must be after start_time.'}})
-    if not (1970 <= start.year <= 2100):
-        raise HTTPException(status_code=422,
-            detail={'error': {'code': 'out_of_range',
-                              'detail': 'Event year must be between 1970 and 2100.'}})
-
-def validate_calendar_exists(calendar_id: int, db: Session):
-    """Raises HTTPException 404 if calendar not found."""
-    cal = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
-    if not cal:
-        raise HTTPException(status_code=404,
-            detail={'error': {'code': 'calendar_not_found',
-                              'detail': f'Calendar {calendar_id} does not exist.'}})
 
 def get_conflicts(
     start: str, end: str, calendar_id: int,
@@ -183,25 +192,6 @@ def get_conflicts(
                 if not (prep_end <= start_dt or prep_start >= end_dt):
                     conflicts.append((ev, "prep"))
     return conflicts
-
-# ==========================================
-# LOG RATE LIMITER
-# ==========================================
-
-_log_rate: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
-
-
-def _check_rate(ip: str, limit: int = 100, window: float = 60.0) -> bool:
-    count, start = _log_rate[ip]
-    now = _time.monotonic()
-    if now - start > window:
-        _log_rate[ip] = (1, now)
-        return True
-    if count >= limit:
-        return False
-    _log_rate[ip] = (count + 1, start)
-    return True
-
 
 # ==========================================
 # LOGGING ENDPOINTS
@@ -2563,21 +2553,6 @@ def view_availability(token: str, db: Session = Depends(get_db)):
 
 # ── Phase 10: Cross-Event Dependencies ───────────────────────────────────────
 
-def _detect_circular(event_id: int, depends_on_id: int, db: Session) -> bool:
-    """Return True if setting event_id.depends_on = depends_on_id would create a cycle."""
-    visited: set[int] = {event_id}
-    current = depends_on_id
-    while current is not None:
-        if current in visited:
-            return True
-        visited.add(current)
-        ev = db.query(models.Event).filter(models.Event.id == current).first()
-        if not ev:
-            break
-        current = ev.depends_on_event_id
-    return False
-
-
 class CascadeDependentsResponse(BaseModel):
     updated: list[dict]
 
@@ -3467,10 +3442,8 @@ async def _auto_sync_loop():
             pass
         await asyncio.sleep(300)  # 5 minutes
 
-@app.on_event("startup")
-async def start_auto_sync():
-    asyncio.create_task(_auto_sync_loop())
-    # Also start mDNS if cert exists
+def _maybe_start_mdns():
+    """Start mDNS service advertisement if a cert exists. Called from lifespan."""
     try:
         cert_file = Path("./certs/loom.crt")
         if cert_file.exists():
@@ -3777,13 +3750,10 @@ from services.sync import ics_normalize as _sync_ics
 from services.sync import runner as _sync_runner
 from services.sync import keychain_bridge as _kb
 
-# Wire the runner with the SessionLocal factory and start the 5-min loop.
+# Wire the runner with the SessionLocal factory at module load. The actual
+# runner.start() call lives in the FastAPI lifespan above so it pairs with
+# runner.stop() on shutdown.
 _sync_runner.configure(SessionLocal)
-
-
-@app.on_event("startup")
-async def _start_sync_runner():
-    _sync_runner.start()
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
