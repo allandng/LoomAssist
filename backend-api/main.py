@@ -40,6 +40,8 @@ from services.scheduling.autopilot import compute_autopilot_proposals
 from services.scheduling.procrastination import compute_procrastination_warnings
 from services.scheduling.duration_stats import compute_duration_stats
 from services.crypto.backup import _encrypt_backup, _decrypt_backup
+from services.integrations.ics import generate_event_uid, _refresh_subscription
+from services.integrations.timeline_export import build_json_export, build_ics_export
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -560,100 +562,22 @@ async def import_ics_file(
 def export_timelines(calendar_ids: str, format: str = "json", db: Session = Depends(get_db)):
     if not calendar_ids:
         raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "calendar_ids cannot be empty."}})
-        
     try:
         id_list = [int(cid.strip()) for cid in calendar_ids.split(',')]
     except ValueError:
         raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "calendar_ids must be a comma-separated list of integers."}})
-        
+
     calendars = db.query(models.Calendar).filter(models.Calendar.id.in_(id_list)).all()
     found_ids = [cal.id for cal in calendars]
     skipped_ids = [cid for cid in id_list if cid not in found_ids]
-    
+
     if format.lower() == "json":
-        # Build JSON Response
-        data = {
-            "exported_at": datetime.now().isoformat(),
-            "timelines": [],
-            "skipped_ids": skipped_ids
-        }
-        for cal in calendars:
-            cal_data = {
-                "id": cal.id,
-                "name": cal.name,
-                "color": cal.color,
-                "description": cal.description,
-                "events": []
-            }
-            for ev in cal.events:
-                cal_data["events"].append({
-                    "id": ev.id,
-                    "title": ev.title,
-                    "start_time": ev.start_time,
-                    "end_time": ev.end_time,
-                    "is_recurring": ev.is_recurring,
-                    "recurrence_days": ev.recurrence_days,
-                    "recurrence_end": ev.recurrence_end,
-                    "description": ev.description,
-                    "unique_description": ev.unique_description
-                })
-            data["timelines"].append(cal_data)
-        return JSONResponse(content=data)
-        
+        return JSONResponse(content=build_json_export(calendars, skipped_ids))
     elif format.lower() == "ics":
-        # Build ICS Response without external libraries
-        lines = []
-        lines.append("BEGIN:VCALENDAR")
-        lines.append("VERSION:2.0")
-        lines.append("PRODID:-//Loom Assistant//EN")
-        
-        day_map = {"0": "SU", "1": "MO", "2": "TU", "3": "WE", "4": "TH", "5": "FR", "6": "SA"}
-        
-        for cal in calendars:
-            for ev in cal.events:
-                lines.append("BEGIN:VEVENT")
-                lines.append(f"UID:loom-{ev.id}@loom-assist")
-                
-                # FUTURE IMPROVEMENT: Proper timezone support (Z or specific TZID). Currently treating as floating local time.
-                start_dt = ev.start_time.replace("-", "").replace(":", "")[:15]
-                end_dt = ev.end_time.replace("-", "").replace(":", "")[:15]
-                lines.append(f"DTSTART:{start_dt}")
-                lines.append(f"DTEND:{end_dt}")
-                
-                summary = (ev.title or "Untitled").replace("\n", " ").replace(",", "\\,")
-                lines.append(f"SUMMARY:{summary}")
-                
-                desc_parts = []
-                if ev.description: desc_parts.append(ev.description)
-                if ev.unique_description: 
-                    if desc_parts: desc_parts.append("---")
-                    desc_parts.append(ev.unique_description)
-                
-                if desc_parts:
-                    full_desc = "\\n".join(desc_parts).replace("\n", "\\n").replace(",", "\\,")
-                    lines.append(f"DESCRIPTION:{full_desc}")
-                    
-                lines.append(f"X-LOOM-CALENDAR:{cal.name}")
-                
-                if ev.is_recurring and ev.recurrence_days:
-                    days = [day_map.get(d.strip()) for d in ev.recurrence_days.split(",") if d.strip() in day_map]
-                    if days:
-                        rrule = f"FREQ=WEEKLY;BYDAY={','.join(days)}"
-                        if ev.recurrence_end:
-                            until_dt = ev.recurrence_end.replace("-", "").replace(":", "")[:8] + "T235959"
-                            rrule += f";UNTIL={until_dt}"
-                        lines.append(f"RRULE:{rrule}")
-                        
-                lines.append("END:VEVENT")
-                
-        lines.append("END:VCALENDAR")
-        
-        # Mandatory CRLF line endings for standard ICS
-        ics_string = "\r\n".join(lines) + "\r\n"
         return Response(
-            content=ics_string, 
-            media_type="text/calendar", 
-            headers={"Content-Disposition": 'attachment; filename="loom-export.ics"'}
+            content=build_ics_export(calendars),
+            media_type="text/calendar",
+            headers={"Content-Disposition": 'attachment; filename="loom-export.ics"'},
         )
     else:
         raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "Format must be json or ics."}})
@@ -713,10 +637,6 @@ async def extract_syllabus(file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-
-def generate_event_uid(title: str, date_str: str) -> str:
-    raw = f"{title.strip().lower()}{date_str[:10]}"
-    return 'loom-pdf-' + hashlib.md5(raw.encode()).hexdigest()[:16]
 
 @app.post("/documents/save-approved-events/")
 def save_approved_events(request: SaveApprovedEventsRequest, db: Session = Depends(get_db)):
@@ -2373,78 +2293,6 @@ class SubscriptionCreate(BaseModel):
     timeline_id: int
     refresh_minutes: int = 360
     enabled: bool = True
-
-def _ical_uid(url: str, uid: str) -> str:
-    """Stable external_uid for subscription events: sub-<url_hash>-<uid>."""
-    url_hash = _hashlib.md5(url.encode()).hexdigest()[:8]
-    return f"sub-{url_hash}-{uid}"
-
-async def _refresh_subscription(sub: models.Subscription, db: Session) -> None:
-    """Fetch + upsert events from a subscription URL. Updates last_synced / last_error."""
-    import httpx as _httpx
-    from icalendar import Calendar as ICalCalendar
-    try:
-        async with _httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(sub.url)
-            resp.raise_for_status()
-
-        cal = ICalCalendar.from_ical(resp.content)
-        upserted = 0
-        for component in cal.walk():
-            if component.name != "VEVENT":
-                continue
-            uid      = str(component.get("UID", ""))
-            summary  = str(component.get("SUMMARY", "Imported Event"))
-            dtstart  = component.get("DTSTART")
-            dtend    = component.get("DTEND") or component.get("DTSTART")
-            if not dtstart:
-                continue
-            try:
-                start_dt = dtstart.dt
-                end_dt   = dtend.dt
-                if hasattr(start_dt, "isoformat"):
-                    start_iso = start_dt.isoformat()
-                    end_iso   = end_dt.isoformat()
-                else:
-                    # all-day date
-                    from datetime import datetime as _dt
-                    start_iso = _dt.combine(start_dt, _dt.min.time()).isoformat()
-                    end_iso   = _dt.combine(end_dt,   _dt.min.time()).isoformat()
-            except Exception:
-                continue
-
-            ext_uid = _ical_uid(sub.url, uid or summary + start_iso)
-            existing = db.query(models.Event).filter(models.Event.external_uid == ext_uid).first()
-            if existing:
-                existing.title      = summary
-                existing.start_time = start_iso
-                existing.end_time   = end_iso
-            else:
-                ev = models.Event(
-                    title=summary,
-                    start_time=start_iso,
-                    end_time=end_iso,
-                    calendar_id=sub.timeline_id,
-                    external_uid=ext_uid,
-                    reminder_source="none",
-                )
-                db.add(ev)
-            upserted += 1
-
-        db.commit()
-        sub.last_synced = datetime.now().isoformat()
-        sub.last_error  = None
-        db.commit()
-        logger.info(f"Subscription {sub.id} synced: {upserted} events")
-    except Exception as e:
-        sub.last_error  = str(e)[:500]
-        sub.last_synced = datetime.now().isoformat()
-        try:
-            db.commit()
-        except Exception:
-            pass
-        logger.warning(f"Subscription {sub.id} sync error: {e}")
-
 
 @app.get("/subscriptions", response_model=list[models.SubscriptionRead])
 def list_subscriptions(db: Session = Depends(get_db)):
