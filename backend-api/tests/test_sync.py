@@ -42,8 +42,8 @@ def reset_db():
 # ── 14a: Pairing ──────────────────────────────────────────────────────────────
 
 def test_pair_start_returns_six_digit_code():
-    with patch("main._generate_self_signed_cert", return_value=("CERT", "KEY")), \
-         patch("main._cert_fingerprint", return_value="abc123"):
+    with patch("services.lan.certs._generate_self_signed_cert", return_value=("CERT", "KEY")), \
+         patch("services.lan.certs._cert_fingerprint", return_value="abc123"):
         r = client.post("/pair/start")
     assert r.status_code == 200
     data = r.json()
@@ -65,8 +65,8 @@ def test_pair_complete_invalid_code_returns_400():
 def test_pair_complete_valid_flow():
     import main as _m
 
-    with patch("main._generate_self_signed_cert", return_value=("CERT", "KEY")), \
-         patch("main._cert_fingerprint", return_value="fp123"):
+    with patch("services.lan.certs._generate_self_signed_cert", return_value=("CERT", "KEY")), \
+         patch("services.lan.certs._cert_fingerprint", return_value="fp123"):
         start = client.post("/pair/start").json()
 
     code = start["code"]
@@ -92,8 +92,8 @@ def test_pair_complete_valid_flow():
 
 def test_list_peers_returns_added_peer():
     import main as _m
-    with patch("main._generate_self_signed_cert", return_value=("C", "K")), \
-         patch("main._cert_fingerprint", return_value="fp"):
+    with patch("services.lan.certs._generate_self_signed_cert", return_value=("C", "K")), \
+         patch("services.lan.certs._cert_fingerprint", return_value="fp"):
         code = client.post("/pair/start").json()["code"]
     _m._pairing_codes[code]["expires"] = "2099-01-01T00:00:00"
     client.post("/pair/complete", json={"code": code, "peer_name": "Tablet", "peer_cert_fingerprint": "fp2"})
