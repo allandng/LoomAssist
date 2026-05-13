@@ -74,6 +74,7 @@ from routers import pomodoro
 from routers import task_templates
 from routers import habits
 from routers import search
+from routers import subscriptions
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -190,6 +191,7 @@ app.include_router(pomodoro.router)
 app.include_router(task_templates.router)
 app.include_router(habits.router)
 app.include_router(search.router)
+app.include_router(subscriptions.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -1745,65 +1747,6 @@ def cascade_dependents(event_id: int, db: Session = Depends(get_db)):
 
     db.commit()
     return CascadeDependentsResponse(updated=updated)
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# ── Phase 9: iCal Subscription URLs ──────────────────────────────────────────
-
-import hashlib as _hashlib
-
-class SubscriptionCreate(BaseModel):
-    name: str
-    url: str
-    timeline_id: int
-    refresh_minutes: int = 360
-    enabled: bool = True
-
-@app.get("/subscriptions", response_model=list[models.SubscriptionRead])
-def list_subscriptions(db: Session = Depends(get_db)):
-    return db.query(models.Subscription).all()
-
-@app.post("/subscriptions", response_model=models.SubscriptionRead)
-def create_subscription(body: SubscriptionCreate, db: Session = Depends(get_db)):
-    sub = models.Subscription(**body.model_dump())
-    db.add(sub)
-    db.commit()
-    db.refresh(sub)
-    return sub
-
-@app.put("/subscriptions/{sub_id}", response_model=models.SubscriptionRead)
-def update_subscription(sub_id: int, body: SubscriptionCreate, db: Session = Depends(get_db)):
-    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
-    for k, v in body.model_dump().items():
-        setattr(sub, k, v)
-    db.commit()
-    db.refresh(sub)
-    return sub
-
-@app.delete("/subscriptions/{sub_id}")
-def delete_subscription(sub_id: int, db: Session = Depends(get_db)):
-    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
-    # Delete events from this feed (keyed by external_uid prefix)
-    url_hash = _hashlib.md5(sub.url.encode()).hexdigest()[:8]
-    prefix   = f"sub-{url_hash}-"
-    db.query(models.Event).filter(models.Event.external_uid.like(f"{prefix}%")).delete(synchronize_session=False)
-    db.delete(sub)
-    db.commit()
-    return {"status": "deleted"}
-
-@app.post("/subscriptions/{sub_id}/refresh", response_model=models.SubscriptionRead)
-async def refresh_subscription(sub_id: int, db: Session = Depends(get_db)):
-    sub = db.query(models.Subscription).filter(models.Subscription.id == sub_id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
-    await _refresh_subscription(sub, db)
-    db.refresh(sub)
-    return sub
 
 # ─────────────────────────────────────────────────────────────────────────────
 
