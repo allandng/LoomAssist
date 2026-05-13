@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from services import scraper
 from services.exam_cluster import detect_exam_clusters as _detect_exam_clusters
 import asyncio
 import gc
@@ -22,7 +21,6 @@ from datetime import datetime, timedelta
 from sqlmodel import select
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
-from pypdf import PdfReader
 import shutil
 import hashlib
 import uuid
@@ -37,8 +35,7 @@ from services.scheduling.find_free import _find_free_slots_internal
 from services.scheduling.autopilot import compute_autopilot_proposals
 from services.scheduling.procrastination import compute_procrastination_warnings
 from services.scheduling.duration_stats import compute_duration_stats
-from services.integrations.ics import generate_event_uid, _refresh_subscription
-from services.integrations.timeline_export import build_json_export, build_ics_export
+from services.integrations.ics import _refresh_subscription
 # Test-only rebind: tests/test_backup.py imports `_encrypt_backup`/`_decrypt_backup`
 # directly from `main`. The router now uses these via services.crypto.backup,
 # but the rebind keeps the test's import path working until Stage 1.5 cleanup.
@@ -53,7 +50,6 @@ from services.ai.briefing import compute_briefing
 from services.ai.parse_datetime import parse_nl_datetime
 from services.ai.reminders import infer_reminder as _infer_reminder  # alias avoids shadowing the route handler `infer_reminder(req)` below
 from services.ai.wellness import compute_llm_wellness_warnings
-from services.ai.syllabus import extract_syllabus_events
 from services.ai.intent import extract_intent, execute_intent
 from services.ai.conflict_resolver import resolve_conflict_suggestions
 from services.ai.weekly_review import compute_weekly_metrics as _compute_weekly_metrics, generate_weekly_narrative
@@ -85,6 +81,7 @@ from routers import availability
 from routers import inbox
 from routers import courses
 from routers import backup
+from routers import integrations
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -210,6 +207,7 @@ app.include_router(availability.router)
 app.include_router(inbox.router)
 app.include_router(courses.router)
 app.include_router(backup.router)
+app.include_router(integrations.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -430,191 +428,6 @@ def list_missed_events(db: Session = Depends(get_db)):
     truncated = len(rows) > 20
     return {"items": rows[:20], "truncated": truncated}
 
-# ==========================================
-# INTEGRATION ROUTES
-# ==========================================
-
-# REPLACE the existing ApprovedEvent class with:
-class ApprovedEvent(BaseModel):
-    title: str
-    start_time: str
-    end_time: str
-    is_recurring: Optional[bool] = False
-    recurrence_days: Optional[str] = None
-    recurrence_end: Optional[str] = None
-    description: Optional[str] = None
-    unique_description: Optional[str] = None
-    timezone: Optional[str] = 'local'
-
-class SaveApprovedEventsRequest(BaseModel):
-    calendar_id: int
-    events: list[ApprovedEvent]
-    course_id: Optional[int] = None  # Phase 8: if set, also create Assignment rows
-
-@app.post("/integrations/import-ics-file/")
-async def import_ics_file(
-    file: UploadFile = File(...),
-    calendar_id: int = Form(...),
-    db: Session = Depends(get_db)
-):
-    validate_calendar_exists(calendar_id, db)
-
-    try:
-        content = await file.read()
-        raw_events = scraper.parse_ics_bytes(content)
-        
-        events_added = 0
-        events_skipped = 0
-        
-        for ev_data in raw_events:
-            # Duplicate Check
-            if ev_data.get("external_uid"):
-                existing = db.query(models.Event).filter(
-                    models.Event.calendar_id == calendar_id,
-                    models.Event.external_uid == ev_data["external_uid"]
-                ).first()
-                
-                if existing:
-                    events_skipped += 1
-                    continue
-                    
-            new_event = models.Event(
-                title=ev_data["title"],
-                start_time=ev_data["start_time"],
-                end_time=ev_data["end_time"],
-                calendar_id=calendar_id,
-                external_uid=ev_data.get("external_uid")
-            )
-            db.add(new_event)
-            events_added += 1
-            
-        db.commit()
-        return {"status": "success", "events_added": events_added, "events_skipped": events_skipped}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/export/timelines/")
-def export_timelines(calendar_ids: str, format: str = "json", db: Session = Depends(get_db)):
-    if not calendar_ids:
-        raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "calendar_ids cannot be empty."}})
-    try:
-        id_list = [int(cid.strip()) for cid in calendar_ids.split(',')]
-    except ValueError:
-        raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "calendar_ids must be a comma-separated list of integers."}})
-
-    calendar_list = db.query(models.Calendar).filter(models.Calendar.id.in_(id_list)).all()
-    found_ids = [cal.id for cal in calendar_list]
-    skipped_ids = [cid for cid in id_list if cid not in found_ids]
-
-    if format.lower() == "json":
-        return JSONResponse(content=build_json_export(calendar_list, skipped_ids))
-    elif format.lower() == "ics":
-        return Response(
-            content=build_ics_export(calendar_list),
-            media_type="text/calendar",
-            headers={"Content-Disposition": 'attachment; filename="loom-export.ics"'},
-        )
-    else:
-        raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "Format must be json or ics."}})
-
-@app.post("/documents/extract-syllabus/")
-async def extract_syllabus(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(await file.read())
-        temp_file_path = temp_pdf.name
-
-    try:
-        reader = PdfReader(temp_file_path)
-        extracted_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
-        
-        if len(extracted_text.strip()) < 100:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": {"code": "pdf_unreadable", "detail": "PDF appears to be scanned or image-based. Digital PDFs only."}}
-            )
-            
-        # FUTURE IMPROVEMENT: Implement proper chunking for massive PDFs
-        truncated_text = extracted_text[:8000] 
-        events = extract_syllabus_events(truncated_text)
-        
-        return {"status": "success", "events": events}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"Syllabus parse failed: {str(e)}")
-        raise HTTPException(
-            status_code=400,
-            detail={"error": {"code": "syllabus_parse_failed", "detail": str(e)}}
-        )
-    finally:
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-
-@app.post("/documents/save-approved-events/")
-def save_approved_events(request: SaveApprovedEventsRequest, db: Session = Depends(get_db)):
-    validate_calendar_exists(request.calendar_id, db)
-        
-    try:
-        events_added = 0
-        events_skipped = 0
-        created_ids = []
-        
-        for ev in request.events:
-            # Generate deterministic hash for PDF events using start_time
-            uid = generate_event_uid(ev.title, ev.start_time)
-            
-            # Duplicate Check
-            existing = db.query(models.Event).filter(
-                models.Event.calendar_id == request.calendar_id,
-                models.Event.external_uid == uid
-            ).first()
-            
-            if existing:
-                events_skipped += 1
-                continue
-                
-            new_event = models.Event(
-                title=ev.title,
-                start_time=ev.start_time,
-                end_time=ev.end_time,
-                calendar_id=request.calendar_id,
-                is_recurring=ev.is_recurring,
-                recurrence_days=ev.recurrence_days,
-                recurrence_end=ev.recurrence_end,
-                description=ev.description,
-                unique_description=ev.unique_description,
-                external_uid=uid,
-                timezone=ev.timezone
-            )
-            db.add(new_event)
-            db.flush() # Populate ID
-            created_ids.append(new_event.id)
-            events_added += 1
-
-            # Phase 8: if a course_id was provided, also create an Assignment row
-            if request.course_id:
-                assignment = models.Assignment(
-                    course_id=request.course_id,
-                    title=ev.title,
-                    due_date=ev.start_time[:10],  # YYYY-MM-DD
-                    event_id=new_event.id,
-                )
-                db.add(assignment)
-
-        db.commit()
-        return {
-            "status": "success",
-            "events_added": events_added,
-            "events_skipped": events_skipped,
-            "event_ids": created_ids,
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
 # ==========================================
 # NATURAL LANGUAGE DATETIME PARSER
 # ==========================================
