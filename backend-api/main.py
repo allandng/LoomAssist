@@ -37,9 +37,12 @@ from services.scheduling.find_free import _find_free_slots_internal
 from services.scheduling.autopilot import compute_autopilot_proposals
 from services.scheduling.procrastination import compute_procrastination_warnings
 from services.scheduling.duration_stats import compute_duration_stats
-from services.crypto.backup import _encrypt_backup, _decrypt_backup
 from services.integrations.ics import generate_event_uid, _refresh_subscription
 from services.integrations.timeline_export import build_json_export, build_ics_export
+# Test-only rebind: tests/test_backup.py imports `_encrypt_backup`/`_decrypt_backup`
+# directly from `main`. The router now uses these via services.crypto.backup,
+# but the rebind keeps the test's import path working until Stage 1.5 cleanup.
+from services.crypto.backup import _encrypt_backup, _decrypt_backup  # noqa: F401
 from services.lan.certs import _generate_self_signed_cert, _cert_fingerprint
 from services.lan.pairing import _pairing_codes, _get_or_create_device_id
 from services.lan.discovery import _maybe_start_mdns, stop_mdns, _discovered_peers
@@ -81,6 +84,7 @@ from routers import study_blocks
 from routers import availability
 from routers import inbox
 from routers import courses
+from routers import backup
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -205,6 +209,7 @@ app.include_router(study_blocks.router)
 app.include_router(availability.router)
 app.include_router(inbox.router)
 app.include_router(courses.router)
+app.include_router(backup.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -610,55 +615,6 @@ def save_approved_events(request: SaveApprovedEventsRequest, db: Session = Depen
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-# ==========================================
-# DATABASE ADMIN ROUTES
-# ==========================================
-# NOTE: This endpoint has no authentication — it is designed for local desktop use only.
-# Do not expose this endpoint over a network without adding auth.
-@app.get('/admin/backup')
-def backup_database():
-    db_path = os.environ.get('LOOM_DB_PATH', './loom.sqlite3')
-    if not os.path.exists(db_path):
-        raise HTTPException(status_code=404,
-            detail={'error': {'code': 'db_not_found', 'detail': 'Database file not found.'}})
-    with open(db_path, 'rb') as f:
-        content = f.read()
-    return Response(content=content, media_type='application/octet-stream',
-        headers={'Content-Disposition': 'attachment; filename=loom-backup.sqlite3'})
-
-SQLITE_HEADER = b'SQLite format 3\x00'
-
-@app.post('/admin/restore')
-async def restore_database(file: UploadFile = File(...)):
-    content = await file.read()
-    # Validate SQLite magic bytes
-    if len(content) < 16 or content[:16] != SQLITE_HEADER:
-        raise HTTPException(status_code=400,
-            detail={'error': {'code': 'invalid_db_file',
-                              'detail': 'File is not a valid SQLite database.'}})
-    
-    # Write to temp and verify it opens
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.sqlite3') as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-        
-    try:
-        from sqlalchemy import create_engine as ce
-        test_eng = ce(f'sqlite:///{tmp_path}')
-        with test_eng.connect() as conn:
-            conn.execute(text('SELECT 1'))
-        test_eng.dispose()
-    except Exception:
-        os.remove(tmp_path)
-        raise HTTPException(status_code=400,
-            detail={'error': {'code': 'corrupt_db', 'detail': 'Backup file is corrupt.'}})
-    
-    # Replace live DB
-    db_path = os.environ.get('LOOM_DB_PATH', './loom.sqlite3')
-    engine.dispose()  # Close all pooled connections before replacing the file
-    shutil.move(tmp_path, db_path)
-    
-    return {'status': 'success', 'message': 'Database restored. Reload your data.'}
 # ==========================================
 # NATURAL LANGUAGE DATETIME PARSER
 # ==========================================
@@ -1186,131 +1142,6 @@ def cascade_dependents(event_id: int, db: Session = Depends(get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PHASE 13 — ENCRYPTED LOCAL BACKUP
-# ─────────────────────────────────────────────────────────────────────────────
-
-class BackupExportRequest(BaseModel):
-    passphrase: str
-    include_audio: bool = False
-
-class BackupImportResponse(BaseModel):
-    success: bool
-    message: str
-
-@app.post("/backup/export")
-def export_backup(req: BackupExportRequest):
-    import sqlite3 as _sqlite3
-    import tarfile as _tarfile
-    import io as _io
-
-    db_path = os.environ.get("LOOM_DB_PATH", "./loom.sqlite3")
-    if not os.path.exists(db_path):
-        raise HTTPException(status_code=404, detail={"error": {"code": "db_not_found"}})
-
-    # SQLite online backup to temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3") as tmp:
-        tmp_path = tmp.name
-    try:
-        src = _sqlite3.connect(db_path)
-        dst = _sqlite3.connect(tmp_path)
-        src.backup(dst)
-        dst.close()
-        src.close()
-
-        # Bundle into tar archive in memory
-        tar_buf = _io.BytesIO()
-        with _tarfile.open(fileobj=tar_buf, mode="w:gz") as tar:
-            tar.add(tmp_path, arcname="loom.sqlite3")
-            if req.include_audio:
-                audio_dir = Path("./journal_audio")
-                if audio_dir.exists():
-                    for af in audio_dir.iterdir():
-                        tar.add(af, arcname=f"journal_audio/{af.name}")
-        archive_bytes = tar_buf.getvalue()
-
-        encrypted = _encrypt_backup(archive_bytes, req.passphrase)
-        return Response(
-            content=encrypted,
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename=loom-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}.loombackup"},
-        )
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-
-class BackupImportRequest(BaseModel):
-    passphrase: str
-
-@app.post("/backup/import", response_model=BackupImportResponse)
-async def import_backup(passphrase: str = Form(...), file: UploadFile = File(...)):
-    import sqlite3 as _sqlite3
-    import tarfile as _tarfile
-    import io as _io
-
-    content = await file.read()
-    try:
-        archive_bytes = _decrypt_backup(content, passphrase)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": {"code": "decrypt_failed", "detail": str(e)}})
-
-    tar_buf = _io.BytesIO(archive_bytes)
-    try:
-        with _tarfile.open(fileobj=tar_buf, mode="r:gz") as tar:
-            db_member = tar.getmember("loom.sqlite3")
-            db_bytes_io = tar.extractfile(db_member)
-            if db_bytes_io is None:
-                raise ValueError("No loom.sqlite3 in archive")
-            db_bytes = db_bytes_io.read()
-
-            # Validate SQLite header
-            if len(db_bytes) < 16 or db_bytes[:16] != b"SQLite format 3\x00":
-                raise ValueError("Extracted file is not a valid SQLite database")
-
-            # Write to temp + verify
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3") as tmp:
-                tmp.write(db_bytes)
-                tmp_path = tmp.name
-
-            try:
-                test_eng = _sqlite3.connect(tmp_path)
-                test_eng.execute("SELECT 1")
-                test_eng.close()
-            except Exception:
-                os.remove(tmp_path)
-                raise ValueError("Backup database is corrupt")
-
-            # Extract optional audio files
-            audio_members = [m for m in tar.getmembers() if m.name.startswith("journal_audio/")]
-            audio_dir = Path("./journal_audio")
-            audio_dir.mkdir(exist_ok=True)
-            for m in audio_members:
-                af = tar.extractfile(m)
-                if af:
-                    dest = audio_dir / Path(m.name).name
-                    dest.write_bytes(af.read())
-    except (ValueError, KeyError, _tarfile.TarError) as e:
-        raise HTTPException(status_code=400, detail={"error": {"code": "invalid_backup", "detail": str(e)}})
-
-    db_path = os.environ.get("LOOM_DB_PATH", "./loom.sqlite3")
-    # Pre-restore backup
-    pre_bak = db_path + ".pre-restore.bak"
-    if os.path.exists(db_path):
-        shutil.copy2(db_path, pre_bak)
-
-    engine.dispose()
-    try:
-        shutil.move(tmp_path, db_path)
-    except Exception as exc:
-        # Roll back
-        if os.path.exists(pre_bak):
-            shutil.copy2(pre_bak, db_path)
-        raise HTTPException(status_code=500, detail={"error": {"code": "restore_failed", "detail": str(exc)}})
-
-    return BackupImportResponse(success=True, message="Database restored. Reload your data.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 14 — LAN-ONLY MULTI-DEVICE SYNC
