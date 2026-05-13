@@ -68,11 +68,11 @@ from services.sync import runner as _sync_runner
 from services.sync import keychain_bridge as _kb
 
 # 1B routers — each module owns its own APIRouter; included after CORS below.
-from routers import system as _r_system
-from routers import calendars as _r_calendars
-from routers import pomodoro as _r_pomodoro
-from routers import task_templates as _r_task_templates
-from routers import habits as _r_habits
+from routers import system
+from routers import calendars
+from routers import pomodoro
+from routers import task_templates
+from routers import habits
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -183,11 +183,11 @@ app.add_middleware(
 )
 
 # 1B router includes — grows as each leaf migration lands.
-app.include_router(_r_system.router)
-app.include_router(_r_calendars.router)
-app.include_router(_r_pomodoro.router)
-app.include_router(_r_task_templates.router)
-app.include_router(_r_habits.router)
+app.include_router(system.router)
+app.include_router(calendars.router)
+app.include_router(pomodoro.router)
+app.include_router(task_templates.router)
+app.include_router(habits.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -480,15 +480,15 @@ def export_timelines(calendar_ids: str, format: str = "json", db: Session = Depe
     except ValueError:
         raise HTTPException(status_code=400, detail={"error": {"code": "export_failed", "detail": "calendar_ids must be a comma-separated list of integers."}})
 
-    calendars = db.query(models.Calendar).filter(models.Calendar.id.in_(id_list)).all()
-    found_ids = [cal.id for cal in calendars]
+    calendar_list = db.query(models.Calendar).filter(models.Calendar.id.in_(id_list)).all()
+    found_ids = [cal.id for cal in calendar_list]
     skipped_ids = [cid for cid in id_list if cid not in found_ids]
 
     if format.lower() == "json":
-        return JSONResponse(content=build_json_export(calendars, skipped_ids))
+        return JSONResponse(content=build_json_export(calendar_list, skipped_ids))
     elif format.lower() == "ics":
         return Response(
-            content=build_ics_export(calendars),
+            content=build_ics_export(calendar_list),
             media_type="text/calendar",
             headers={"Content-Disposition": 'attachment; filename="loom-export.ics"'},
         )
