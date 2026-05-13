@@ -67,6 +67,13 @@ from services.sync import ics_normalize as _sync_ics
 from services.sync import runner as _sync_runner
 from services.sync import keychain_bridge as _kb
 
+# 1B routers — each module owns its own APIRouter; included after CORS below.
+from routers import system as _r_system
+from routers import calendars as _r_calendars
+from routers import pomodoro as _r_pomodoro
+from routers import task_templates as _r_task_templates
+from routers import habits as _r_habits
+
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
 
@@ -175,111 +182,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==========================================
-# LOGGING ENDPOINTS
-# ==========================================
-
-class FrontendLogEntry(BaseModel):
-    level: str
-    message: str
-    context: Optional[dict] = None
-
-
-@app.post("/api/logs")
-async def receive_frontend_log(entry: FrontendLogEntry, request: Request):
-    ip = request.client.host if request.client else "unknown"
-    if not _check_rate(ip):
-        return JSONResponse(status_code=429, content={"error": {"code": "rate_limited"}})
-    frontend_logger = get_logger("frontend")
-    level = entry.level.upper()
-    msg = entry.message if not entry.context else f"{entry.message} | {entry.context}"
-    getattr(frontend_logger, level.lower(), frontend_logger.info)(msg)
-    return {"status": "ok"}
-
-
-@app.get("/api/logs/crash-flag")
-def get_crash_flag():
-    if CRASH_FLAG.exists():
-        crash_file = CRASH_FLAG.read_text().strip()
-        CRASH_FLAG.unlink(missing_ok=True)
-        return {"crashed": True, "crash_file": crash_file}
-    return {"crashed": False, "crash_file": None}
-
-
-@app.get("/api/logs/export")
-def export_logs():
-    if not LOG_FILE.exists():
-        return Response(
-            content="No log file found.",
-            media_type="text/plain",
-            headers={"Content-Disposition": 'attachment; filename="loomassist_logs.txt"'},
-        )
-    lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    content = "".join(lines[-500:])
-    return Response(
-        content=content,
-        media_type="text/plain",
-        headers={"Content-Disposition": 'attachment; filename="loomassist_logs.txt"'},
-    )
-
-
-@app.delete("/api/logs")
-def clear_logs():
-    if LOG_FILE.exists():
-        LOG_FILE.unlink()
-    LOG_FILE.touch()
-    return {"status": "ok"}
-
-
-@app.get("/")
-async def root():
-    return {"status": "online", "message": "Loom Backend is running."}
-
-# ==========================================
-# CALENDAR ROUTES
-# ==========================================
-
-@app.post("/calendars/", response_model=models.CalendarRead)
-def create_calendar(calendar: models.CalendarBase, db: Session = Depends(get_db)):
-    db_calendar = models.Calendar.model_validate(calendar)
-    db.add(db_calendar)
-    db.commit()
-    db.refresh(db_calendar)
-    return db_calendar
-
-@app.get("/calendars/", response_model=list[models.CalendarRead])
-def read_calendars(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(models.Calendar).offset(skip).limit(limit).all()
-
-@app.put("/calendars/{calendar_id}", response_model=models.CalendarRead)
-def update_calendar(calendar_id: int, calendar_update: models.CalendarBase, db: Session = Depends(get_db)):
-    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
-    if not db_calendar:
-        raise HTTPException(
-            status_code=404, 
-            detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
-        )
-    
-    for key, value in calendar_update.model_dump().items():
-        setattr(db_calendar, key, value)
-        
-    db.commit()
-    db.refresh(db_calendar)
-    return db_calendar
-
-@app.delete("/calendars/{calendar_id}")
-def delete_calendar(calendar_id: int, db: Session = Depends(get_db)):
-    db_calendar = db.query(models.Calendar).filter(models.Calendar.id == calendar_id).first()
-    if not db_calendar:
-        raise HTTPException(
-            status_code=404, 
-            detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
-        )
-    
-    db.query(models.Event).filter(models.Event.calendar_id == calendar_id).delete()
-    db.delete(db_calendar)
-    db.commit()
-    return {"status": "success", "message": f"Calendar {calendar_id} deleted."}
+# 1B router includes — grows as each leaf migration lands.
+app.include_router(_r_system.router)
+app.include_router(_r_calendars.router)
+app.include_router(_r_pomodoro.router)
+app.include_router(_r_task_templates.router)
+app.include_router(_r_habits.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -1250,105 +1158,6 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(db_task)
     db.commit()
     return {"status": "success"}
-
-# ==========================================
-# POMODORO SESSIONS / ENERGY MAPPING
-# ==========================================
-
-class PomodoroSessionCreate(BaseModel):
-    completed_at: str
-    duration_minutes: int
-    mode: str
-    task_id: Optional[int] = None
-    task_note: Optional[str] = None
-    round_num: Optional[int] = None
-
-class EnergyMapResponse(BaseModel):
-    grid: List[List[int]]
-    total: int
-    source: str
-    last_session_at: Optional[str] = None
-    weeks: int
-
-@app.post("/pomodoro-sessions", response_model=models.PomodoroSessionRead)
-def create_pomodoro_session(payload: PomodoroSessionCreate, db: Session = Depends(get_db)):
-    try:
-        row = models.PomodoroSession(
-            completed_at=payload.completed_at,
-            duration_minutes=payload.duration_minutes,
-            mode=payload.mode,
-            task_id=payload.task_id,
-            task_note=payload.task_note,
-            round_num=payload.round_num,
-        )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        return row
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400,
-            detail={"error": {"code": "pomodoro_create_failed", "detail": str(e)}})
-
-@app.get("/pomodoro-sessions/energy-map", response_model=EnergyMapResponse)
-def energy_map(weeks: int = 12, proxy: bool = True, db: Session = Depends(get_db)):
-    """
-    Return a 7×24 grid of completion counts (rows = day-of-week Mon..Sun, cols = hour 0..23).
-    Falls back to Event.actual_start (clock-in) and Event.start_time as a proxy energy
-    signal when fewer than 5 work-mode pomodoros exist in the window.
-    """
-    cutoff = (datetime.now() - timedelta(weeks=max(1, weeks))).isoformat()
-
-    grid = [[0 for _ in range(24)] for _ in range(7)]
-
-    pomodoros = (
-        db.query(models.PomodoroSession)
-        .filter(models.PomodoroSession.mode == "work")
-        .filter(models.PomodoroSession.completed_at >= cutoff)
-        .all()
-    )
-
-    last_session_at: Optional[str] = None
-    for p in pomodoros:
-        try:
-            dt = datetime.fromisoformat(p.completed_at)
-        except (ValueError, TypeError):
-            continue
-        grid[dt.weekday()][dt.hour] += 1
-        if last_session_at is None or p.completed_at > last_session_at:
-            last_session_at = p.completed_at
-
-    total = len(pomodoros)
-    source = "pomodoro"
-
-    if proxy and total < 5:
-        # Proxy: bin Event.actual_start (clock-in) first, fall back to start_time.
-        events = (
-            db.query(models.Event)
-            .filter(models.Event.deleted_at.is_(None))
-            .all()
-        )
-        proxy_added = 0
-        for ev in events:
-            iso = ev.actual_start or ev.start_time
-            if not iso or iso < cutoff:
-                continue
-            try:
-                dt = datetime.fromisoformat(iso)
-            except (ValueError, TypeError):
-                continue
-            grid[dt.weekday()][dt.hour] += 1
-            proxy_added += 1
-        if proxy_added > 0:
-            source = "mixed" if total > 0 else "events_proxy"
-
-    return EnergyMapResponse(
-        grid=grid,
-        total=total,
-        source=source,
-        last_session_at=last_session_at,
-        weeks=weeks,
-    )
 
 # ==========================================
 # WEEKLY REVIEW ROUTE
@@ -3581,139 +3390,6 @@ def sync_review_bulk(body: BulkActionRequest, db: Session = Depends(get_db)):
     db.commit()
     return {"resolved": n}
 
-# ==========================================
-# HABIT ROUTES (Future-features 4A)
-# ==========================================
-
-class HabitCreate(BaseModel):
-    name: str
-    color: Optional[str] = "#6366f1"
-    target_per_week: Optional[int] = 7
-
-class HabitUpdate(BaseModel):
-    name: Optional[str] = None
-    color: Optional[str] = None
-    target_per_week: Optional[int] = None
-
-class HabitLog(BaseModel):
-    date: str  # YYYY-MM-DD
-    count: Optional[int] = 1
-
-@app.get("/habits", response_model=List[models.HabitRead])
-def list_habits(db: Session = Depends(get_db)):
-    return db.query(models.Habit).order_by(models.Habit.created_at).all()
-
-@app.post("/habits", response_model=models.HabitRead)
-def create_habit(payload: HabitCreate, db: Session = Depends(get_db)):
-    h = models.Habit(
-        name=payload.name,
-        color=payload.color or "#6366f1",
-        target_per_week=payload.target_per_week or 7,
-        created_at=datetime.now().isoformat(),
-    )
-    db.add(h)
-    db.commit()
-    db.refresh(h)
-    return h
-
-@app.put("/habits/{habit_id}", response_model=models.HabitRead)
-def update_habit(habit_id: int, payload: HabitUpdate, db: Session = Depends(get_db)):
-    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
-    if not h:
-        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
-    if payload.name is not None: h.name = payload.name
-    if payload.color is not None: h.color = payload.color
-    if payload.target_per_week is not None: h.target_per_week = payload.target_per_week
-    db.commit()
-    db.refresh(h)
-    return h
-
-@app.delete("/habits/{habit_id}")
-def delete_habit(habit_id: int, db: Session = Depends(get_db)):
-    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
-    if not h:
-        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
-    db.query(models.HabitEntry).filter(models.HabitEntry.habit_id == habit_id).delete()
-    db.delete(h)
-    db.commit()
-    return {"status": "deleted"}
-
-@app.get("/habits/{habit_id}/entries", response_model=List[models.HabitEntryRead])
-def list_habit_entries(habit_id: int, db: Session = Depends(get_db)):
-    return db.query(models.HabitEntry).filter(models.HabitEntry.habit_id == habit_id).all()
-
-@app.post("/habits/{habit_id}/log", response_model=models.HabitEntryRead)
-def log_habit(habit_id: int, payload: HabitLog, db: Session = Depends(get_db)):
-    h = db.query(models.Habit).filter(models.Habit.id == habit_id).first()
-    if not h:
-        raise HTTPException(status_code=404, detail={"error": {"code": "habit_not_found"}})
-    existing = db.query(models.HabitEntry).filter(
-        models.HabitEntry.habit_id == habit_id,
-        models.HabitEntry.date == payload.date,
-    ).first()
-    if existing:
-        existing.count = payload.count or 1
-        db.commit()
-        db.refresh(existing)
-        return existing
-    entry = models.HabitEntry(habit_id=habit_id, date=payload.date, count=payload.count or 1)
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
-
-@app.delete("/habits/{habit_id}/entries/{entry_id}")
-def delete_habit_entry(habit_id: int, entry_id: int, db: Session = Depends(get_db)):
-    e = db.query(models.HabitEntry).filter(
-        models.HabitEntry.id == entry_id,
-        models.HabitEntry.habit_id == habit_id,
-    ).first()
-    if not e:
-        raise HTTPException(status_code=404, detail={"error": {"code": "entry_not_found"}})
-    db.delete(e)
-    db.commit()
-    return {"status": "deleted"}
-
-# ==========================================
-# TASK TEMPLATE ROUTES (Future-features 4C)
-# ==========================================
-
-class TaskTemplateCreate(BaseModel):
-    name: str
-    title: str
-    description: Optional[str] = None
-    default_priority: Optional[str] = "low"
-    recurrence_days: Optional[str] = None
-    calendar_id: Optional[int] = None
-
-@app.get("/task-templates", response_model=List[models.TaskTemplateRead])
-def list_task_templates(db: Session = Depends(get_db)):
-    return db.query(models.TaskTemplate).order_by(models.TaskTemplate.created_at).all()
-
-@app.post("/task-templates", response_model=models.TaskTemplateRead)
-def create_task_template(payload: TaskTemplateCreate, db: Session = Depends(get_db)):
-    t = models.TaskTemplate(
-        name=payload.name,
-        title=payload.title,
-        description=payload.description,
-        default_priority=payload.default_priority or "low",
-        recurrence_days=payload.recurrence_days,
-        calendar_id=payload.calendar_id,
-        created_at=datetime.now().isoformat(),
-    )
-    db.add(t)
-    db.commit()
-    db.refresh(t)
-    return t
-
-@app.delete("/task-templates/{tpl_id}")
-def delete_task_template(tpl_id: int, db: Session = Depends(get_db)):
-    t = db.query(models.TaskTemplate).filter(models.TaskTemplate.id == tpl_id).first()
-    if not t:
-        raise HTTPException(status_code=404, detail={"error": {"code": "template_not_found"}})
-    db.delete(t)
-    db.commit()
-    return {"status": "deleted"}
 
 # ==========================================
 # AI BRIEFING (Future-features 2C)
