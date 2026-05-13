@@ -127,6 +127,22 @@ def start() -> None:
     _runner_task = asyncio.create_task(_loop())
 
 
+async def stop() -> None:
+    """Cancel the sync runner loop. Called from FastAPI lifespan shutdown.
+
+    Without this, the fire-and-forget task accumulates across uvicorn --reload
+    cycles and contributes to leaked-semaphore warnings on quit.
+    """
+    global _runner_task
+    if _runner_task is None:
+        return
+    _runner_task.cancel()
+    try:
+        await asyncio.gather(_runner_task, return_exceptions=True)
+    finally:
+        _runner_task = None
+
+
 # ── Per-connection cycle ─────────────────────────────────────────────────────
 
 async def _run_one(connection_id: str) -> None:

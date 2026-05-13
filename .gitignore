@@ -21,6 +21,7 @@ backend-api/loom.sqlite3
 # Every currently-tracked .md file is explicitly un-ignored below.
 # When you add a new doc that should be tracked, add a matching `!` line.
 *.md
+!loomassist_Roadmap.md
 !CHANGELOG.md
 !CLAUDE.md
 !README.md

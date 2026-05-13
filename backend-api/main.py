@@ -4,7 +4,7 @@ import logging
 logging.basicConfig(handlers=[])  # suppress root handler noise
 
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Request
-from fastapi.responses import JSONResponse, Response, HTMLResponse
+from fastapi.responses import JSONResponse, Response, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
@@ -55,6 +55,17 @@ from services.ai.intent import extract_intent, execute_intent
 from services.ai.conflict_resolver import resolve_conflict_suggestions
 from services.ai.weekly_review import compute_weekly_metrics as _compute_weekly_metrics, generate_weekly_narrative
 from services.ai.inbox_propose import propose_inbox_slot
+# Cloud-sync (v2.2) — call-sites use the `_sync_*` / `_kb` aliases throughout;
+# `_json_sync` / `_uuid_sync` are aliased duplicates of `json` / `uuid` retained
+# to keep the cloud-sync section's "this is sync namespace" markers at call sites.
+import json as _json_sync
+import uuid as _uuid_sync
+from services.sync import dedup as _sync_dedup  # noqa: F401  (imported for tests / future use)
+from services.sync import google as _sync_google
+from services.sync import caldav as _sync_caldav
+from services.sync import ics_normalize as _sync_ics
+from services.sync import runner as _sync_runner
+from services.sync import keychain_bridge as _kb
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -64,6 +75,11 @@ migrate_todo_to_task()
 
 # Then create any brand-new tables (including task)
 create_db_and_tables()
+
+# Wire the cloud-sync runner with the SessionLocal factory. The actual
+# runner.start() call lives in the FastAPI lifespan below so it pairs with
+# runner.stop() on shutdown.
+_sync_runner.configure(SessionLocal)
 
 # ── Stage 0: lifespan-managed background tasks ──────────────────────────────
 # Long-running asyncio task handles, stored at module scope so the lifespan
@@ -79,13 +95,15 @@ async def lifespan(app: FastAPI):
     """Single source for startup + shutdown logic. Replaces the deprecated
     @app.on_event handlers. See CLAUDE.md → Backend lifecycle.
 
-    The WhisperModel singleton is instantiated at module-import time (below)
-    so existing tests that stub `faster_whisper` and import `main` keep
-    working. Lifespan shutdown still nulls it out to release CTranslate2's
-    worker pool on uvicorn --reload / app quit."""
-    global model, _subscription_task, _auto_sync_task
+    Startup: eagerly load the WhisperModel singleton (so /transcribe doesn't
+    pay first-request latency), then spawn the subscription-refresher and
+    LAN auto-sync background tasks, start the cloud-sync runner, register
+    mDNS. Shutdown runs in reverse: stop mDNS, stop the runner, cancel the
+    two background tasks, release the embedder + Whisper singletons, gc."""
+    global _subscription_task, _auto_sync_task
 
     # ── Startup ──────────────────────────────────────────────────────────────
+    whisper.get_model()  # eager-load so /transcribe avoids first-request latency
     _subscription_task = asyncio.create_task(_subscription_refresher_loop())
     _auto_sync_task    = asyncio.create_task(_auto_sync_loop())
     _sync_runner.start()
@@ -94,7 +112,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # ── Shutdown ────────────────────────────────────────────────────────
+        # ── Shutdown (reverse order) ────────────────────────────────────────
+        stop_mdns()
+        await _sync_runner.stop()
+
         for t in (_subscription_task, _auto_sync_task):
             if t is not None:
                 t.cancel()
@@ -105,18 +126,10 @@ async def lifespan(app: FastAPI):
         _subscription_task = None
         _auto_sync_task = None
 
-        await _sync_runner.stop()
-
-        stop_mdns()
-
         # Release on-device AI singletons so CTranslate2's worker pool and
         # the sentence-transformers model can be GC'd on uvicorn --reload / quit.
-        # `whisper.release_model()` is the canonical release; `model = None`
-        # is back-compat for test_lifespan_stage0 which asserts main.model is
-        # None post-shutdown.
-        whisper.release_model()
         embedder.release_model()
-        model = None
+        whisper.release_model()
         gc.collect()
 
 
@@ -161,8 +174,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-model = whisper.get_model()  # eager-load via service; main.model stays as a module attr for test_lifespan_stage0 compat
 
 # ==========================================
 # LOGGING ENDPOINTS
@@ -1390,7 +1401,7 @@ async def create_journal_entry(
             tmp.write(await audio.read())
             tmp_path = tmp.name
         try:
-            segments, _ = model.transcribe(tmp_path, beam_size=5)
+            segments, _ = whisper.get_model().transcribe(tmp_path, beam_size=5)
             transcript = " ".join(seg.text for seg in segments).strip()
             if save_audio:
                 _JOURNAL_AUDIO_DIR.mkdir(exist_ok=True)
@@ -1664,7 +1675,7 @@ async def transcribe_audio(file: UploadFile = File(...), db: Session = Depends(g
         temp_file_path = temp_audio.name
 
     try:
-        segments, info = model.transcribe(temp_file_path, beam_size=5)
+        segments, info = whisper.get_model().transcribe(temp_file_path, beam_size=5)
         raw_text = "".join([segment.text for segment in segments]).strip()
         sentences = [sentence.strip() + "." for sentence in raw_text.split(".") if sentence.strip()]
         
@@ -2851,22 +2862,6 @@ def auth_logout(db: Session = Depends(get_db)):
 #   - All transitions 150–250ms; progress bar in Sync Center is the only
 #     ambient animation introduced (no AI sparkle).
 # ─────────────────────────────────────────────────────────────────────────────
-
-import json as _json_sync
-import uuid as _uuid_sync
-from fastapi.responses import StreamingResponse
-from services.sync import dedup as _sync_dedup  # noqa: F401  (imported for tests / future use)
-from services.sync import google as _sync_google
-from services.sync import caldav as _sync_caldav
-from services.sync import ics_normalize as _sync_ics
-from services.sync import runner as _sync_runner
-from services.sync import keychain_bridge as _kb
-
-# Wire the runner with the SessionLocal factory at module load. The actual
-# runner.start() call lives in the FastAPI lifespan above so it pairs with
-# runner.stop() on shutdown.
-_sync_runner.configure(SessionLocal)
-
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 

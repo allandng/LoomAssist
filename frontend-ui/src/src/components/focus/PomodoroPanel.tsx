@@ -5,6 +5,7 @@ import { TLDot } from '../shared/TLDot';
 import type { Task, Calendar } from '../../types';
 import { timelineColor } from '../../lib/eventUtils';
 import { recordPomodoroSession } from '../../api';
+import { useIsVisibleRef } from '../../hooks/usePageVisibility';
 
 function emitPomodoroState(state: string) {
   try {
@@ -66,11 +67,16 @@ export function PomodoroPanel({ activeTaskId, tasks, timelines }: PomodoroPanelP
   const R = (SIZE - STROKE) / 2;
   const CIRC = 2 * Math.PI * R;
 
-  // Clock tick
+  // Clock tick (cosmetic — countdown below stays unconditional so the timer
+  // keeps advancing while the tab is hidden).
+  const visibleRef = useIsVisibleRef();
   useEffect(() => {
-    const id = setInterval(() => setClock(new Date()), 1000);
+    const id = setInterval(() => {
+      if (!visibleRef.current) return;
+      setClock(new Date());
+    }, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [visibleRef]);
 
   // Countdown
   useEffect(() => {

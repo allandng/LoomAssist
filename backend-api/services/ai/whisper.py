@@ -33,3 +33,11 @@ def release_model() -> None:
     """Null the singleton so CTranslate2's worker pool can be GC'd. Idempotent."""
     global _model
     _model = None
+
+
+def is_loaded() -> bool:
+    """True iff the WhisperModel singleton has been instantiated. Public-facing
+    accessor used by `test_lifespan_stage0` to assert lifespan startup loaded
+    the model and shutdown released it, without reaching into ``_model``.
+    """
+    return _model is not None

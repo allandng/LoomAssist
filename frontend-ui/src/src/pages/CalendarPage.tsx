@@ -27,6 +27,7 @@ import { useModal } from '../contexts/ModalContext';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useReminders } from '../hooks/useReminders';
 import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
+import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
 import {
@@ -322,12 +323,14 @@ export function CalendarPage() {
   }, []);
 
   // Sync label refresh every 30 seconds
+  const syncLabelVisibleRef = useIsVisibleRef();
   useEffect(() => {
     const id = setInterval(() => {
+      if (!syncLabelVisibleRef.current) return;
       if (lastSync) setSyncLabel(syncStatus === 'error' ? 'Sync failed' : `Synced ${relativeTime(lastSync)}`);
     }, 30_000);
     return () => clearInterval(id);
-  }, [lastSync, syncStatus]);
+  }, [lastSync, syncStatus, syncLabelVisibleRef]);
 
   useEffect(() => {
     setSyncLabel(syncStatus === 'error' ? 'Sync failed' : (lastSync ? `Synced ${relativeTime(lastSync)}` : 'Syncing…'));

@@ -65,6 +65,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   // ── EventSource subscription with backoff ─────────────────────────────────
   useEffect(() => {
     function connect() {
+      // Guard against double-connect: tab-out/tab-in flicker can stack
+      // pending reconnects, leaving multiple live EventSource instances.
+      if (esRef.current) {
+        try { esRef.current.close(); } catch { /* already closed */ }
+        esRef.current = null;
+      }
       const es = new EventSource(SYNC_EVENTS_URL);
       esRef.current = es;
       es.onmessage = ev => {
@@ -101,9 +107,15 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       es.onerror = () => {
         es.close();
         esRef.current = null;
-        // 1.5s backoff (Guardrail allows 150–250ms transitions; this is a
-        // network reconnect, not a UI motion).
-        reconnectRef.current = window.setTimeout(connect, 1500);
+        // Clear any pending reconnect before scheduling a new one — otherwise
+        // tab-out/tab-in can stack timers and spawn multiple connections.
+        if (reconnectRef.current != null) {
+          window.clearTimeout(reconnectRef.current);
+        }
+        reconnectRef.current = window.setTimeout(() => {
+          reconnectRef.current = null;
+          connect();
+        }, 1500);
       };
     }
     connect();
@@ -117,8 +129,16 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   // Per design doc §11 R8: macOS sleep can leave the in-app data stale at
   // next open; an immediate sync on window focus turns "open the app" into
   // an implicit "sync now" for users with stale state.
+  //
+  // Guards: in-flight flag + 5s debounce — rapid tab-out/tab-in flicker (or
+  // multiple windows fighting for focus) used to fire multiple syncs in a
+  // burst, which the SSE stream then echoed back as a flood.
+  const focusInFlightRef = useRef(false);
+  const lastFocusSyncRef = useRef(0);
   useEffect(() => {
     function onFocus() {
+      if (focusInFlightRef.current) return;
+      if (Date.now() - lastFocusSyncRef.current < 5000) return;
       const STALE_MS = 60_000;
       const stale = connectionsRef.current.some(c => {
         if (c.status !== 'connected') return false;
@@ -126,9 +146,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         const t = new Date(c.last_synced_at).getTime();
         return Date.now() - t > STALE_MS;
       });
-      if (stale) {
-        runAllSync().catch(() => { /* offline grace — runner will catch next cycle */ });
-      }
+      if (!stale) return;
+      focusInFlightRef.current = true;
+      lastFocusSyncRef.current = Date.now();
+      runAllSync()
+        .catch(() => { /* offline grace — runner will catch next cycle */ })
+        .finally(() => { focusInFlightRef.current = false; });
     }
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);

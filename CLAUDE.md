@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This App Is
 
-LoomAssist (v2.2) is a **local-first desktop calendar app** (Tauri 2 + React 19 + FastAPI). All data and AI inference run on-device. The architecture is two processes that must both be running during development:
+LoomAssist (v2.4) is a **local-first desktop calendar app** (Tauri 2 + React 19 + FastAPI). All data and AI inference run on-device. The architecture is two processes that must both be running during development:
 
 - **Backend** — FastAPI on `localhost:8000`, SQLite at `backend-api/loom.sqlite3`
 - **Frontend** — Tauri/Vite app, communicates with backend via plain HTTP
@@ -69,6 +69,7 @@ cd backend-api && pytest tests/test_sync.py -v
 cd backend-api && pytest tests/test_duration.py -v
 cd backend-api && pytest tests/test_find_free_quantized.py -v
 cd backend-api && pytest tests/test_location_travel_time.py -v
+cd backend-api && pytest tests/test_lifespan_stage0.py -v
 
 # Frontend lint
 cd frontend-ui/src && npm run lint
@@ -110,9 +111,11 @@ cd frontend-ui/src && npm run test:watch
 
 **AI integration:**
 - Ollama (`llama3.2`) for NLP — called via the `ollama` library inside route handlers
-- `faster_whisper` for STT — `WhisperModel("base.en")` instantiated at module level (~line 75)
+- `faster_whisper` for STT — `WhisperModel("base.en")` instantiated at module level (~line 167); nulled out in lifespan shutdown to release CTranslate2's worker pool
 - `sentence-transformers` for embeddings — lazy-loaded on first search call in `services/embedder.py`
 - Embedding failures never block event writes (`_try_upsert_embedding` wraps in try/except + `db.rollback()`)
+
+**Backend lifecycle (v2.4):** All startup and shutdown logic lives in the single `@asynccontextmanager lifespan(app)` in `main.py`. Do **not** add `@app.on_event` decorators — they are deprecated and bypass shutdown. Long-running asyncio tasks (subscription refresher, LAN auto-sync, sync runner) must store their `Task` handle at module scope and be cancelled in the lifespan `finally` block. Zeroconf, `embedder._model`, and `model` (WhisperModel) are also released on shutdown. Without this, fire-and-forget tasks accumulate across uvicorn `--reload` cycles and trigger leaked-semaphore warnings on quit. `_runtime_env.py` is imported as `main.py` line 1 and sets `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `TOKENIZERS_PARALLELISM` before any heavy import.
 
 ## Database Schema
 
@@ -564,6 +567,8 @@ cd frontend-ui/src && npm run test:watch
 ## Frontend Architecture
 
 **Source root** is `frontend-ui/src/src/` (double `src/` — the outer one is the Tauri project root).
+
+**Visibility-aware polling (v2.4):** Polling intervals (`setInterval` callbacks that call `setState`) must early-return when `document.hidden`. Use `useIsVisibleRef()` from [hooks/usePageVisibility.ts](frontend-ui/src/src/hooks/usePageVisibility.ts). Currently applied at TodayLineFreshness (30s freshness label), PomodoroPanel (1s wall-clock display), CalendarPage (30s sync-label refresh). **Do not gate active timers** (Pomodoro countdown, recording auto-stop) — those must keep advancing in the background. SyncContext's `onFocus` handler is debounced + in-flight-guarded for the same reason: rapid tab-out/tab-in flicker used to stack pending `runAllSync` calls.
 
 **Pages** — `CalendarPage`, `TaskBoardPage`, `FocusPage`, `InboxPage`, `CoursesPage`, `JournalPage`, `SettingsPage`. v2.2 adds: `SignInPage`, `OnboardingPage`, `AccountSettingsPage`, `ConnectionsSettingsPage`, `ConnectionDetailPage`, `SyncReviewPage`. Each shell page exports a sidebar content component (e.g. `JournalSidebarContent`) that `App.tsx` mounts in `ContextSidebar`.
 

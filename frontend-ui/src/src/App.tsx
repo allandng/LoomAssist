@@ -119,6 +119,8 @@ function Shell() {
   // Voice intent handler (Phase 5)
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef   = useRef<Blob[]>([]);
+  const isMountedRef = useRef(true);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
   const [micActive, setMicActive] = useState(false);
 
   const handleMic = useCallback(async () => {
@@ -132,8 +134,9 @@ function Shell() {
       chunksRef.current = [];
       recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = async () => {
-        setMicActive(false);
         stream.getTracks().forEach(t => t.stop());
+        if (!isMountedRef.current) return;
+        setMicActive(false);
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         try {
           const res = await transcribeAudio(blob);

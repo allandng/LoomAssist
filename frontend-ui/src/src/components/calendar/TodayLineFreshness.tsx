@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSync } from '../../contexts/SyncContext';
+import { useIsVisibleRef } from '../../hooks/usePageVisibility';
 
 function relativeTime(iso: string | null): string {
   if (!iso) return '';
@@ -23,10 +24,14 @@ export function TodayLineFreshness({ view }: { view: string }) {
   const { connections } = useSync();
   // Force a re-render every 30s so the relative-time label stays fresh.
   const [, setTick] = useState(0);
+  const visibleRef = useIsVisibleRef();
   useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 30_000);
+    const id = setInterval(() => {
+      if (!visibleRef.current) return;
+      setTick(t => t + 1);
+    }, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [visibleRef]);
 
   // Time-grid views only: Day + Week.
   if (view !== 'Day' && view !== 'Week') return null;
