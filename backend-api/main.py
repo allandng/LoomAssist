@@ -73,6 +73,7 @@ from routers import calendars
 from routers import pomodoro
 from routers import task_templates
 from routers import habits
+from routers import search
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -188,6 +189,7 @@ app.include_router(calendars.router)
 app.include_router(pomodoro.router)
 app.include_router(task_templates.router)
 app.include_router(habits.router)
+app.include_router(search.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -865,49 +867,6 @@ def find_free_slots(req: FindFreeRequest, db: Session = Depends(get_db)):
             cursor += timedelta(minutes=15)
 
     return {"slots": free_slots, "duration_minutes": req.duration_minutes}
-
-
-# ── Phase 6: Semantic Search ──────────────────────────────────────────────────
-
-class SemanticSearchResult(BaseModel):
-    event: dict
-    score: float
-
-@app.get("/search/semantic")
-def semantic_search(q: str, k: int = 10, db: Session = Depends(get_db)):
-    try:
-        from services.ai.embedder import search as embedding_search
-        hits = embedding_search(q, k, db)
-    except Exception as e:
-        logger.error(f"Semantic search error: {e}")
-        return {"results": []}
-
-    results = []
-    for event_id, score in hits:
-        ev = db.query(models.Event).filter(models.Event.id == event_id).first()
-        if ev:
-            results.append({"event": ev.model_dump(), "score": round(score, 4)})
-    return {"results": results}
-
-
-@app.post("/search/reindex")
-def reindex_embeddings(db: Session = Depends(get_db)):
-    try:
-        from services.ai.embedder import upsert_event_embedding
-        events = db.query(models.Event).all()
-        count = 0
-        for ev in events:
-            try:
-                upsert_event_embedding(ev.id, ev.title, ev.description, db)
-                count += 1
-            except Exception as e:
-                logger.warning(f"Reindex failed for event {ev.id}: {e}")
-        return {"reindexed": count}
-    except Exception as e:
-        logger.error(f"Reindex error: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": "reindex_failed", "detail": str(e)}})
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Phase 7: Time-Blocking Autopilot ─────────────────────────────────────────
