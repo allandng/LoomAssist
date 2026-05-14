@@ -4,7 +4,6 @@ import logging
 logging.basicConfig(handlers=[])  # suppress root handler noise
 
 from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form, Request
-from fastapi.responses import JSONResponse, Response, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
@@ -58,9 +57,7 @@ from services.ai.weekly_review import compute_weekly_metrics as _compute_weekly_
 # Cloud-sync (v2.2) — call-sites use the `_sync_*` / `_kb` aliases throughout;
 # `_json_sync` / `_uuid_sync` are aliased duplicates of `json` / `uuid` retained
 # to keep the cloud-sync section's "this is sync namespace" markers at call sites.
-import json as _json_sync
 from services.sync import dedup as _sync_dedup  # noqa: F401  (imported for tests / future use)
-from services.sync import ics_normalize as _sync_ics
 from services.sync import runner as _sync_runner
 
 # 1B routers — each module owns its own APIRouter; included after CORS below.
@@ -84,6 +81,7 @@ from routers import lan_sync
 from routers import auth
 from routers import sync_review
 from routers import connections
+from routers import cloud_sync
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -214,6 +212,7 @@ app.include_router(lan_sync.router)
 app.include_router(auth.router)
 app.include_router(sync_review.router)
 app.include_router(connections.router)
+app.include_router(cloud_sync.router)
 
 # ==========================================
 # EVENT ROUTES
@@ -960,89 +959,6 @@ def cascade_dependents(event_id: int, db: Session = Depends(get_db)):
     return CascadeDependentsResponse(updated=updated)
 
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-import httpx  # still used by cloud-sync routes (POST /connections/*, etc.)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase v3.0 — Cloud Sync (Connections + Sync runner + Sync Review queue)
-#
-# Hard rails (per LoomAssist_UIUX_Guardrail.md §6 + design doc §3/§11):
-#   - Calendar/event data syncs DIRECTLY device ↔ provider; never traverses a
-#     LoomAssist server.
-#   - OAuth tokens / CalDAV passwords live in macOS Keychain — never SQLite.
-#   - external_uid stays ICS-only; sync uses the new external_id column (R7).
-#   - Disconnect is non-destructive locally AND remotely (Q7).
-#   - All transitions 150–250ms; progress bar in Sync Center is the only
-#     ambient animation introduced (no AI sparkle).
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Pydantic models ──────────────────────────────────────────────────────────
-
-class SyncStatusItem(BaseModel):
-    connection_id:         str
-    status:                str
-    last_synced_at:        Optional[str]
-    last_error:            Optional[str]
-    pending_review_count:  int
-
-
-# ── /sync/* (cloud — distinct namespace from the existing LAN sync) ──────────
-
-@app.post("/sync/run")
-async def sync_run_all(db: Session = Depends(get_db)):
-    started = await _sync_runner.run_all(db)
-    return {"started": started}
-
-
-@app.post("/sync/run/{connection_id}")
-async def sync_run_one(connection_id: str, db: Session = Depends(get_db)):
-    if not db.query(models.Connection).filter(models.Connection.id == connection_id).first():
-        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
-    await _sync_runner.run_one(connection_id)
-    return {"started": connection_id}
-
-
-@app.get("/sync/status", response_model=List[SyncStatusItem])
-def sync_status(db: Session = Depends(get_db)):
-    out: List[dict] = []
-    for c in db.query(models.Connection).all():
-        review_count = (
-            db.query(models.SyncReviewItem)
-              .join(models.ConnectionCalendar, models.ConnectionCalendar.id == models.SyncReviewItem.connection_calendar_id)
-              .filter(models.ConnectionCalendar.connection_id == c.id,
-                      models.SyncReviewItem.resolved_at.is_(None))
-              .count()
-        )
-        out.append({
-            "connection_id":         c.id,
-            "status":                c.status,
-            "last_synced_at":        c.last_synced_at,
-            "last_error":            c.last_error,
-            "pending_review_count":  review_count,
-        })
-    return out
-
-
-@app.get("/sync/events")
-async def sync_events_stream():
-    """SSE endpoint. Frontend's SyncContext subscribes once on mount; the
-    runner pushes {conn_id, phase, ...} events."""
-    queue = _sync_runner.subscribe()
-
-    async def gen():
-        try:
-            yield "event: ready\ndata: {}\n\n"
-            while True:
-                evt = await queue.get()
-                yield f"data: {_json_sync.dumps(evt)}\n\n"
-        except asyncio.CancelledError:
-            pass
-        finally:
-            _sync_runner.unsubscribe(queue)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ==========================================
