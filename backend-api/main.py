@@ -11,6 +11,12 @@ from pydantic import BaseModel
 import asyncio
 import gc
 from contextlib import asynccontextmanager
+# Test-only rebind: tests/test_backup.py patches main.os.path.exists and
+# main.os.environ.get. The os module is no longer used by main.py directly
+# (transcribe migrated to routers/intelligence.py in 1B.6), but the import
+# keeps the test's patch target resolvable until Stage 1.5 rewrites the
+# test to patch the canonical call sites in services/crypto/backup.py.
+import os  # noqa: F401
 import re
 from datetime import datetime, timedelta
 from sqlmodel import select
