@@ -26,7 +26,6 @@ interface TopBarProps {
   onNext?: () => void;
   unread?: number;
   onBell?: () => void;
-  onSettings?: () => void;
   onSearch?: (query: string) => void;
   onMic?: () => void;
   semanticEnabled?: boolean;
@@ -46,7 +45,6 @@ export function TopBar({
   onNext,
   unread = 0,
   onBell,
-  onSettings,
   onSearch,
   onMic,
   semanticEnabled = false,
@@ -159,10 +157,6 @@ export function TopBar({
           </span>
         )}
       </div>
-
-      <button className={styles.iconBtn} onClick={onSettings} aria-label="Settings">
-        <Icon d={Icons.settings} size={16} />
-      </button>
     </header>
   );
 }

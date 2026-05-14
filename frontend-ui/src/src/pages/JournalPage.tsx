@@ -86,5 +86,3 @@ export function JournalPage() {
     </div>
   );
 }
-
-export function JournalSidebarContent() { return null; }

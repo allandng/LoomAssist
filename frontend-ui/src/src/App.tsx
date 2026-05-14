@@ -13,12 +13,12 @@ import { TopBar } from './components/shared/TopBar';
 import { ContextSidebar } from './components/sidebar/ContextSidebar';
 import { CalendarPage } from './pages/CalendarPage';
 import { HomePage } from './pages/HomePage';
-import { TaskBoardPage, TaskBoardSidebarContent } from './pages/TaskBoardPage';
-import { FocusPage, FocusSidebarContent } from './pages/FocusPage';
+import { TaskBoardPage } from './pages/TaskBoardPage';
+import { FocusPage } from './pages/FocusPage';
 import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
-import { InboxPage, InboxSidebarContent } from './pages/InboxPage';
-import { CoursesPage, CoursesSidebarContent } from './pages/CoursesPage';
-import { JournalPage, JournalSidebarContent } from './pages/JournalPage';
+import { InboxPage } from './pages/InboxPage';
+import { CoursesPage } from './pages/CoursesPage';
+import { JournalPage } from './pages/JournalPage';
 import { SignInPage } from './pages/SignInPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { AccountSettingsPage } from './pages/AccountSettingsPage';
@@ -308,8 +308,8 @@ function Shell() {
 
   const topBarKind = (dest === 'home' ? 'home' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
-  // Calendar sidebar is rendered inside CalendarPage itself; Home has no sidebar; other routes use ContextSidebar
-  const showContextSidebar = dest !== 'calendar' && dest !== 'home';
+  // Only Settings has sidebar content. Calendar renders its own sidebar inside CalendarPage.
+  const showContextSidebar = dest === 'settings';
 
   return (
     <div className={styles.shell}>
@@ -317,12 +317,7 @@ function Shell() {
 
       {showContextSidebar && (
         <ContextSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar}>
-          {dest === 'tasks'    && <TaskBoardSidebarContent />}
-          {dest === 'focus'    && <FocusSidebarContent />}
-          {dest === 'inbox'    && <InboxSidebarContent />}
-          {dest === 'courses'  && <CoursesSidebarContent />}
-          {dest === 'journal'  && <JournalSidebarContent />}
-          {dest === 'settings' && <SettingsSidebarContent />}
+          <SettingsSidebarContent />
         </ContextSidebar>
       )}
 

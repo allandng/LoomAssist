@@ -31,7 +31,7 @@ export function AppDrawer({ active, onNavigate, inboxCount = 0 }: AppDrawerProps
         aria-current={homeActive ? 'page' : undefined}
       >
         {homeActive && <span className={styles.activeBar} aria-hidden="true" />}
-        <span className={styles.logo} aria-hidden="true">L</span>
+        <img src="/loom-logo.png" alt="" className={styles.logo} aria-hidden="true" />
       </button>
       <div className={styles.divider} aria-hidden="true" />
 

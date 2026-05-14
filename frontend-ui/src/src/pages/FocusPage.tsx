@@ -123,7 +123,3 @@ export function FocusPage() {
     </div>
   );
 }
-
-export function FocusSidebarContent() {
-  return null;
-}

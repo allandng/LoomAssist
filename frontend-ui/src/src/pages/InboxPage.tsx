@@ -81,5 +81,3 @@ export function InboxPage() {
     </div>
   );
 }
-
-export function InboxSidebarContent() { return null; }

@@ -218,5 +218,3 @@ export function CoursesPage() {
     </div>
   );
 }
-
-export function CoursesSidebarContent() { return null; }

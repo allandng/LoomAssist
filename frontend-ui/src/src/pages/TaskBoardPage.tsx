@@ -315,7 +315,3 @@ export function TaskBoardPage() {
     </div>
   );
 }
-
-export function TaskBoardSidebarContent() {
-  return null;
-}
