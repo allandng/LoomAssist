@@ -25,6 +25,12 @@ sys.modules["pypdf"].PdfReader = MagicMock()
 from main import app, get_db, execute_intent  # noqa: E402
 from fastapi.testclient import TestClient
 import pytest
+from datetime import datetime, timedelta
+
+# resolve_event_by_query only matches events within (now-7d, now+30d), so
+# fixture events must use a date near "today" — hardcoded dates rot out of
+# the window and the tests start failing on calendar drift alone.
+_D = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 app.dependency_overrides[get_db] = lambda: (yield Session(_TEST_ENGINE))
 client = TestClient(app)
@@ -56,11 +62,11 @@ def _make_event(cal_id: int, title: str, start: str, end: str) -> int:
 def test_intent_move_event_returns_pending_confirm():
     import ollama as _ollama_mod
     cal_id = _make_calendar()
-    event_id = _make_event(cal_id, "Standup", "2026-05-10T15:00:00", "2026-05-10T15:30:00")
+    event_id = _make_event(cal_id, "Standup", f"{_D}T15:00:00", f"{_D}T15:30:00")
 
     _ollama_mod.chat.return_value = {
         "message": {
-            "content": '{"action":"move_event","parameters":{"event_query":"standup","new_start":"2026-05-10T17:00:00"}}'
+            "content": f'{{"action":"move_event","parameters":{{"event_query":"standup","new_start":"{_D}T17:00:00"}}}}'
         }
     }
     r = client.post("/intent", json={"text": "move standup to 5pm"})
@@ -75,7 +81,7 @@ def test_intent_move_event_returns_pending_confirm():
 def test_intent_cancel_event_returns_pending_confirm():
     import ollama as _ollama_mod
     cal_id = _make_calendar()
-    _make_event(cal_id, "Lunch", "2026-05-10T12:00:00", "2026-05-10T13:00:00")
+    _make_event(cal_id, "Lunch", f"{_D}T12:00:00", f"{_D}T13:00:00")
 
     _ollama_mod.chat.return_value = {
         "message": {"content": '{"action":"cancel_event","parameters":{"event_query":"lunch"}}'}
@@ -91,7 +97,7 @@ def test_intent_cancel_event_returns_pending_confirm():
 def test_intent_resize_event():
     import ollama as _ollama_mod
     cal_id = _make_calendar()
-    event_id = _make_event(cal_id, "Meeting", "2026-05-10T09:00:00", "2026-05-10T10:00:00")
+    event_id = _make_event(cal_id, "Meeting", f"{_D}T09:00:00", f"{_D}T10:00:00")
 
     _ollama_mod.chat.return_value = {
         "message": {
@@ -125,26 +131,26 @@ def test_apply_move_event():
     import ollama as _ollama_mod
     _ollama_mod.chat.return_value = {"message": {"content": '{"minutes":15,"rationale":"ok"}'}}
     cal_id = _make_calendar()
-    event_id = _make_event(cal_id, "Standup", "2026-05-10T15:00:00", "2026-05-10T15:30:00")
+    event_id = _make_event(cal_id, "Standup", f"{_D}T15:00:00", f"{_D}T15:30:00")
 
     r = client.post("/intent/apply", json={
         "action": "move_event",
         "event_id": event_id,
         "proposed_change": {
-            "start_time": "2026-05-10T17:00:00",
-            "end_time":   "2026-05-10T17:30:00",
+            "start_time": f"{_D}T17:00:00",
+            "end_time":   f"{_D}T17:30:00",
         },
     })
     assert r.status_code == 200
     assert r.json()["status"] == "updated"
-    assert r.json()["event"]["start_time"] == "2026-05-10T17:00:00"
+    assert r.json()["event"]["start_time"] == f"{_D}T17:00:00"
 
 
 def test_apply_cancel_event():
     import ollama as _ollama_mod
     _ollama_mod.chat.return_value = {"message": {"content": '{"minutes":15,"rationale":"ok"}'}}
     cal_id = _make_calendar()
-    event_id = _make_event(cal_id, "Lunch", "2026-05-10T12:00:00", "2026-05-10T13:00:00")
+    event_id = _make_event(cal_id, "Lunch", f"{_D}T12:00:00", f"{_D}T13:00:00")
 
     r = client.post("/intent/apply", json={
         "action": "cancel_event",
