@@ -70,7 +70,11 @@ cd backend-api && pytest tests/test_duration.py -v
 cd backend-api && pytest tests/test_find_free_quantized.py -v
 cd backend-api && pytest tests/test_location_travel_time.py -v
 cd backend-api && pytest tests/test_lifespan_stage0.py -v
+```
 
+Additional test files (not exhaustive): test_autopilot.py, test_conflict_resolver.py, test_courses.py, test_dependencies.py, test_exam_cluster.py, test_inbox.py, test_journal_text.py, test_missed.py, test_pomodoro.py, test_prep.py, test_projects_schema.py, test_reminder.py, test_scheduling.py, test_semantic_search.py, test_study_blocks.py, test_subscriptions.py, test_time_block_templates.py, test_voice_edit.py, test_weekly_review.py.
+
+```bash
 # Frontend lint
 cd frontend-ui/src && npm run lint
 
@@ -86,11 +90,11 @@ cd frontend-ui/src && npm run test:watch
 
 ## Backend Architecture
 
-**Single file** — `backend-api/main.py` (3500+ lines) contains all routes, Pydantic request models, and business logic. There is no service layer; keep new routes in `main.py`.
+**Single file** — `backend-api/main.py` (215 lines) contains all routes, Pydantic request models, and business logic. backend-api/main.py is the thin entry point: it registers routers via app.include_router() and owns the lifespan context manager. New routes go in backend-api/routers/<domain>.py; each router file owns its own Pydantic models.
 
 **Service modules** live in `backend-api/services/`:
 - `scraper.py` — PDF/syllabus scraper
-- `embedder.py` — lazy-loads all-MiniLM-L6-v2; `embed()`, `upsert_event_embedding()`, `search()` (cosine similarity in-memory)
+- `ai/embedder.py` — lazy-loads all-MiniLM-L6-v2; `embed()`, `upsert_event_embedding()`, `search()` (cosine similarity in-memory)
 - `event_resolver.py` — `resolve_event_by_query()` for fuzzy voice-edit event matching within ±30-day window
 - `auth/supabase.py` (v2.2) — Supabase Auth REST client. Pure functions; called by `/auth/*` routes. Reads `SUPABASE_URL` / `SUPABASE_ANON_KEY` env vars; falls back to a structured 503 when unset.
 - `sync/dedup.py` (v2.2) — pure-function fuzzy matcher. Constants `TITLE_SIMILARITY_THRESHOLD = 0.85`, `START_WINDOW_MIN = 15`, `DURATION_WINDOW_MIN = 15`. The only place fuzzy thresholds live.
@@ -105,21 +109,19 @@ cd frontend-ui/src && npm run test:watch
 
 **Migrations** — `database/database.py:run_migrations()` runs on every boot. To add a column to an existing table, add it to the `new_columns` dict inside the PRAGMA-check block for that table. New tables use `CREATE TABLE IF NOT EXISTS`. All migrations are idempotent.
 
-**New backend routes go in this order in main.py:**
-1. Pydantic request/response models (class declarations)
-2. Route function(s) immediately after
+Each router module defines its own Pydantic request/response models above its route functions.
 
 **AI integration:**
 - Ollama (`llama3.2`) for NLP — called via the `ollama` library inside route handlers
 - `faster_whisper` for STT — `WhisperModel("base.en")` instantiated at module level (~line 167); nulled out in lifespan shutdown to release CTranslate2's worker pool
-- `sentence-transformers` for embeddings — lazy-loaded on first search call in `services/embedder.py`
+- `sentence-transformers` for embeddings — lazy-loaded on first search call in `services/ai/embedder.py`
 - Embedding failures never block event writes (`_try_upsert_embedding` wraps in try/except + `db.rollback()`)
 
 **Backend lifecycle (v2.4):** All startup and shutdown logic lives in the single `@asynccontextmanager lifespan(app)` in `main.py`. Do **not** add `@app.on_event` decorators — they are deprecated and bypass shutdown. Long-running asyncio tasks (subscription refresher, LAN auto-sync, sync runner) must store their `Task` handle at module scope and be cancelled in the lifespan `finally` block. Zeroconf, `embedder._model`, and `model` (WhisperModel) are also released on shutdown. Without this, fire-and-forget tasks accumulate across uvicorn `--reload` cycles and trigger leaked-semaphore warnings on quit. `_runtime_env.py` is imported as `main.py` line 1 and sets `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `TOKENIZERS_PARALLELISM` before any heavy import.
 
 ## Database Schema
 
-18 SQLModel tables in `backend-api/database/models.py`:
+27 SQLModel tables in `backend-api/database/models.py`:
 
 ### `Event`
 | Field | Type | Notes |
@@ -400,6 +402,53 @@ cd frontend-ui/src && npm run test:watch
 | `task_id` | int | indexed; no FK (Task pattern) |
 | `task_note` | str | denormalized snapshot of the task title at completion |
 | `round_num` | int | nullable position within a Pomodoro cycle |
+
+### `Habit`
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `name` | str | |
+| `color` | str | hex, default `#6366f1` |
+| `target_per_week` | int | default 7 |
+| `created_at` | str | ISO datetime |
+
+### `HabitEntry`
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `habit_id` | int | indexed |
+| `date` | str | ISO date YYYY-MM-DD |
+| `count` | int | default 1 |
+
+### `TaskTemplate` (Phase 4C)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `name` | str | user label |
+| `title` | str | pre-filled task title |
+| `description` | str | nullable |
+| `default_priority` | str | default `"low"` |
+| `recurrence_days` | str | nullable, comma-sep day nums |
+| `calendar_id` | int | nullable default timeline |
+| `created_at` | str | ISO datetime |
+
+### `WeeklyReview` (cached Mon–Sun review)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `week_start` | str | indexed ISO date (Monday) |
+| `markdown` | str | rendered review text |
+| `metrics` | str | JSON: `total_hours`, `busiest_day`, `completion_rate`, `hours_per_timeline` |
+| `generated_at` | str | ISO datetime |
+
+### `TimeBlockTemplate`
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | table name `timeblockstemplate` |
+| `name` | str | indexed |
+| `description` | str | default `""` |
+| `created_at` | str | |
+| `blocks_json` | str | JSON `[{title, day_of_week (1=Mon…7=Sun), start_time, end_time, calendar_id}]` |
 
 ## Backend API Routes
 

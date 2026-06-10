@@ -215,7 +215,7 @@ export function renderDescription(desc: string): string {
     `<mark class="loom-mention">@${name}</mark>`
   );
   // [Link Text](url)
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, (_, text, url) =>
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, text, url) =>
     `<a href="${url}" target="_blank" rel="noopener">${text}</a>`
   );
   // bare https?:// URLs

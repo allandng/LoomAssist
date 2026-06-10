@@ -31,7 +31,7 @@ export function AutopilotReviewModal({ proposals, overflow, timelines, onApplied
   function toggle(taskId: number) {
     setAccepted(prev => {
       const next = new Set(prev);
-      next.has(taskId) ? next.delete(taskId) : next.add(taskId);
+      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
       return next;
     });
   }
