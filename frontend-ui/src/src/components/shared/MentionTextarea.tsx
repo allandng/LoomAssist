@@ -28,7 +28,7 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
   function detectMention(text: string, cursorPos: number) {
     // Walk back from cursor to find an '@' not preceded by word chars
     const before = text.slice(0, cursorPos);
-    const match = before.match(/@([^@\[\]\n]*)$/);
+    const match = before.match(/@([^@[\]\n]*)$/);
     if (match) {
       setQuery(match[1]);
       setAtStart(cursorPos - match[0].length);

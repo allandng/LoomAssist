@@ -257,7 +257,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     if (!title.trim()) return;
 
     const payload = buildPayload();
-    let conflicts: Array<{ id: number; title: string; conflict_type?: 'event' | 'travel' | 'prep' }> = [];
+    let conflicts: Array<{ id: number; title: string; conflict_type?: 'event' | 'travel' | 'prep' }>;
     let createdEvent: Event | null = null;
 
     if (isEdit && event) {
