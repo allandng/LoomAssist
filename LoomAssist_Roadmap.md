@@ -43,7 +43,7 @@ The core product positioning stays: privacy-first, AI inference runs on-device. 
 | Mobile feature scope | **Read + light edits**, voice → event capture | Phone is companion; tablet expansion later inherits more desktop features |
 | AI parity across platforms | **Not required** | Desktop runs full Ollama/Faster-Whisper; mobile runs platform-native small models; complex tasks compute on desktop and sync results down |
 | Cloud provider | **AWS** (full stack) | Learning value; clean serverless E2E sync architecture; effectively free at student scale |
-| Auth provider | **AWS Cognito** (replacing Supabase Auth) | Consistency within AWS; existing Supabase code isn't yet wired live, so migration cost is low |
+| Auth provider | **AWS Cognito** (replacing Supabase Auth) | Consistency within AWS. NOTE: Supabase Auth IS currently wired live (AccountContext, SignInPage, OnboardingPage, routers/auth.py). The Cognito migration carries real frontend cost: OAuth flows, AccountContext semantics, and the /auth/me local-mode contract all need updating. |
 | Cloud APIs for AI | **No** by default; opt-in only | Sending plaintext content to third-party LLM APIs would undo the E2E sync privacy guarantee |
 
 ---
@@ -217,8 +217,8 @@ Stages compound. Each stage leaves the project in a shippable state.
 
 | Stage | Goal | Effort | Depends on |
 |---|---|---|---|
-| **0. Stabilize current desktop** | Resolve frontend tab-out crash + CTranslate2 semaphore leak. Ship as v2.4. | 1–2 weekends | — |
-| **1. Backend refactor** | Split `main.py` (3500+ lines) into AI-engine vs. data-store concerns. Formalize canonical schema. Audit existing crypto for reuse. | 2–3 weekends | 0 |
+| **0. Stabilize current desktop** | ✅ SHIPPED (v2.4) — Resolve frontend tab-out crash + CTranslate2 semaphore leak. Ship as v2.4. | 1–2 weekends | — |
+| **1. Backend refactor** | 🔄 IN FLIGHT — Split `main.py` (215 lines) into AI-engine vs. data-store concerns (router extraction already underway; see backend-api/routers/). Formalize canonical schema. Audit existing crypto for reuse. | 2–3 weekends | 0 |
 | **2. AWS sync v0 (desktop only)** | AWS account + budgets + CDK setup. Build the eight endpoints. Vault init + record sync wired into desktop client. Ship alongside existing LAN sync. | 4–6 weeks | 1 |
 | **3. iOS app — read + light edits** | New SwiftUI project. CryptoKit-based vault layer. Sync client. Calendar/task viewing. Voice → event via Apple Intelligence Foundation Models. | 8–12 weeks | 2 |
 | **4. Android app — read + light edits** | Compose project. Tink-based vault layer. Sync client. Voice → event via MediaPipe + Gemma 3. | 6–10 weeks | 2, 3 |
@@ -307,13 +307,15 @@ For a single-developer student project on a serverless stack, expected monthly c
 ## 10. References to existing project docs
 
 - `CLAUDE.md` — current backend architecture, schema, endpoint inventory **(authoritative — always read first)**
-- `LoomAssist_FutureFeatures.md` — feature spec referenced in Stage 8
-- `LoomAssist_UIUX_Guardrail.md` — guardrail tags for what Claude Code can act on autonomously
+- `LoomAssist_FutureFeatures.md` — feature spec referenced in Stage 8 (NOT FOUND ON DISK — link is broken; create this file or update the reference before following §11)
+- `LoomAssist_UIUX_Guardrail.md` — guardrail tags for what Claude Code can act on autonomously (NOT FOUND ON DISK — link is broken; create this file or update the reference before following §11)
 - `docs/v2-migration-notes.md` — v2.0 regression checklist (precedent for v3.0 migration doc)
 
 ---
 
 ## 11. Stage execution prompt (Claude Code template)
+
+> ⚠️ BEFORE FOLLOWING THIS PROMPT: verify that all documents referenced in §10 exist on disk. Any missing file (marked NOT FOUND) must be created or the relevant step must be skipped.
 
 Paste the block below into a fresh Claude Code session at the start of any stage. Fill in the two `[FILL IN]` lines at the bottom. Do not edit the body.
 
