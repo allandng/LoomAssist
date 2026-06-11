@@ -78,6 +78,7 @@ from routers import cloud_sync
 from routers import events
 from routers import scheduling
 from routers import intelligence
+from routers import cloud  # v3.0 Stage 2: AWS cloud sync
 
 # Run column migrations FIRST (adds missing columns to existing DB)
 run_migrations()
@@ -212,4 +213,5 @@ app.include_router(cloud_sync.router)
 app.include_router(events.router)
 app.include_router(scheduling.router)
 app.include_router(intelligence.router)
+app.include_router(cloud.router)
 

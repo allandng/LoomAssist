@@ -104,6 +104,10 @@ cd frontend-ui/src && npm run test:watch
 - `sync/runner.py` (v2.2) — single asyncio task started in FastAPI `lifespan`. Iterates enabled connections every 5 min; broadcasts `{conn_id, phase, review_count}` over the SSE stream. The **only place** that creates `SyncReviewItem` rows. Uses `_pull_google_paginated` (8 pages × 250 events per cycle).
 - `sync/keychain_bridge.py` (v2.2) — in-memory token cache populated by the frontend via `POST /connections/{id}/token`. Falls back to a `security find-generic-password` shell-out on macOS so tokens survive a backend restart.
 - `exam_cluster.py` (Feature 3) — pure-function exam-window detector. `detect_exam_clusters()` + `is_exam_like(title)`. Folds into `_exam_cluster_warnings` consumed by `/schedule/analyze`.
+- `crypto/vault.py` (v3.0 Stage 2) — pure KEK/DEK primitives: scrypt-derived KEK (`n=2^17, r=8, p=1`) wraps a random DEK; per-record AES-256-GCM. No DB/transport coupling.
+- `cloudsync/session.py` (v3.0 Stage 2) — in-memory Cognito session + vault keys singleton (`current`). **Keys never touch SQLite or disk**; backend restart requires re-unlock (correct E2E behavior). Holds the deployed API/pool coordinates (env-overridable).
+- `cloudsync/aws_client.py` (v3.0 Stage 2) — thin httpx transport for the AWS sync API. Raises `VersionConflict` on 409. No crypto, no DB.
+- `cloudsync/engine.py` (v3.0 Stage 2, protocol schema_version **2**) — `run_sync(db, client, dek, device_id)`: pull-decrypt-apply then encrypt-push. Whole-record LWW by `last_modified` (same semantics as LAN sync). Payloads carry **no local PKs**; FKs travel as `<col>__ref` keys holding the target's `record_id`, translated at the edges — devices keep independent autoincrement ids. Synced types (dict order = push order, referenced before referrers): `calendar`, `event`, `task` — extend via `SYNCED_TYPES` + `FK_REFS`. Out-of-order pulls defer-and-retry within the run. NOT NULL integrity: events with an unresolvable calendar ref land on a fallback ("Synced") calendar; tasks with an unresolvable event ref are dropped. Hard-deleted rows (calendars) get server tombstones via the orphan pass. Records with a different `schema_version` are skipped, never guessed at.
 
 **Database session pattern** — all routes use `db: Session = Depends(get_db)` where `get_db` yields a SQLAlchemy `SessionLocal`. Use `db.query(Model).filter(...).first()` — the codebase uses SQLAlchemy ORM style throughout, not SQLModel's `db.exec(select(...))`.
 
@@ -121,7 +125,7 @@ Each router module defines its own Pydantic request/response models above its ro
 
 ## Database Schema
 
-27 SQLModel tables in `backend-api/database/models.py`:
+29 SQLModel tables in `backend-api/database/models.py`:
 
 ### `Event`
 | Field | Type | Notes |
@@ -168,6 +172,8 @@ Each router module defines its own Pydantic request/response models above its ro
 | `description` | str | |
 | `color` | str | hex, default `#6366f1` |
 | `created_via_sync` | bool | v2.2: true for timelines auto-created during connection setup. Drives the disconnect-confirm copy |
+| `last_modified` | str | v3.0 protocol v2: stamped by the calendars router on create/update; calendars are a cloud-synced type |
+| `deleted_at` | str | v3.0 protocol v2: tombstone set by cloud-sync pull. Local deletes stay hard DELETEs; the engine's orphan pass tombstones them server-side. `GET /calendars/` filters these out |
 
 ### `EventTemplate`
 | Field | Type | Notes |
@@ -359,6 +365,26 @@ Each router module defines its own Pydantic request/response models above its ro
 | `incoming_hash` | str | SHA-256 of `(remote_calendar_id + external_id + start_iso + title)` |
 | `created_at` | str | |
 | | | INDEX `(connection_id, incoming_hash)` |
+
+### `CloudSyncState` (v3.0 Stage 2 — local row ↔ server record map)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int PK | |
+| `record_type` | str | `"calendar"` \| `"event"` \| `"task"` — indexed |
+| `local_id` | int | PK of the local row; indexed |
+| `record_id` | str | server record id e.g. `evt_<uuid>`; unique |
+| `server_version` | int | last version seen/written on the server |
+| `synced_local_modified` | str | local `last_modified` at last successful push/pull-apply; row needs pushing iff it differs |
+| `deleted` | bool | server tombstone already written |
+
+### `CloudSyncConfig` (v3.0 Stage 2 — single-row, `"me"` pattern like Account)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | str PK | always `"me"` |
+| `email` | str | Cognito sign-in email |
+| `user_sub` | str | Cognito sub |
+| `pull_cursor` | int | ms-epoch delta-query watermark |
+| `last_synced_at` | str | ISO datetime of last successful cycle |
 
 ### `Project` (Feature 10 — group project tracker)
 | Field | Type | Notes |
@@ -584,6 +610,18 @@ Each router module defines its own Pydantic request/response models above its ro
 | GET | `/sync/status` | Per-connection `{status, last_synced_at, last_error, pending_review_count}` |
 | GET | `/sync/events` | **SSE stream** of `{conn_id, phase, review_count?, last_synced_at?}`. SyncCenter subscribes once on mount; reconnects with backoff |
 
+### AWS Cloud Sync (v3.0 Stage 2 — E2E-encrypted device↔device sync)
+Distinct from `/sync/*` (v2.2 provider sync) and `/auth/*` (Supabase identity — untouched; Cognito runs side-by-side per the v0 coexistence decision). Server-side infra lives in `infra/` (CDK: DynamoDB `loomassist-sync`, Cognito SRP-only pool, HTTP API + Lambda). The server only stores ciphertext.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/cloud/signup` | Cognito sign-up; sends email confirmation code |
+| POST | `/cloud/confirm` | Confirm with emailed code |
+| POST | `/cloud/unlock` | SRP sign-in + vault init-or-unwrap. One password: authenticates AND derives the KEK on-device. 409 = password can't unwrap vault (changed elsewhere without rotate) |
+| POST | `/cloud/lock` | Drop keys from memory |
+| GET | `/cloud/status` | `{unlocked, email, last_synced_at}` |
+| POST | `/cloud/sync/run` | One pull+push cycle; returns the engine summary. 503 when locked |
+
 ### Sync Review (v2.2 — the queue)
 | Method | Path | Description |
 |--------|------|-------------|
@@ -678,6 +716,8 @@ Current modal names: `event-editor`, `availability`, `availability-response`, `i
 
 **SourceBadge** (v2.2) — `components/shared/SourceBadge.tsx`. Renders a single monochrome glyph + connection display name + "synced 2m ago". Mounts in two places only: (a) the bottom of `QuickPeek` (variant `inline`), (b) the metadata cluster in `EventEditorModal` (variant `editor`, with an inline link to the connection's settings page). **Never** on the event pill — the pill anatomy is sacred per the Guardrail.
 
+**CloudSyncSection** (v3.0 Stage 2) — `components/settings/CloudSyncSection.tsx`, mounted in `SettingsPage` under `#cloud-sync` (above LAN Sync). Sign-up/confirm/unlock/lock/sync-now against the `/cloud/*` routes. Unlock is deliberately slow (~1s scrypt on-device). Locking or restarting the backend drops the keys — that's correct E2E behavior, surfaced in the section copy.
+
 **MissedEventsModal** (Feature 7) — `components/modals/MissedEventsModal.tsx` walks events flagged via `Event.missed_at` and offers per-row reschedule via the existing `findFreeSlots` flow. Modal name is `'missed-events'`. Companion helper `lib/missedEvents.ts:getMissedButtonState` powers the EventEditor mark/unmark footer button.
 
 **ExamClusterBanner** (Feature 3) — `components/calendar/ExamClusterBanner.tsx` surfaces the wellness warning when three or more exam-type events fall within a 5-day window. Detection lives backend-side in `services/exam_cluster.py` and arrives via existing `/schedule/analyze` warnings; classification helper is `lib/eventClassification.ts`.
@@ -767,7 +807,13 @@ cd backend-api && pytest tests/test_dedup.py -v       # v2.2 fuzzy matcher
 cd backend-api && pytest tests/test_ics_normalize.py -v # v2.2 iCal roundtrip
 cd backend-api && pytest tests/test_connections.py -v # v2.2 connection CRUD + non-destructive disconnect
 cd backend-api && pytest tests/test_sync_review.py -v # v2.2 review item lifecycle
+cd backend-api && pytest tests/test_cloud_sync.py -v  # v3.0 Stage 2 engine (no main import — needs no stubs)
 ```
+
+**v3.0 Stage 2 verification scripts** (live, need AWS env from `backend-api/.env`):
+- `infra/lambda/sync_api/test_handler.py` — Lambda unit tests vs mocked DynamoDB (moto)
+- `infra/smoke_test.py` — 12 checks against the deployed API with real vault crypto
+- `infra/two_clone_test.py` — the Stage 2 exit gate: two local DBs converge via AWS (create/edit/conflict/delete/task)
 
 **v2.2 test setup additions** — when the test stubs heavy modules, also stub `caldav` so importing `services/sync/caldav.py` doesn't pull the real library:
 

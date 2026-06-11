@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -10,6 +12,7 @@ router = APIRouter(prefix="/calendars")
 @router.post("/", response_model=models.CalendarRead)
 def create_calendar(calendar: models.CalendarBase, db: Session = Depends(get_db)):
     db_calendar = models.Calendar.model_validate(calendar)
+    db_calendar.last_modified = datetime.now().isoformat()
     db.add(db_calendar)
     db.commit()
     db.refresh(db_calendar)
@@ -18,7 +21,11 @@ def create_calendar(calendar: models.CalendarBase, db: Session = Depends(get_db)
 
 @router.get("/", response_model=list[models.CalendarRead])
 def read_calendars(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(models.Calendar).offset(skip).limit(limit).all()
+    return (
+        db.query(models.Calendar)
+        .filter(models.Calendar.deleted_at.is_(None))
+        .offset(skip).limit(limit).all()
+    )
 
 
 @router.put("/{calendar_id}", response_model=models.CalendarRead)
@@ -30,8 +37,12 @@ def update_calendar(calendar_id: int, calendar_update: models.CalendarBase, db: 
             detail={"error": {"code": "not_found", "detail": "Calendar not found"}}
         )
 
-    for key, value in calendar_update.model_dump().items():
+    # Sync metadata is engine-owned — don't let a stale client payload
+    # null it out or resurrect a tombstone.
+    updates = calendar_update.model_dump(exclude={"last_modified", "deleted_at"})
+    for key, value in updates.items():
         setattr(db_calendar, key, value)
+    db_calendar.last_modified = datetime.now().isoformat()
 
     db.commit()
     db.refresh(db_calendar)

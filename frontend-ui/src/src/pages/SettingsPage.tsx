@@ -9,6 +9,7 @@ import { exportLogs, clearLogs, backupDatabase, restoreDatabase, getWeeklyReview
 } from '../api';
 import type { Subscription, Calendar as CalendarType, Peer, DiscoveredPeer, PairStartResult } from '../types';
 import { DurationStatsPanel } from '../components/shared/DurationStatsPanel';
+import { CloudSyncSection } from '../components/settings/CloudSyncSection';
 import { lastMonday } from '../lib/eventUtils';
 import { useModal } from '../contexts/ModalContext';
 import { useNotifications } from '../store/notifications';
@@ -631,6 +632,12 @@ export function SettingsPage() {
         <button className="loom-btn-primary" onClick={handleWeeklyReview} disabled={reviewLoading}>
           {reviewLoading ? 'Generating…' : 'Generate Review'}
         </button>
+      </section>
+
+      {/* Cloud Sync (v3.0 Stage 2 — AWS E2E-encrypted) */}
+      <section className={styles.section}>
+        <h2 id="cloud-sync" className={styles.sectionTitle}>Cloud Sync</h2>
+        <CloudSyncSection />
       </section>
 
       {/* LAN Sync (Phase 14) */}
