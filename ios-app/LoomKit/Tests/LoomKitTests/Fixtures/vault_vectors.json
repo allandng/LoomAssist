@@ -1,0 +1,22 @@
+{
+  "password": "correct horse battery staple",
+  "salt_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "kdf_full": {
+    "n": 131072,
+    "r": 8,
+    "p": 1,
+    "kek_b64": "VexmjNzcrcZe+Lw2NVAaIHgSi6eMbuCQpqnqEjHuQus="
+  },
+  "kdf_small": {
+    "n": 16384,
+    "r": 8,
+    "p": 1,
+    "kek_b64": "Ux0vqOqPVVfjuKr7dDS/IQFJRvhsi/rs4ogbdsGKDss="
+  },
+  "dek_b64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+  "wrapped_dek_b64": "m/h6yjMzT93XthSWf11GydFexD08xxFQ5sqSKW8GgKKy2MyQB4tenjqf5nePELLt",
+  "wrap_nonce_b64": "NrWtx2ySFdsuX7WB",
+  "record_plaintext_b64": "eyJ0eXBlIjogImV2ZW50IiwgImRhdGEiOiB7InRpdGxlIjogIlZhdWx0IEludGVyb3AgXHUyNzEzIiwgInN0YXJ0X3RpbWUiOiAiMjAyNi0wNi0xMlQwOTowMDowMCJ9LCAic2NoZW1hX3ZlcnNpb24iOiAyfQ==",
+  "record_ciphertext_b64": "SB6F/cXLUMpKUCDcdqZP1Qfoy0su9sf1j3pCuR327tDDRC6+fOQd3xNM3QyG7ewO0JGCRFUq6SUW7yt8QGJLWvKCLISr/QHo/JSnida+09qMDVtPqqd41fs7+HRmvFDD6gC26zskVukwdQWTvHauwi14ClP7jVCLH3Y8SEsPwafe5MJ+TZ4=",
+  "record_nonce_b64": "fMHCjDW14YK9rmx3"
+}

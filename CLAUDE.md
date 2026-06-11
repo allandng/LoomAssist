@@ -86,6 +86,15 @@ cd frontend-ui/src && npm run test
 cd frontend-ui/src && npm run test:watch
 ```
 
+```bash
+# iOS (v3.0 Stage 3) — LoomKit package tests run on macOS, no simulator needed
+cd ios-app/LoomKit && swift test
+
+# iOS app build (requires the iOS 26 simulator runtime)
+cd ios-app && xcodebuild -project LoomAssist.xcodeproj -scheme LoomAssist \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+```
+
 **Important:** Never run `pytest tests/` together — each test file patches the DB engine before importing `main`, and cross-file ordering causes conflicts. Always run one file at a time with `-v`.
 
 ## Backend Architecture
@@ -747,6 +756,24 @@ Current modal names: `event-editor`, `availability`, `availability-response`, `i
 **Tauri commands (v2.2)** — `src-tauri/src/lib.rs` registers three new commands via the `keyring` crate:
 - `keychain_set(slot, value)` / `keychain_get(slot)` / `keychain_delete(slot)` — all scoped to service `com.loomassist` so iCloud / Google tokens live alongside other LoomAssist secrets and survive backend restarts (the `services/sync/keychain_bridge.py` shell-out fallback uses the same service name).
 
+## iOS App (v3.0 Stage 3 — read + light edits + voice)
+
+**Layout** — `ios-app/` holds a thin SwiftUI app target (`LoomAssist/`, iOS 26, iPhone-only) and a local Swift package **LoomKit** (`LoomKit/`) with all non-UI logic. The pbxproj is hand-written (objectVersion 77, filesystem-synchronized groups) — new source files need NO pbxproj edits; new dependencies go in `LoomKit/Package.swift` only. No code is shared with the desktop; the wire protocol is the contract.
+
+**LoomKit modules** (each mirrors a desktop counterpart — behavior divergence is a bug):
+- `Store/` — GRDB 7. `AppDatabase` (migrations) + records `LoomCalendar`/`LoomEvent`/`LoomTask`/`CloudSyncState`/`CloudSyncConfig`. **Column names are byte-identical to the desktop schema (snake_case)**; Swift properties are camelCase via GRDB's column strategies. No FK constraints (desktop SQLite doesn't enforce them; the sync engine is the integrity layer). `LocalEdits` is the write path — every mutation stamps `last_modified`, which is what queues a row for push; deletes are tombstones.
+- `Vault/` — scrypt via libsodium's `crypto_pwhash_scryptsalsa208sha256_ll` (CryptoKit has no scrypt) + CryptoKit AES-256-GCM. GCM tag is APPENDED to ciphertext (Python `cryptography` layout). Wire format of `wrapped_dek`: `nonce(12) || ciphertext+tag`. Interop proven by `Tests/LoomKitTests/Fixtures/vault_vectors.json`, generated from the desktop's vault.py.
+- `Auth/` — `CloudAuth`, Amplify Swift (Auth category only), USER_SRP_AUTH against the Stage 2 Cognito pool; tokens persist in the device Keychain with transparent refresh.
+- `Sync/` — `CloudAPIClient` (URLSession, 8 endpoints) + `SyncEngine`, a semantic port of `services/cloudsync/engine.py` (schema_version 2): push order calendar→event→task, pass-0 record_id assignment, `__ref` defer-and-retry, kept_local LWW guard, 409→refetch→LWW→retry-once, orphan tombstones. GRDB access goes through synchronous helper methods — in async contexts the compiler picks DatabaseWriter's @Sendable async overloads, which break the engine's mutable bookkeeping.
+- `Calendar/` — `EventExpander`, port of eventUtils.ts:toFCEvents (recurrence days 0=Sun…6=Sat, skipped_dates, per_day_times, prep blocks, +1-year cap). Note: live `per_day_times` values are `{"start","end"}` objects keyed by day number (the array shape documented elsewhere is legacy; the expander tolerates both).
+- `Voice/` — `WhisperTranscriber` (WhisperKit base.en, ~150 MB model downloads on first use) + `VoiceEventParser`: FoundationModels guided generation when Apple Intelligence is available (the prompt embeds a weekday→date lookup table — small models misresolve bare weekday names), falling back to NSDataDetector. All on-device.
+
+**App target** — `DesignTokens.swift` + UI per `~/Downloads/design_handoff_ios_swiftui/README.md` (warm-linen/espresso dynamic tokens, sacred EventPill anatomy, borders-not-shadows). Known handoff gaps: the icon sprite in the package only has social glyphs, so SF Symbols are used with `// FLAGGED:` comments; Inter/JetBrains Mono TTFs not yet bundled (SF fallbacks, flagged). DEBUG env presets for screenshot/verification harnesses: `LOOM_SEED_DEMO`, `LOOM_START_MODE`, `LOOM_START_TAB`, `LOOM_OPEN_EDITOR`, plus the live-probe vars.
+
+**Not yet built (deliberate Stage 3 scope cuts, for the §7 checkpoint):** user-facing sign-in/vault-unlock/sync UI (the engine is complete and live-verified via probes, but the app has no Settings surface to enter credentials yet); recurring-event time edits (title-only); Home/Focus/More tabs; iPad layouts (Stage 6).
+
+**Simulator env quirk:** if simulators look installed but xcodebuild/actool/simctl report no runtimes, the runtime disk image isn't mounted — `xcrun simctl runtime scan-and-mount`, and pin SDK↔runtime with `xcrun simctl runtime match set iphoneos26.5 23F77` (Apple shipped runtime 23F77 against SDK build 23F73).
+
 ## Event Expansion (Non-Obvious)
 
 Recurring events are **stored as a single DB row** but expanded client-side by `lib/eventUtils.ts:toFCEvents()`:
@@ -814,6 +841,10 @@ cd backend-api && pytest tests/test_cloud_sync.py -v  # v3.0 Stage 2 engine (no 
 - `infra/lambda/sync_api/test_handler.py` — Lambda unit tests vs mocked DynamoDB (moto)
 - `infra/smoke_test.py` — 12 checks against the deployed API with real vault crypto
 - `infra/two_clone_test.py` — the Stage 2 exit gate: two local DBs converge via AWS (create/edit/conflict/delete/task)
+
+**v3.0 Stage 3 verification** (live):
+- `infra/three_clone_test.py` — the Stage 3 exit gate: desktop ↔ AWS ↔ iOS bidirectional convergence + tombstone hygiene. Desktop phases run there; iOS phases run the app's `LiveSyncProbe` in the simulator (orchestration commands in the script docstring).
+- In-app live probes (DEBUG builds, env-gated, print `RESULT: PASS|FAIL` and exit): `LOOM_LIVE_AUTH=1` (Cognito SRP), `LOOM_LIVE_SYNC=1` (vault unlock + sync round-trip), `LOOM_LIVE_VOICE=1` (WhisperKit + intent parse). Launch via `SIMCTL_CHILD_<VAR>=1 xcrun simctl launch --console booted com.loomassist.ios`. These live in the app target because Amplify's keychain store needs an app identity — bare `swift test`/xctest runners can't exercise them.
 
 **v2.2 test setup additions** — when the test stubs heavy modules, also stub `caldav` so importing `services/sync/caldav.py` doesn't pull the real library:
 
