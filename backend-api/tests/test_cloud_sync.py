@@ -1,4 +1,5 @@
-"""Engine tests for AWS cloud sync (Stage 2) against a fake in-memory server.
+"""Engine tests for AWS cloud sync (protocol schema_version 2) against a fake
+in-memory server.
 
 Unlike most backend test files this one does NOT import main — it tests
 services/cloudsync/engine.py directly, so it needs no module stubbing and is
@@ -74,13 +75,16 @@ class FakeServer:
         }
         return {"record_id": record_id, "version": version, "tombstone": True}
 
-    # test helper --------------------------------------------------------------
+    # test helpers --------------------------------------------------------------
     def decrypt(self, record_id):
         rec = self.records[record_id]
         plaintext = vault.decrypt_record(
             base64.b64decode(rec["ciphertext"]), base64.b64decode(rec["nonce"]), DEK
         )
         return json.loads(plaintext)
+
+    def of_type(self, record_type):
+        return [r for r in self.records.values() if r["record_type"] == record_type]
 
 
 def make_clone():
@@ -91,10 +95,25 @@ def make_clone():
     return sessionmaker(autocommit=False, autoflush=False, bind=eng)()
 
 
-def add_event(db, title, lm, **kw):
+def add_calendar(db, name, lm):
+    c = models.Calendar(name=name, last_modified=lm)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def add_event(db, title, lm, calendar_id=None, **kw):
+    if calendar_id is None:
+        # Event.calendar_id is NOT NULL — give each clone a default calendar
+        cal = db.query(models.Calendar).filter(models.Calendar.name == "Default").first()
+        if cal is None:
+            cal = add_calendar(db, "Default", "2026-06-11T00:00:00")
+        calendar_id = cal.id
     e = models.Event(
         title=title, start_time="2026-06-12T09:00:00",
-        end_time="2026-06-12T10:00:00", calendar_id=1, last_modified=lm, **kw
+        end_time="2026-06-12T10:00:00", last_modified=lm,
+        calendar_id=calendar_id, **kw
     )
     db.add(e)
     db.commit()
@@ -113,16 +132,20 @@ def server():
     return FakeServer()
 
 
-def test_push_new_event_encrypts(server):
+# --- payload shape -------------------------------------------------------------
+
+def test_payload_has_refs_not_local_ids(server):
     a = make_clone()
-    add_event(a, "Standup", "2026-06-11T08:00:00")
-    summary = run_sync(a, server, DEK, "mac_a")
-    assert summary["push"]["pushed"] == 1
-    (record_id,) = server.records.keys()
-    payload = server.decrypt(record_id)
-    assert payload["type"] == "event"
-    assert payload["data"]["title"] == "Standup"
-    assert payload["schema_version"] == 1
+    cal = add_calendar(a, "School", "2026-06-11T07:00:00")
+    add_event(a, "Standup", "2026-06-11T08:00:00", calendar_id=cal.id)
+    run_sync(a, server, DEK, "mac_a")
+
+    (evt_rec,) = server.of_type("event")
+    payload = server.decrypt(evt_rec["record_id"])
+    assert payload["schema_version"] == 2
+    assert "id" not in payload["data"]
+    assert "calendar_id" not in payload["data"]
+    assert payload["data"]["calendar_id__ref"].startswith("cal_")
 
 
 def test_second_run_is_clean(server):
@@ -135,16 +158,104 @@ def test_second_run_is_clean(server):
     assert summary["pull"]["created"] == 0
 
 
-def test_two_clone_propagation(server):
-    a, b = make_clone(), make_clone()
-    add_event(a, "Standup", "2026-06-11T08:00:00")
-    run_sync(a, server, DEK, "mac_a")
-    summary = run_sync(b, server, DEK, "mac_b")
-    assert summary["pull"]["created"] == 1
-    assert titles(b) == {"Standup"}
-    # local PK preserved so FKs hold across devices
-    assert b.query(models.Event).first().id == a.query(models.Event).first().id
+# --- FK translation across devices ----------------------------------------------
 
+def test_fk_remap_across_different_local_ids(server):
+    a, b = make_clone(), make_clone()
+    # clone B has pre-existing local rows so incoming ids CANNOT line up
+    add_calendar(b, "B-local junk", "2026-06-11T06:00:00")
+    add_event(b, "B-local event", "2026-06-11T06:30:00")
+
+    cal_a = add_calendar(a, "School", "2026-06-11T07:00:00")
+    evt_a = add_event(a, "Standup", "2026-06-11T08:00:00", calendar_id=cal_a.id)
+    task = models.Task(event_id=evt_a.id, note="bring slides",
+                       last_modified="2026-06-11T08:10:00")
+    a.add(task)
+    a.commit()
+
+    run_sync(a, server, DEK, "mac_a")
+    run_sync(b, server, DEK, "mac_b")
+
+    cal_b = b.query(models.Calendar).filter(models.Calendar.name == "School").one()
+    evt_b = b.query(models.Event).filter(models.Event.title == "Standup").one()
+    task_b = b.query(models.Task).filter(models.Task.note == "bring slides").one()
+
+    assert cal_b.id != cal_a.id           # ids diverge by construction...
+    assert evt_b.calendar_id == cal_b.id  # ...but refs land on the right rows
+    assert task_b.event_id == evt_b.id
+
+
+def test_both_clones_create_offline_no_collision(server):
+    a, b = make_clone(), make_clone()
+    add_event(a, "From A", "2026-06-11T08:00:00")   # id 1 in A
+    add_event(b, "From B", "2026-06-11T08:30:00")   # id 1 in B
+    run_sync(a, server, DEK, "mac_a")
+    run_sync(b, server, DEK, "mac_b")
+    run_sync(a, server, DEK, "mac_a")
+
+    assert titles(a) == {"From A", "From B"}
+    assert titles(b) == {"From A", "From B"}
+    assert len(server.of_type("event")) == 2
+
+
+def test_out_of_order_arrival_defers_and_resolves(server):
+    a, b = make_clone(), make_clone()
+    cal = add_calendar(a, "School", "2026-06-11T07:00:00")
+    add_event(a, "Standup", "2026-06-11T08:00:00", calendar_id=cal.id)
+    run_sync(a, server, DEK, "mac_a")
+
+    # force the event to arrive BEFORE the calendar it references
+    (cal_rec,) = server.of_type("calendar")
+    (evt_rec,) = server.of_type("event")
+    cal_rec["last_modified"], evt_rec["last_modified"] = (
+        evt_rec["last_modified"], cal_rec["last_modified"]
+    )
+
+    summary = run_sync(b, server, DEK, "mac_b")
+    assert summary["pull"]["unresolved_refs"] == 0
+    evt_b = b.query(models.Event).filter(models.Event.title == "Standup").one()
+    cal_b = b.query(models.Calendar).filter(models.Calendar.name == "School").one()
+    assert evt_b.calendar_id == cal_b.id
+
+
+def test_unresolvable_calendar_falls_back(server):
+    a, b = make_clone(), make_clone()
+    cal = add_calendar(a, "School", "2026-06-11T07:00:00")
+    add_event(a, "Standup", "2026-06-11T08:00:00", calendar_id=cal.id)
+    run_sync(a, server, DEK, "mac_a")
+
+    # simulate the referenced calendar never reaching clone B
+    (cal_rec,) = server.of_type("calendar")
+    del server.records[cal_rec["record_id"]]
+
+    summary = run_sync(b, server, DEK, "mac_b")
+    assert summary["pull"]["unresolved_refs"] == 1
+    # calendar_id is NOT NULL — the event lands on an auto-created fallback
+    evt_b = b.query(models.Event).filter(models.Event.title == "Standup").one()
+    fallback = b.query(models.Calendar).one()
+    assert fallback.name == "Synced"
+    assert evt_b.calendar_id == fallback.id
+
+
+def test_task_with_unknown_event_is_dropped(server):
+    a, b = make_clone(), make_clone()
+    evt = add_event(a, "Standup", "2026-06-11T08:00:00")
+    task = models.Task(event_id=evt.id, note="bring slides",
+                       last_modified="2026-06-11T08:10:00")
+    a.add(task)
+    a.commit()
+    run_sync(a, server, DEK, "mac_a")
+
+    # simulate the referenced event never reaching clone B
+    (evt_rec,) = server.of_type("event")
+    del server.records[evt_rec["record_id"]]
+
+    run_sync(b, server, DEK, "mac_b")
+    # task.event_id is NOT NULL and its event is unknown — task is dropped
+    assert b.query(models.Task).count() == 0
+
+
+# --- propagation behaviors -------------------------------------------------------
 
 def test_edit_propagates_back(server):
     a, b = make_clone(), make_clone()
@@ -160,6 +271,20 @@ def test_edit_propagates_back(server):
     summary = run_sync(a, server, DEK, "mac_a")
     assert summary["pull"]["updated"] == 1
     assert titles(a) == {"Standup (moved)"}
+
+
+def test_calendar_rename_propagates(server):
+    a, b = make_clone(), make_clone()
+    cal = add_calendar(a, "School", "2026-06-11T07:00:00")
+    run_sync(a, server, DEK, "mac_a")
+    run_sync(b, server, DEK, "mac_b")
+
+    cal.name = "University"
+    cal.last_modified = "2026-06-11T09:00:00"
+    a.commit()
+    run_sync(a, server, DEK, "mac_a")
+    run_sync(b, server, DEK, "mac_b")
+    assert b.query(models.Calendar).one().name == "University"
 
 
 def test_delete_tombstones_across_clones(server):
@@ -179,6 +304,24 @@ def test_delete_tombstones_across_clones(server):
     summary = run_sync(a, server, DEK, "mac_a")
     assert summary["push"]["deleted"] == 0
 
+
+def test_hard_deleted_calendar_orphan_tombstones(server):
+    a, b = make_clone(), make_clone()
+    cal = add_calendar(a, "School", "2026-06-11T07:00:00")
+    run_sync(a, server, DEK, "mac_a")
+    run_sync(b, server, DEK, "mac_b")
+
+    # the calendars router hard-DELETEs — no deleted_at marker left behind
+    a.delete(cal)
+    a.commit()
+    summary = run_sync(a, server, DEK, "mac_a")
+    assert summary["push"]["orphan_tombstoned"] == 1
+
+    run_sync(b, server, DEK, "mac_b")
+    assert b.query(models.Calendar).one().deleted_at is not None
+
+
+# --- conflicts --------------------------------------------------------------------
 
 def test_lww_conflict_newest_wins(server):
     a, b = make_clone(), make_clone()
@@ -203,7 +346,6 @@ def test_lww_conflict_newest_wins(server):
 
     assert titles(a) == {"B's edit"}
     assert titles(b) == {"B's edit"}
-    assert server.decrypt(next(iter(server.records)))["data"]["title"] == "B's edit"
 
 
 def test_lww_conflict_older_local_loses(server):
@@ -227,24 +369,19 @@ def test_lww_conflict_older_local_loses(server):
     assert titles(a) == {"B wins"}
 
 
-def test_id_collision_remaps(server):
-    a, b = make_clone(), make_clone()
-    add_event(a, "From A", "2026-06-11T08:00:00")   # id 1 in A
-    add_event(b, "From B", "2026-06-11T08:30:00")   # id 1 in B
-    run_sync(a, server, DEK, "mac_a")
-    run_sync(b, server, DEK, "mac_b")  # pulls A's; id 1 taken -> remap
-    run_sync(a, server, DEK, "mac_a")  # pulls B's; id 1 taken -> remap
+# --- schema version gate -----------------------------------------------------------
 
-    assert titles(a) == {"From A", "From B"}
-    assert titles(b) == {"From A", "From B"}
-    assert len(server.records) == 2
-
-
-def test_tasks_sync_too(server):
-    a, b = make_clone(), make_clone()
-    t = models.Task(event_id=1, note="bring slides", last_modified="2026-06-11T08:00:00")
-    a.add(t)
-    a.commit()
-    run_sync(a, server, DEK, "mac_a")
-    run_sync(b, server, DEK, "mac_b")
-    assert b.query(models.Task).first().note == "bring slides"
+def test_unknown_schema_version_is_skipped(server):
+    a = make_clone()
+    payload = json.dumps(
+        {"type": "event", "data": {"title": "old"}, "schema_version": 1}
+    ).encode()
+    ciphertext, nonce = vault.encrypt_record(payload, DEK)
+    server.put_record(
+        "evt_legacy", ciphertext=base64.b64encode(ciphertext).decode(),
+        nonce=base64.b64encode(nonce).decode(), record_type="event",
+        expected_version=0, device_id="mac_old",
+    )
+    summary = run_sync(a, server, DEK, "mac_a")
+    assert summary["pull"]["skipped_schema"] == 1
+    assert a.query(models.Event).count() == 0

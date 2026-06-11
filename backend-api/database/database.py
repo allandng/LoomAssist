@@ -608,6 +608,14 @@ def run_migrations():
                     last_synced_at TEXT
                 )
             """))
+            # Protocol v2: calendars become a synced type — Phase 14c-style
+            # sync metadata columns.
+            result = conn.execute(text("PRAGMA table_info(calendar)")).fetchall()
+            cal_cols = [row[1] for row in result]
+            for col_name in ("last_modified", "deleted_at"):
+                if col_name not in cal_cols:
+                    conn.execute(text(f"ALTER TABLE calendar ADD COLUMN {col_name} TEXT"))
+                    logging.info(f"Migration: added column '{col_name}' to calendar table.")
             conn.commit()
         except Exception as e:
             logging.error(f"Migration error on Stage 2 cloud sync tables: {e}")

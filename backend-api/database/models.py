@@ -102,6 +102,11 @@ class CalendarBase(SQLModel):
     course_code: Optional[str] = Field(default=None)
     term_start: Optional[str] = Field(default=None)  # ISO date
     term_end:   Optional[str] = Field(default=None)  # ISO date
+    # v3.0 Stage 2 protocol v2: calendars are a synced type — same sync
+    # metadata pattern as Event/Task (Phase 14c). Calendar deletes stay hard
+    # DELETEs locally; the engine's orphan pass tombstones them server-side.
+    last_modified: Optional[str] = Field(default=None)
+    deleted_at: Optional[str] = Field(default=None)
 
 class Calendar(CalendarBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

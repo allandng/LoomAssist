@@ -107,7 +107,7 @@ cd frontend-ui/src && npm run test:watch
 - `crypto/vault.py` (v3.0 Stage 2) — pure KEK/DEK primitives: scrypt-derived KEK (`n=2^17, r=8, p=1`) wraps a random DEK; per-record AES-256-GCM. No DB/transport coupling.
 - `cloudsync/session.py` (v3.0 Stage 2) — in-memory Cognito session + vault keys singleton (`current`). **Keys never touch SQLite or disk**; backend restart requires re-unlock (correct E2E behavior). Holds the deployed API/pool coordinates (env-overridable).
 - `cloudsync/aws_client.py` (v3.0 Stage 2) — thin httpx transport for the AWS sync API. Raises `VersionConflict` on 409. No crypto, no DB.
-- `cloudsync/engine.py` (v3.0 Stage 2) — `run_sync(db, client, dek, device_id)`: pull-decrypt-apply then encrypt-push. Whole-record LWW by `last_modified` (same semantics as LAN sync). Local PKs ride inside encrypted payloads so FKs hold across devices; id collisions remap (known v0 limitation for FKs to remapped rows). Synced types: `event`, `task` — extend via `SYNCED_TYPES`.
+- `cloudsync/engine.py` (v3.0 Stage 2, protocol schema_version **2**) — `run_sync(db, client, dek, device_id)`: pull-decrypt-apply then encrypt-push. Whole-record LWW by `last_modified` (same semantics as LAN sync). Payloads carry **no local PKs**; FKs travel as `<col>__ref` keys holding the target's `record_id`, translated at the edges — devices keep independent autoincrement ids. Synced types (dict order = push order, referenced before referrers): `calendar`, `event`, `task` — extend via `SYNCED_TYPES` + `FK_REFS`. Out-of-order pulls defer-and-retry within the run. NOT NULL integrity: events with an unresolvable calendar ref land on a fallback ("Synced") calendar; tasks with an unresolvable event ref are dropped. Hard-deleted rows (calendars) get server tombstones via the orphan pass. Records with a different `schema_version` are skipped, never guessed at.
 
 **Database session pattern** — all routes use `db: Session = Depends(get_db)` where `get_db` yields a SQLAlchemy `SessionLocal`. Use `db.query(Model).filter(...).first()` — the codebase uses SQLAlchemy ORM style throughout, not SQLModel's `db.exec(select(...))`.
 
@@ -172,6 +172,8 @@ Each router module defines its own Pydantic request/response models above its ro
 | `description` | str | |
 | `color` | str | hex, default `#6366f1` |
 | `created_via_sync` | bool | v2.2: true for timelines auto-created during connection setup. Drives the disconnect-confirm copy |
+| `last_modified` | str | v3.0 protocol v2: stamped by the calendars router on create/update; calendars are a cloud-synced type |
+| `deleted_at` | str | v3.0 protocol v2: tombstone set by cloud-sync pull. Local deletes stay hard DELETEs; the engine's orphan pass tombstones them server-side. `GET /calendars/` filters these out |
 
 ### `EventTemplate`
 | Field | Type | Notes |
@@ -368,7 +370,7 @@ Each router module defines its own Pydantic request/response models above its ro
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int PK | |
-| `record_type` | str | `"event"` \| `"task"` — indexed |
+| `record_type` | str | `"calendar"` \| `"event"` \| `"task"` — indexed |
 | `local_id` | int | PK of the local row; indexed |
 | `record_id` | str | server record id e.g. `evt_<uuid>`; unique |
 | `server_version` | int | last version seen/written on the server |
