@@ -777,3 +777,36 @@ export const recordPomodoroSession = (s: PomodoroSessionInput): Promise<unknown>
 
 export const getEnergyMap = (weeks = 12): Promise<EnergyMap> =>
   req('GET', `/pomodoro-sessions/energy-map?weeks=${weeks}`);
+
+// ── Stage 2 (v3.0): AWS cloud sync ────────────────────────────────────────
+// Distinct from /sync/* (v2.2 provider sync) and /auth/* (Supabase identity).
+
+export interface CloudStatus {
+  unlocked: boolean;
+  email: string | null;
+  last_synced_at: string | null;
+}
+
+export interface CloudSyncSummary {
+  pull: { created: number; updated: number; deleted: number; kept_local: number; skipped: number };
+  push: { pushed: number; deleted: number; conflict_lost: number };
+  cursor: number;
+}
+
+export const getCloudStatus = (): Promise<CloudStatus> =>
+  req('GET', '/cloud/status');
+
+export const cloudSignup = (email: string, password: string): Promise<{ status: string }> =>
+  req('POST', '/cloud/signup', { email, password });
+
+export const cloudConfirm = (email: string, code: string): Promise<{ status: string }> =>
+  req('POST', '/cloud/confirm', { email, code });
+
+export const cloudUnlock = (email: string, password: string): Promise<{ status: string; vault_created: boolean; device_id: string }> =>
+  req('POST', '/cloud/unlock', { email, password });
+
+export const cloudLock = (): Promise<{ status: string }> =>
+  req('POST', '/cloud/lock');
+
+export const cloudSyncRun = (): Promise<CloudSyncSummary> =>
+  req('POST', '/cloud/sync/run', {});

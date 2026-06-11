@@ -581,6 +581,37 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on Feature 10 tables: {e}")
 
+    # --- Stage 2 (v3.0): AWS cloud sync state tables ---
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS cloudsyncstate (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_type TEXT NOT NULL,
+                    local_id INTEGER NOT NULL,
+                    record_id TEXT NOT NULL UNIQUE,
+                    server_version INTEGER NOT NULL DEFAULT 0,
+                    synced_local_modified TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_cloudsyncstate_type_local
+                ON cloudsyncstate(record_type, local_id)
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS cloudsyncconfig (
+                    id TEXT PRIMARY KEY,
+                    email TEXT,
+                    user_sub TEXT,
+                    pull_cursor INTEGER NOT NULL DEFAULT 0,
+                    last_synced_at TEXT
+                )
+            """))
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Migration error on Stage 2 cloud sync tables: {e}")
+
     logging.info("Migration check complete.")
 
 def migrate_todo_to_task():
