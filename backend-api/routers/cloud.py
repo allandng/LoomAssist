@@ -61,7 +61,7 @@ def _device_id(db: Session) -> str:
 @router.post("/signup")
 def signup(body: Credentials):
     cog = _cognito(body.email)
-    cog.add_base_attributes(email=body.email)
+    cog.set_base_attributes(email=body.email)
     try:
         cog.register(body.email, body.password)
     except ClientError as e:
