@@ -618,3 +618,27 @@ class ProjectMemberRead(SQLModel):
     person_id: int
     role: Optional[str]
     created_at: str
+# --- STAGE 2: AWS CLOUD SYNC (v3.0 roadmap §4) ---
+# CloudSyncState maps a local row to its server-side encrypted record.
+# Deliberately a separate table — zero risk to existing data paths.
+# The DEK/KEK never touch the database; keys live only in process memory
+# (services/cloudsync/session.py).
+
+class CloudSyncState(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    record_type: str = Field(index=True)              # "event" | "task"
+    local_id: int = Field(index=True)                 # PK of the local row
+    record_id: str = Field(index=True, unique=True)   # server record id e.g. "evt_<uuid>"
+    server_version: int = Field(default=0)            # last version seen/written on server
+    # Local last_modified at the moment of last successful push or pull-apply.
+    # Row needs pushing iff its current last_modified differs from this.
+    synced_local_modified: Optional[str] = Field(default=None)
+    deleted: bool = Field(default=False)              # server tombstone already written
+
+class CloudSyncConfig(SQLModel, table=True):
+    """Single-row table ('me' pattern, like Account)."""
+    id: str = Field(default="me", primary_key=True)
+    email: Optional[str] = None                       # Cognito sign-in email
+    user_sub: Optional[str] = None                    # Cognito sub
+    pull_cursor: int = Field(default=0)               # ms-epoch delta-query watermark
+    last_synced_at: Optional[str] = None              # ISO datetime of last successful run
