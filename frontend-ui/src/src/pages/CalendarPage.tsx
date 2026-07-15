@@ -216,9 +216,13 @@ export function CalendarPage() {
     document.body.classList.toggle('loom-no-weekend-wash', !washOn);
   }, []);
 
-  // QuickPeek state
-  const [peek, setPeek] = useState<{ event: Event; x: number; y: number } | null>(null);
+  // QuickPeek state. A hover peek is passive; a single click pins an interactive
+  // one (WS5 #1). `anchorEl` is the originating pill — focus returns to it on Esc.
+  const [peek, setPeek] = useState<
+    { event: Event; x: number; y: number; pinned: boolean; keyboard: boolean; anchorEl: HTMLElement | null } | null
+  >(null);
   const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peekHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Double-click detection (timestamp-based — no 200ms selection delay: a single
   // click selects immediately, a second within the window opens the editor).
@@ -614,6 +618,12 @@ export function CalendarPage() {
     };
   }, [nav, wheelNavEnabled]);
 
+  // Clear any pending peek show/hide timers on unmount.
+  useEffect(() => () => {
+    if (peekTimerRef.current) clearTimeout(peekTimerRef.current);
+    if (peekHideTimerRef.current) clearTimeout(peekHideTimerRef.current);
+  }, []);
+
   // ---- Computed FC events ----
   const fcEvents = useMemo(
     () => buildFCEvents(events, timelines, hiddenTimelineIds, activeFilters),
@@ -790,16 +800,43 @@ export function CalendarPage() {
     }
   }, [pushUndo, loadAll, addNotification]);
 
+  // Hover-grace helpers (WS5 #1): don't drop a passive peek the instant the
+  // cursor leaves the pill — give ~500ms so the user can move onto the card.
+  const cancelPeekHide = useCallback(() => {
+    if (peekHideTimerRef.current) { clearTimeout(peekHideTimerRef.current); peekHideTimerRef.current = null; }
+  }, []);
+  const schedulePeekHide = useCallback(() => {
+    cancelPeekHide();
+    peekHideTimerRef.current = setTimeout(() => {
+      setPeek(prev => (prev && prev.pinned ? prev : null));
+    }, 500);
+  }, [cancelPeekHide]);
+
+  const closePeek = useCallback(() => {
+    cancelPeekHide();
+    if (peekTimerRef.current) { clearTimeout(peekTimerRef.current); peekTimerRef.current = null; }
+    setPeek(prev => {
+      // Return focus to the originating pill on an explicit close (Esc / Close).
+      const el = prev?.anchorEl;
+      if (el && document.contains(el)) { el.setAttribute('tabindex', '-1'); el.focus(); }
+      return null;
+    });
+  }, [cancelPeekHide]);
+
   const handleEventClick = useCallback((arg: EventClickArg) => {
     const fcId = arg.event.id;
     const ev: Event = arg.event.extendedProps.event;
     const now = Date.now();
+    const el = arg.el as HTMLElement;
+    const rect = el.getBoundingClientRect();
 
     // Double-click (same occurrence within 350ms) opens the editor. Single click
     // selects immediately — no artificial delay (WS3 #2).
     if (lastClickedIdRef.current === fcId && now - lastClickTimeRef.current < 350) {
       lastClickedIdRef.current = null;
       lastClickTimeRef.current = 0;
+      cancelPeekHide();
+      setPeek(null);
       const instanceDate: string | undefined = arg.event.extendedProps.instanceDate;
       openEventEditor(ev, undefined, instanceDate);
       return;
@@ -808,31 +845,108 @@ export function CalendarPage() {
     lastClickedIdRef.current = fcId;
     lastClickTimeRef.current = now;
     setQuickCreate(null);
+    const isModifier = arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey;
     setSelectedEventIds(prev => {
       const next = new Set(prev);
-      if (arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey) {
+      if (isModifier) {
         if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id);
       } else {
         if (next.has(ev.id) && next.size === 1) next.clear(); else { next.clear(); next.add(ev.id); }
       }
       return next;
     });
-  }, [openEventEditor]);
+
+    // WS5 #1 — a plain single click pins an interactive peek to the clicked
+    // event; clicking the same pinned event again (a de-select) closes it.
+    // Modifier clicks are multi-select and carry no single-event peek.
+    cancelPeekHide();
+    if (isModifier) {
+      setPeek(null);
+    } else {
+      setPeek(prev =>
+        prev && prev.pinned && prev.event.id === ev.id
+          ? null
+          : { event: ev, x: rect.right, y: rect.top, pinned: true, keyboard: false, anchorEl: el });
+    }
+  }, [openEventEditor, cancelPeekHide]);
 
   const handleMouseEnter = useCallback((arg: EventHoveringArg) => {
     if (window.matchMedia('(hover: none)').matches) return;
+    cancelPeekHide();
+    // A pinned peek is a deliberate focus — don't let a stray hover replace it.
+    let pinnedOpen = false;
+    setPeek(prev => { pinnedOpen = !!(prev && prev.pinned); return prev; });
+    if (pinnedOpen) return;
     if (peekTimerRef.current) clearTimeout(peekTimerRef.current);
     peekTimerRef.current = setTimeout(() => {
       const ev: Event = arg.event.extendedProps.event;
       const rect = (arg.el as HTMLElement).getBoundingClientRect();
-      setPeek({ event: ev, x: rect.right, y: rect.top });
-    }, 150);
-  }, []);
+      setPeek(prev => (prev && prev.pinned)
+        ? prev
+        : { event: ev, x: rect.right, y: rect.top, pinned: false, keyboard: false, anchorEl: arg.el as HTMLElement });
+    }, 300);
+  }, [cancelPeekHide]);
 
   const handleMouseLeave = useCallback(() => {
     if (peekTimerRef.current) { clearTimeout(peekTimerRef.current); peekTimerRef.current = null; }
-    setPeek(null);
-  }, []);
+    schedulePeekHide();
+  }, [schedulePeekHide]);
+
+  // ---- Pinned-peek actions (WS5 #1) ----
+  const handlePeekEdit = useCallback((ev: Event) => {
+    closePeek();
+    openEventEditor(ev);
+  }, [closePeek, openEventEditor]);
+
+  const handlePeekDuplicate = useCallback(async (ev: Event) => {
+    closePeek();
+    const { id: _oldId, ...base } = ev;
+    try {
+      const { event: created } = await createEvent(base);
+      pushUndo({
+        label: `Duplicate "${ev.title}"`,
+        undo: async () => { await deleteEvent(created.id); await loadAll(); },
+        redo: async () => { /* re-create not directly reversible */ },
+      });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Duplicate failed', message: 'Could not copy event.' });
+    }
+  }, [closePeek, pushUndo, loadAll, addNotification]);
+
+  const handlePeekDelete = useCallback(async (ev: Event) => {
+    closePeek();
+    const snapshot = { ...ev };
+    try {
+      await deleteEvent(ev.id);
+      pushUndo({
+        label: `Delete "${ev.title}"`,
+        undo: async () => { const { id: _id, ...p } = snapshot; await createEvent(p); await loadAll(); },
+        redo: async () => { await deleteEvent(ev.id); await loadAll(); },
+      });
+      addNotification({ type: 'success', title: `Deleted "${ev.title}"`, message: 'Undo from the toolbar or ⌘Z.', autoRemoveMs: 6000 });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed', message: 'Could not delete event.' });
+    }
+  }, [closePeek, pushUndo, loadAll, addNotification]);
+
+  const handlePeekChecklistToggle = useCallback(async (ev: Event, index: number) => {
+    const items = parseChecklist(ev.checklist);
+    if (index < 0 || index >= items.length) return;
+    const next = items.map((it, i) => i === index ? { ...it, done: !it.done } : it);
+    const nextJson = JSON.stringify(next.map(({ text, done, isReading }) => isReading ? { text, done, isReading } : { text, done }));
+    const updated: Event = { ...ev, checklist: nextJson };
+    // Optimistically reflect the toggle in the open peek.
+    setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: updated } : prev));
+    try {
+      await updateEvent(ev.id, { checklist: nextJson });
+      await loadAll();
+    } catch {
+      setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: ev } : prev));
+      addNotification({ type: 'error', title: 'Update failed', message: 'Could not save the checklist.' });
+    }
+  }, [loadAll, addNotification]);
 
   // WS3 #1 — a drag (or click) on the empty grid opens the quick-create popover
   // anchored to the selection rect, rather than jumping straight to the full
@@ -1340,7 +1454,21 @@ export function CalendarPage() {
         )}
 
         {peek && (
-          <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />
+          <QuickPeek
+            event={peek.event}
+            timelines={timelines}
+            anchorX={peek.x}
+            anchorY={peek.y}
+            pinned={peek.pinned}
+            keyboardOpen={peek.keyboard}
+            onClose={closePeek}
+            onEdit={handlePeekEdit}
+            onDuplicate={handlePeekDuplicate}
+            onDelete={handlePeekDelete}
+            onChecklistToggle={idx => void handlePeekChecklistToggle(peek.event, idx)}
+            onHoverEnter={cancelPeekHide}
+            onHoverLeave={schedulePeekHide}
+          />
         )}
 
         {quickCreate && timelines.length > 0 && (

@@ -67,6 +67,8 @@
   background: var(--bg-subtle);
   align-items: center;
   flex-shrink: 0;
+  position: relative; /* anchor for footer-scoped popovers (e.g. delete scope) */
+  flex-wrap: wrap;
 }
 
 /* FieldLabel */
@@ -77,6 +79,49 @@
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 5px;
+}
+
+/* WS5 #2 — inline discard-guard bar shown when a dirty modal is dismissed via
+   backdrop click / Escape, instead of silently destroying the form. */
+.discardBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--warning-soft);
+  flex-shrink: 0;
+}
+
+.discardText {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.discardActions {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.discardConfirm {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: 500;
+  background: transparent;
+  color: var(--error);
+  border: 1px solid var(--error);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.discardConfirm:hover {
+  background: var(--error-soft);
 }
 
 /* The `loom-field` / `loom-btn-primary` / `loom-btn-ghost` utilities moved to

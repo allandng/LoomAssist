@@ -24,6 +24,10 @@ type ModalName =
 interface ModalState {
   name: ModalName;
   props: Record<string, unknown>;
+  // WS5 #2 — the element focused when the modal was opened. ModalShell restores
+  // focus here on close (APG modal-dialog pattern). Captured synchronously at
+  // open() time, before React commits the modal and moves focus into it.
+  invoker: HTMLElement | null;
 }
 
 // WS3 #1/#3 — seed values for a NEW event opened in the full editor (quick-create
@@ -60,13 +64,13 @@ interface ModalContextValue {
 const ModalContext = createContext<ModalContextValue | null>(null);
 
 export function ModalProvider({ children }: { children: ReactNode }) {
-  const [modal, setModal] = useState<ModalState>({ name: null, props: {} });
+  const [modal, setModal] = useState<ModalState>({ name: null, props: {}, invoker: null });
 
   const open = useCallback((name: ModalName, props: Record<string, unknown> = {}) => {
-    setModal({ name, props });
+    setModal({ name, props, invoker: (document.activeElement as HTMLElement | null) });
   }, []);
 
-  const close = useCallback(() => setModal({ name: null, props: {} }), []);
+  const close = useCallback(() => setModal(prev => ({ name: null, props: {}, invoker: prev.invoker })), []);
 
   const value = useMemo<ModalContextValue>(() => ({
     modal,
@@ -97,4 +101,13 @@ export function useModal(): ModalContextValue {
   const ctx = useContext(ModalContext);
   if (!ctx) throw new Error('useModal must be used inside ModalProvider');
   return ctx;
+}
+
+/**
+ * Non-throwing variant — returns null when no ModalProvider is above. Used by
+ * ModalShell so it can read the captured invoker element when available, but
+ * still render standalone (e.g. in a unit test rendered without the provider).
+ */
+export function useModalOptional(): ModalContextValue | null {
+  return useContext(ModalContext);
 }

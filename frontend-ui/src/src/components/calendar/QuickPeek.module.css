@@ -7,7 +7,56 @@
   padding: 14px;
   z-index: 200;
   box-shadow: var(--shadow-popover), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
-  pointer-events: none;
+  /* WS5 #1 — no longer pointer-events:none: hover peek needs to stay alive while
+     the cursor is over it, and the pinned peek is fully interactive. */
+}
+
+.peek:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Pinned mode leaves room at the top-right for the action row. */
+.peekPinned {
+  padding-right: 16px;
+}
+
+.actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  z-index: 1;
+}
+
+.actionBtn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+
+.actionBtn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+.checkToggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .meta {

@@ -53,6 +53,16 @@ export const updateEvent = (
 export const cascadeDependents = (id: number): Promise<{ updated: Event[] }> =>
   req('POST', `/events/${id}/cascade-dependents`);
 
+// WS5 #3 — honest conflict flow: dry-run the conflict check BEFORE writing so the
+// editor can warn-then-save (one write) instead of the old save-then-warn double write.
+export const checkConflicts = (payload: {
+  start_time: string;
+  end_time: string;
+  calendar_id: number;
+  exclude_event_id?: number | null;
+}): Promise<{ conflicts: ConflictInfo[] }> =>
+  req('POST', '/events/check-conflicts', payload);
+
 export const deleteEvent = (id: number): Promise<void> =>
   req('DELETE', `/events/${id}`);
 
