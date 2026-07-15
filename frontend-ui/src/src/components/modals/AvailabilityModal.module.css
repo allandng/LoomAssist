@@ -121,6 +121,11 @@
   width: 76px;
 }
 
+.timeInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .arrow {
   color: var(--text-dim);
   font-size: 11px;
@@ -141,8 +146,8 @@
 
 .conflictWarn {
   padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(217,119,6,0.08);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
   border-left: 3px solid var(--warning);
   font-size: 11px;
   color: var(--text-main);
@@ -160,7 +165,7 @@
   display: flex;
   gap: 6px;
   padding: 6px;
-  border: 1px solid rgba(99,102,241,0.4);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 7px;
   background: var(--accent-soft);
   margin-bottom: 6px;

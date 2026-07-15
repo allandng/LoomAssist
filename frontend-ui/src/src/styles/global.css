@@ -1,6 +1,7 @@
 @import './fonts.css';
 @import './tokens.css';
 @import './reset.css';
+@import './primitives.css';
 
 body {
   font-family: var(--font-sans);
@@ -11,6 +12,13 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+}
+
+/* Global keyboard focus indicator (WCAG 2.4.13). Modules that set
+   `outline: none` provide their own `:focus-visible` companion ring. */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Thin dark scrollbar */
@@ -39,7 +47,17 @@ body.light-mode {
   --border-strong: #94A3B8;
   --text-main:   #0F172A;
   --text-muted:  #475569;
-  --text-dim:    #94A3B8;
+  /* Distinct from --border-strong (#94A3B8) — the two used to collide. */
+  --text-dim:    #64748B;
+
+  /* Second pass: the ambient tokens shipped dark-only before this. */
+  --accent-soft:   rgba(99, 102, 241, 0.12);
+  --overlay-scrim: rgba(15, 23, 42, 0.35);
+  --shadow-popover: 0 12px 32px rgba(15, 23, 42, 0.14);
+  --shadow-modal:   0 24px 64px rgba(15, 23, 42, 0.18);
+  --shadow-toast:   0 10px 24px rgba(15, 23, 42, 0.12);
+  --drag-free:     rgba(22, 163, 74, 0.14);
+  --drag-conflict: rgba(220, 38, 38, 0.14);
 }
 
 /* High-contrast mode — text/background contrast ≥ 7:1 */

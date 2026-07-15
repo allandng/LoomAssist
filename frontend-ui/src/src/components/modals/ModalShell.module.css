@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(6, 11, 24, 0.7);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(6px);
   display: grid;
   place-items: center;
@@ -14,11 +14,11 @@
   max-height: calc(100vh - 40px);
   background: var(--bg-panel);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  box-shadow: var(--shadow-modal);
 }
 
 .header {
@@ -79,59 +79,5 @@
   margin-bottom: 5px;
 }
 
-/* Shared field styles — imported by other modal CSS modules */
-:global(.loom-field) {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 12.5px;
-  font-family: inherit;
-  color: var(--text-main);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  outline: none;
-  transition: border-color 100ms;
-}
-
-:global(.loom-field:focus) {
-  border-color: var(--accent);
-}
-
-:global(.loom-btn-primary) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: 7px;
-  font-size: 12.5px;
-  font-weight: 600;
-  background: var(--accent);
-  color: white;
-  border: none;
-  cursor: pointer;
-  transition: background 100ms;
-}
-
-:global(.loom-btn-primary:hover) {
-  background: var(--accent-hover);
-}
-
-:global(.loom-btn-ghost) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 7px;
-  font-size: 12.5px;
-  font-weight: 500;
-  background: transparent;
-  color: var(--text-main);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: background 100ms, border-color 100ms;
-}
-
-:global(.loom-btn-ghost:hover) {
-  background: var(--bg-elevated);
-  border-color: var(--border-strong);
-}
+/* The `loom-field` / `loom-btn-primary` / `loom-btn-ghost` utilities moved to
+   styles/primitives.css — they are app-wide, not modal-scoped. */

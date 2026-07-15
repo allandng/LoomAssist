@@ -134,7 +134,7 @@
   padding: 4px;
   z-index: 100;
   min-width: 120px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  box-shadow: var(--shadow-popover);
 }
 
 .tlMenu button {
@@ -163,6 +163,11 @@
   border-radius: 4px;
   padding: 2px 6px;
   outline: none;
+}
+
+.renameInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .miniPlus {
@@ -369,6 +374,11 @@
   font-family: inherit;
 }
 
+.scanField:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .scanField:focus {
   border-color: var(--accent);
 }
@@ -468,6 +478,11 @@
   cursor: pointer;
 }
 
+.schedulerSelect:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .schedulerFindBtn {
   padding: 5px 10px;
   border-radius: 5px;
@@ -561,93 +576,9 @@
   outline-offset: 1px;
 }
 
-/* ── Density heatmap ───────────────────────────────────────────── */
-.heatmap {
-  padding: 0 10px 14px;
-}
-
-.heatmapHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.heatmapMonth {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.heatmapNav {
-  width: 18px;
-  height: 18px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 4px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-}
-
-.heatmapNav:hover {
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-}
-
-.heatmapGrid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
-}
-
-.heatmapDow {
-  font-size: 8.5px;
-  color: var(--text-dim);
-  text-align: center;
-  padding-bottom: 2px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.heatmapEmpty {
-  aspect-ratio: 1;
-}
-
-.heatmapCell {
-  aspect-ratio: 1;
-  border-radius: 3px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  border: none;
-  padding: 0;
-  transition: transform 80ms;
-}
-
-.heatmapCell:hover {
-  transform: scale(1.2);
-}
-
-.heatmapToday {
-  outline: 1.5px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.hmL0 { background: var(--bg-elevated);                                        color: var(--text-dim); }
-.hmL1 { background: color-mix(in srgb, var(--accent) 18%, transparent);        color: var(--text-main); }
-.hmL2 { background: color-mix(in srgb, var(--accent) 38%, transparent);        color: var(--text-main); }
-.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; }
-.hmL4 { background: var(--accent);                                              color: #fff; font-weight: 700; }
+/* Density-heatmap styles removed — this module's heatmap markup no longer
+   exists; the shared DensityHeatmap component (DensityHeatmap.module.css) is
+   the single source. */
 
 /* ── Time Block Templates ── */
 
@@ -701,7 +632,7 @@
 
 .tbtApplyBtn:hover {
   background: var(--accent);
-  color: #fff;
+  color: #fff; /* literal: readable text on accent fill */
 }
 
 .tbtDeleteBtn {
@@ -717,7 +648,7 @@
 
 .tbtDeleteBtn:hover {
   opacity: 1;
-  background: rgba(239, 68, 68, 0.1);
+  background: var(--error-soft);
 }
 
 .weekPicker {
@@ -735,7 +666,7 @@
   padding: 2px 7px;
   border-radius: 4px;
   background: var(--accent);
-  color: #fff;
+  color: #fff; /* literal: readable text on accent fill */
   border: none;
   cursor: pointer;
   white-space: nowrap;

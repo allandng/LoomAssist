@@ -4,6 +4,7 @@ import type { Event, Calendar } from '../../types';
 import { TLDot } from '../shared/TLDot';
 import { useModal } from '../../contexts/ModalContext';
 import { isExamLike } from '../../lib/eventClassification';
+import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 
 interface UpNextWidgetProps {
   events: Event[];
@@ -66,7 +67,7 @@ export function UpNextWidget({ events, timelines }: UpNextWidgetProps) {
                   aria-label={`Open ${ev.title}`}
                 >
                   <span className={`${styles.chip} ${isUrgent ? styles.chipUrgent : ''}`}>{chip}</span>
-                  <TLDot color={tl?.color ?? '#6366F1'} size={7} />
+                  <TLDot color={tl?.color ?? DEFAULT_TIMELINE_COLOR} size={7} />
                   <span className={styles.title}>{ev.title}</span>
                   <span className={styles.time}>
                     {start.toLocaleDateString([], { weekday: 'short' })}{' '}

@@ -32,7 +32,7 @@
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--motion-fast), color var(--motion-fast);
 }
 
 .navBtn:hover {
@@ -75,7 +75,7 @@
   margin-bottom: 8px;
   cursor: pointer;
   padding: 0;
-  transition: color 0.1s;
+  transition: color var(--motion-fast);
 }
 
 .monthName:hover {
@@ -116,7 +116,7 @@
   border-radius: 4px;
   padding: 2px 1px;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background var(--motion-fast);
   gap: 1px;
 }
 

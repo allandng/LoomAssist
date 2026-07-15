@@ -1,5 +1,6 @@
 import type { ReactNode, CSSProperties } from 'react';
 import styles from './Chip.module.css';
+import { tint } from '../../lib/colors';
 
 interface ChipProps {
   children: ReactNode;
@@ -9,7 +10,7 @@ interface ChipProps {
 
 export function Chip({ children, color, style }: ChipProps) {
   const inlineStyle: CSSProperties = color
-    ? { color, background: `${color}22`, ...style }
+    ? { color, background: tint(color, 13), ...style }
     : style ?? {};
 
   return (

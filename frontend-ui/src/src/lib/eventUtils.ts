@@ -1,9 +1,10 @@
 import type { EventInput } from '@fullcalendar/core';
 import type { Event, Calendar } from '../types';
+import { DEFAULT_TIMELINE_COLOR, tint } from './colors';
 
 /** Build a CSS color for a FullCalendar event based on its timeline. */
 export function timelineColor(timelines: Calendar[], calendarId: number): string {
-  return timelines.find(t => t.id === calendarId)?.color ?? '#6366F1';
+  return timelines.find(t => t.id === calendarId)?.color ?? DEFAULT_TIMELINE_COLOR;
 }
 
 /** Resolve the title for a specific occurrence (unique_description has per-occurrence notes, not title overrides — so title is always event.title). */
@@ -56,7 +57,7 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
   const base: Partial<EventInput> = {
     title: event.title,
     extendedProps: { event },
-    backgroundColor: `${color}22`,
+    backgroundColor: tint(color, 13),
     borderColor: color,
     textColor: color,
     classNames: ['loom-event'],

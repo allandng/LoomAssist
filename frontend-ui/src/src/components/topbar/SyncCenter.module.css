@@ -74,7 +74,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-popover);
   overflow: hidden;
   z-index: 50;
   display: flex;

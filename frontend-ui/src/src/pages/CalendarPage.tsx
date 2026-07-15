@@ -30,6 +30,7 @@ import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPr
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
+import { DEFAULT_TIMELINE_COLOR } from '../lib/colors';
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
   listCalendars, createCalendar, updateCalendar, deleteCalendar,
@@ -882,7 +883,7 @@ export function CalendarPage() {
   const handleNewTimeline = useCallback(async () => {
     const name = window.prompt('New timeline name:');
     if (!name?.trim()) return;
-    const cal = await createCalendar({ name: name.trim(), description: '', color: '#6366F1' });
+    const cal = await createCalendar({ name: name.trim(), description: '', color: DEFAULT_TIMELINE_COLOR });
     pushUndo({
       label: `Create timeline "${cal.name}"`,
       undo: async () => { await deleteCalendar(cal.id); await loadAll(); },

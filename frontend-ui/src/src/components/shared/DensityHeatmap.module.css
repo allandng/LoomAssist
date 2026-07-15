@@ -82,8 +82,8 @@
 .hmL0 { background: var(--bg-elevated);                                        color: var(--text-dim); }
 .hmL1 { background: color-mix(in srgb, var(--accent) 18%, transparent);        color: var(--text-main); }
 .hmL2 { background: color-mix(in srgb, var(--accent) 38%, transparent);        color: var(--text-main); }
-.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; }
-.hmL4 { background: var(--accent);                                              color: #fff; font-weight: 700; }
+.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; /* literal: readable text on strong accent fill */ }
+.hmL4 { background: var(--accent);                                              color: #fff; /* literal: readable text on accent fill */ font-weight: 700; }
 
 /* Legend bar */
 .legend {

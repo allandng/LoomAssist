@@ -19,7 +19,7 @@
 }
 
 .colAccent {
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .colHeader {
@@ -92,6 +92,11 @@
   color: var(--text-main);
   font-family: inherit;
   outline: none;
+}
+
+.addInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .cards {
@@ -184,7 +189,7 @@
   border-radius: 8px;
   padding: 4px;
   z-index: 50;
-  box-shadow: 0 12px 24px rgba(0,0,0,0.5);
+  box-shadow: var(--shadow-popover);
 }
 
 .menuSection {

@@ -15,7 +15,7 @@
 /* Override FullCalendar chrome to match design tokens */
 :global(.fc) {
   --fc-border-color: var(--border);
-  --fc-today-bg-color: rgba(99, 102, 241, 0.06);
+  --fc-today-bg-color: color-mix(in srgb, var(--accent) 6%, transparent);
   --fc-event-bg-color: transparent;
   --fc-event-border-color: transparent;
   --fc-event-text-color: var(--text-main);
@@ -151,15 +151,15 @@
   border-radius: 3px;
   font-size: 9px;
   font-weight: 700;
-  background: #f59e0b;
-  color: #000;
+  background: var(--warning);
+  color: #000; /* literal: readable text on the warning-colored chip */
   letter-spacing: 0.02em;
   font-family: var(--font-mono);
 }
 
 .deadlineChipUrgent {
-  background: #ef4444;
-  color: #fff;
+  background: var(--error);
+  color: #fff; /* literal: readable text on the error-colored chip */
   animation: chipPulse 1.5s ease-in-out infinite;
 }
 
@@ -180,10 +180,8 @@
   font-family: var(--font-mono);
   background-image: repeating-linear-gradient(
     45deg,
-    transparent 0,
-    transparent 3px,
-    rgba(255, 255, 255, 0.06) 3px,
-    rgba(255, 255, 255, 0.06) 5px
+    transparent 0 3px,
+    color-mix(in srgb, var(--text-main) 8%, transparent) 3px 5px
   );
 }
 
@@ -192,10 +190,8 @@
   font-style: italic;
   background-image: repeating-linear-gradient(
     -45deg,
-    transparent 0,
-    transparent 4px,
-    rgba(255, 255, 255, 0.04) 4px,
-    rgba(255, 255, 255, 0.04) 6px
+    transparent 0 4px,
+    color-mix(in srgb, var(--text-main) 8%, transparent) 4px 6px
   );
 }
 
@@ -204,7 +200,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #22c55e;
+  background: var(--success);
   margin-left: 4px;
   flex-shrink: 0;
   animation: clockPulse 1.4s ease-in-out infinite;

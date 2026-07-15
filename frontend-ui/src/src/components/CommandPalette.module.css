@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(8, 13, 26, 0.55);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: flex-start;
@@ -18,7 +18,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
 }
 
@@ -31,6 +31,12 @@
   padding: 16px 18px;
   border-bottom: 1px solid var(--border);
   font-family: var(--font-sans);
+}
+
+/* Primary search field: keyboard focus deepens the underline rather than
+   drawing a boxed ring on a full-width input. */
+.input:focus-visible {
+  border-bottom-color: var(--accent);
 }
 
 .list {

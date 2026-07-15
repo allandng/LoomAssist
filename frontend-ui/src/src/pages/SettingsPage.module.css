@@ -71,7 +71,7 @@
   border-radius: 11px;
   border: 1px solid var(--border-strong);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background var(--motion-base);
 }
 
 .toggleTrack.on {
@@ -85,9 +85,9 @@
   left: 2px;
   width: 16px;
   height: 16px;
-  background: #fff;
+  background: #fff; /* literal: toggle knob stays white in both themes */
   border-radius: 50%;
-  transition: transform 0.2s;
+  transition: transform var(--motion-base);
 }
 
 .toggleTrack.on .toggleThumb {

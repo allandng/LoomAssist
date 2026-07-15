@@ -68,6 +68,12 @@
   appearance: none;
 }
 
+.selectInline:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 .selectChevron {
   color: var(--text-muted);
   flex-shrink: 0;
@@ -205,6 +211,12 @@
   font-family: inherit;
 }
 
+.checkInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
 .checkRemove {
   width: 18px;
   height: 18px;
@@ -258,8 +270,8 @@
 /* Conflict warning */
 .conflictWarn {
   padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(217,119,6,0.08);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
   border-left: 3px solid var(--warning);
   font-size: 11.5px;
   color: var(--text-main);
@@ -290,7 +302,7 @@
 }
 
 .deleteBtn:hover {
-  background: rgba(239,68,68,0.1);
+  background: var(--error-soft);
   border-color: var(--error);
 }
 
@@ -317,16 +329,16 @@
 }
 
 .clockBtn:hover {
-  background: rgba(99,102,241,0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .clockBtnStop {
-  color: #ef4444;
-  border-color: #ef4444;
+  color: var(--error);
+  border-color: var(--error);
 }
 
 .clockBtnStop:hover {
-  background: rgba(239,68,68,0.1);
+  background: var(--error-soft);
 }
 
 .clockDone {

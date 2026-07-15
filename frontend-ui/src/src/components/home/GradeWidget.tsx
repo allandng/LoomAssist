@@ -3,6 +3,7 @@ import styles from './GradeWidget.module.css';
 import { listTasks } from '../../api';
 import type { Task, Calendar, Event } from '../../types';
 import { TLDot } from '../shared/TLDot';
+import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 
 interface GradeWidgetProps {
   timelines: Calendar[];
@@ -36,7 +37,7 @@ export function GradeWidget({ timelines, events }: GradeWidgetProps) {
       <ul className={styles.list}>
         {rows.map(({ course, grade, totalWeight }) => (
           <li key={course.id} className={styles.row}>
-            <TLDot color={course.color ?? '#6366F1'} size={7} />
+            <TLDot color={course.color ?? DEFAULT_TIMELINE_COLOR} size={7} />
             <span className={styles.title}>{course.name}</span>
             <span className={styles.weight}>{Math.round(totalWeight)}% graded</span>
             <span className={styles.grade}>

@@ -5,6 +5,7 @@ import { TLDot } from '../shared/TLDot';
 import { SourceBadge } from '../shared/SourceBadge';
 import type { Event, Calendar } from '../../types';
 import { parseChecklist, renderDescription } from '../../lib/eventUtils';
+import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 
 interface QuickPeekProps {
   event: Event;
@@ -31,7 +32,7 @@ export function QuickPeek({ event, timelines, anchorX, anchorY }: QuickPeekProps
   }, [anchorX, anchorY]);
 
   const timeline = timelines.find(t => t.id === event.calendar_id);
-  const color = timeline?.color ?? '#6366F1';
+  const color = timeline?.color ?? DEFAULT_TIMELINE_COLOR;
   const checklist = parseChecklist(event.checklist);
   const done = checklist.filter(c => c.done).length;
 

@@ -1,6 +1,8 @@
 .backdrop {
   position: fixed;
   inset: 0;
+  /* literal: intentionally lighter than --overlay-scrim (this panel only
+     light-dims the page); WS7 revisits this surface. */
   background: rgba(0, 0, 0, 0.35);
   z-index: 300;
 }
@@ -15,7 +17,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0,0,0,0.55);
+  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   z-index: 301;

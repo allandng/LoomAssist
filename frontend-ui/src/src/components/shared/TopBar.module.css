@@ -122,6 +122,12 @@
   outline: none;
 }
 
+.searchInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 .searchInput::placeholder {
   color: var(--text-dim);
 }

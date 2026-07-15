@@ -1,0 +1,76 @@
+/* App-wide utility primitives.
+   Previously these lived inside components/modals/ModalShell.module.css even
+   though `loom-field` / `loom-btn-primary` / `loom-btn-ghost` are used across
+   the whole app. Moved here and normalized onto the WS1 token scales, with
+   keyboard focus rings on both buttons. */
+
+.loom-field {
+  width: 100%;
+  padding: var(--space-3) 10px;
+  font-size: var(--text-base);
+  font-family: inherit;
+  color: var(--text-main);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--motion-fast);
+}
+
+.loom-field:focus {
+  border-color: var(--accent);
+}
+
+.loom-field:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.loom-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: 600;
+  background: var(--accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+
+.loom-btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.loom-btn-primary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.loom-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+
+.loom-btn-ghost:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+
+.loom-btn-ghost:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
