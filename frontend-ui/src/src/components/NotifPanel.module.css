@@ -1,12 +1,4 @@
-.backdrop {
-  position: fixed;
-  inset: 0;
-  /* literal: intentionally lighter than --overlay-scrim (this panel only
-     light-dims the page); WS7 revisits this surface. */
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 300;
-}
-
+/* WS7 #5 — light-dismiss popover: no dimming backdrop, no page-blocking scrim. */
 .panel {
   position: fixed;
   top: 64px;
@@ -15,12 +7,23 @@
   max-height: 520px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-popover);
   display: flex;
   flex-direction: column;
   z-index: 301;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel {
+    animation: notifPanelIn var(--motion-base) var(--ease-decel);
+  }
+}
+
+@keyframes notifPanelIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .panelHeader {
@@ -155,13 +158,55 @@
   to   { background-position: -200% 0; }
 }
 
+.actionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
 .cardAction {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   background: none;
   border: none;
   cursor: pointer;
   padding: 0;
+}
+
+.cardAction:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.actionError {
+  font-size: var(--text-2xs);
+  color: var(--error);
+}
+
+/* Collapsed-group expansion (WS7 #3) */
+.expandBtn {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.childList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-left: 6px;
+  border-left: 2px solid var(--border);
+}
+
+.childCard {
+  background: var(--bg-panel);
 }
 
 .cardTs {

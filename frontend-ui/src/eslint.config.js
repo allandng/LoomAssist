@@ -43,6 +43,7 @@ export default defineConfig([
       'src/store/**/*.tsx',
       'src/components/shared/Icon.tsx',
       'src/components/calendar/ExamClusterBanner.tsx',
+      'src/components/calendar/WellnessToast.tsx',
     ],
     rules: {
       'react-refresh/only-export-components': 'off',

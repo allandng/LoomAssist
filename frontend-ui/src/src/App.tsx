@@ -41,6 +41,7 @@ import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { CommandPalette } from './components/CommandPalette';
 import { NotifPanel } from './components/NotifPanel';
+import { ConfirmBar, type ConfirmBarItem } from './components/ConfirmBar';
 import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
@@ -123,6 +124,14 @@ function Shell() {
   useEffect(() => () => { isMountedRef.current = false; }, []);
   const [micActive, setMicActive] = useState(false);
 
+  // WS7 #1 — voice-intent confirmations render in a dedicated ConfirmBar
+  // (explicit Confirm/Cancel, no auto-dismiss), not in a transient toast.
+  const [confirmItems, setConfirmItems] = useState<ConfirmBarItem[]>([]);
+  const resolveConfirm = useCallback(
+    (id: string) => setConfirmItems(items => items.filter(c => c.id !== id)),
+    [],
+  );
+
   const handleMic = useCallback(async () => {
     if (micActive && recorderRef.current) {
       recorderRef.current.stop();
@@ -153,17 +162,17 @@ function Shell() {
                 : action === 'move_event'
                   ? `Move "${ev.title}" to ${new Date(change.start_time as string).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}?`
                   : `Resize "${ev.title}" to end ${new Date(change.end_time as string).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}?`;
-              addNotification({
-                type: 'warning',
-                title: label,
-                message: '',
-                actionable: true,
-                actionLabel: 'Confirm',
-                actionFn: async () => {
+              const confirmId = `voice-${ev.id}-${Date.now()}`;
+              setConfirmItems(items => [...items, {
+                id: confirmId,
+                message: label,
+                confirmLabel: 'Confirm',
+                destructive: action === 'cancel_event',
+                onConfirm: async () => {
                   await applyVoiceIntent({ action, event_id: ev.id as unknown as number, proposed_change: change });
                   setReloadKey(k => k + 1);
                 },
-              });
+              }]);
             } else if (result.status === 'not_found') {
               addNotification({ type: 'warning', title: 'No matching event found', message: String(result.detail ?? '') });
             } else if (result.status === 'ambiguous') {
@@ -344,6 +353,7 @@ function Shell() {
           }
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
+        <ConfirmBar items={confirmItems} onResolve={resolveConfirm} />
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
           <Routes>
