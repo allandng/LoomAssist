@@ -20,6 +20,8 @@ import { ProcrastinationToast } from '../components/calendar/ProcrastinationToas
 import { WarningStack } from '../components/calendar/WarningStack';
 import { YearView } from '../components/calendar/YearView';
 import { DragShader, type DragState, type SelectRange } from '../components/calendar/DragShader';
+import { QuickCreatePopover, type QuickCreateAnchor } from '../components/calendar/QuickCreatePopover';
+import { SelectionBar } from '../components/calendar/SelectionBar';
 import { TodayLineFreshness } from '../components/calendar/TodayLineFreshness';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
@@ -30,10 +32,10 @@ import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPr
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
-import { DEFAULT_TIMELINE_COLOR, tint } from '../lib/colors';
+import { tint } from '../lib/colors';
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
-  listCalendars, createCalendar, updateCalendar, deleteCalendar,
+  listCalendars, updateCalendar, deleteCalendar,
   listTemplates,
   analyzeSchedule,
   detectExamClusters,
@@ -139,12 +141,11 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
   );
 }
 
-// Module-scoped flag for the "Missed → Reschedule" recovery flow. Survives
-// the CalendarPage remount that fires on every event save (App mounts the
-// page with key={reloadKey}, so component-local refs would be reset). Set
-// when the user clicks Reschedule in MissedEventsModal; consumed when the
-// editor closes (either path: save → page remounts and the mount effect
-// reads it; cancel → modal-name transition watcher reads it).
+// Module-scoped flag for the "Missed → Reschedule" recovery flow. Set when the
+// user clicks Reschedule in MissedEventsModal; consumed when the editor closes
+// (either path — save or cancel) by the modal-name transition watcher, which
+// refetches the missed list and re-opens the modal. Module-scoped so it is
+// independent of component-instance lifetime.
 let pendingMissedRecovery = false;
 
 export function CalendarPage() {
@@ -152,7 +153,7 @@ export function CalendarPage() {
   const pendingDateRef = useRef<Date | null>(null);
   const nav = useCalendarNav();
   const { push: pushUndo } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, modal } = useModal();
+  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, modal } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
@@ -170,7 +171,7 @@ export function CalendarPage() {
   const [radar, setRadar] = useState<ProcrastinationWarning[]>([]);
   const [radarDismissed, setRadarDismissed] = useState<Record<number, string>>(() => getDismissed());
 
-  // Missed events (loaded on mount; refreshed implicitly via reloadKey remount)
+  // Missed events (loaded on mount; refreshed via the nav.reload() handoff)
   const [missedItems, setMissedItems] = useState<Event[]>([]);
   const [missedTruncated, setMissedTruncated] = useState(false);
   const prevModalNameRef = useRef<typeof modal.name>(modal.name);
@@ -185,6 +186,15 @@ export function CalendarPage() {
   // Drag-to-select tint (Phase v3.0 §8 ride-along #2)
   const [selectRange, setSelectRange] = useState<SelectRange | null>(null);
   const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
+  // WS3 #10 — plain-scroll period paging is opt-out. Read once (route remounts).
+  const wheelNavEnabled = localStorage.getItem('loom_wheel_nav') !== 'false';
+  // WS3 #5 — element dimmed as the drag "ghost at origin"; cleared on drag stop.
+  const dragSourceElRef = useRef<HTMLElement | null>(null);
+
+  // WS3 #1 — quick-create popover anchored to the drag/click selection.
+  const [quickCreate, setQuickCreate] = useState<
+    { start: Date; end: Date; allDay: boolean; anchor: QuickCreateAnchor } | null
+  >(null);
 
   // WS2: past-event dimming (opt-out). Read once on mount so a Settings toggle
   // takes effect the next time the calendar is navigated to (this route
@@ -205,8 +215,9 @@ export function CalendarPage() {
   const [peek, setPeek] = useState<{ event: Event; x: number; y: number } | null>(null);
   const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Double-click detection
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Double-click detection (timestamp-based — no 200ms selection delay: a single
+  // click selects immediately, a second within the window opens the editor).
+  const lastClickTimeRef = useRef<number>(0);
   const lastClickedIdRef = useRef<string | null>(null);
 
   // Sidebar collapse
@@ -266,6 +277,29 @@ export function CalendarPage() {
   }, []);
 
   useEffect(() => { loadAll(true); }, [loadAll]);
+
+  // WS3 #8 — refresh the "missed" list state (sidebar count) without reopening
+  // any modal. Used by the reload handoff and the initial mount fetch.
+  const refreshMissedState = useCallback(async () => {
+    try {
+      const { items, truncated } = await getMissedEvents();
+      setMissedItems(items);
+      setMissedTruncated(truncated);
+    } catch { /* silently ignore — sidebar shows empty state */ }
+  }, []);
+
+  // WS3 #8 — register the imperative refetch. Save/voice paths call nav.reload()
+  // instead of remounting the whole page (which discarded scroll/view/selection).
+  // Previously-rendered events stay on screen until the fetch resolves.
+  useEffect(() => {
+    nav.registerReload(async () => {
+      await loadAll();
+      await refreshMissedState();
+    });
+    // Clear on unmount so a modal saving from another page can't fire this
+    // instance's (now stale) loader.
+    return () => { nav.registerReload(() => {}); };
+  }, [nav, loadAll, refreshMissedState]);
 
   // Mutation-triggered exam-cluster detection. Skips the very first non-empty
   // events render (analyzeSchedule already seeds the banner on initial load).
@@ -461,7 +495,7 @@ export function CalendarPage() {
     openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
   }, [openMissedEvents, missedItems, missedTruncated, handleRecoverReschedule]);
 
-  // Initial load + after-save reload (page remounts on reloadKey).
+  // Initial mount fetch of the missed list (drives the sidebar count).
   useEffect(() => {
     let cancelled = false;
     getMissedEvents()
@@ -469,34 +503,32 @@ export function CalendarPage() {
         if (cancelled) return;
         setMissedItems(items);
         setMissedTruncated(truncated);
-        // Save-during-recovery path: page just remounted after editor save.
-        // Re-open the modal with the refreshed list (the saved event is gone
-        // from the list because the editor's auto-clear-on-save sent
-        // missed_at=null, so the GET filter excludes it now).
-        if (pendingMissedRecovery) {
-          pendingMissedRecovery = false;
-          if (items.length > 0) {
-            openMissedEvents(items, truncated, handleRecoverReschedule);
-          }
-        }
       })
       .catch(() => { /* silently ignore — sidebar shows empty state */ });
     return () => { cancelled = true; };
-  }, [openMissedEvents, handleRecoverReschedule]);
+  }, []);
 
-  // Cancel-during-recovery path: editor closes without save, so the page does
-  // NOT remount. Detect the modal-name transition and re-open the modal with
-  // the current (unchanged) list.
+  // Missed-recovery re-open. The page no longer remounts on save (WS3 #8), so
+  // both the save and cancel paths converge here: when the editor closes with a
+  // recovery in flight, fetch the *fresh* missed list (the saved event's
+  // missed_at was auto-cleared, so it drops out) and re-open the modal. The
+  // pendingMissedRecovery flag's set/consume semantics are unchanged.
   useEffect(() => {
     const prev = prevModalNameRef.current;
     prevModalNameRef.current = modal.name;
     if (prev === 'event-editor' && modal.name === null && pendingMissedRecovery) {
       pendingMissedRecovery = false;
-      if (missedItems.length > 0) {
-        openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
-      }
+      getMissedEvents()
+        .then(({ items, truncated }) => {
+          setMissedItems(items);
+          setMissedTruncated(truncated);
+          if (items.length > 0) {
+            openMissedEvents(items, truncated, handleRecoverReschedule);
+          }
+        })
+        .catch(() => { /* silently ignore */ });
     }
-  }, [modal.name, missedItems, missedTruncated, openMissedEvents, handleRecoverReschedule]);
+  }, [modal.name, openMissedEvents, handleRecoverReschedule]);
 
   // Wire TopBar sync status
   useEffect(() => {
@@ -532,7 +564,7 @@ export function CalendarPage() {
           api.changeView(ZOOM_VIEWS[nextIdx]);
           nav.setDateLabel(api.view.title);
         }
-      } else if (!TIME_GRID.has(viewType)) {
+      } else if (!TIME_GRID.has(viewType) && wheelNavEnabled) {
         // Plain scroll on month/agenda/list: navigate prev/next period
         e.preventDefault();
         if (e.deltaY > 0) {
@@ -542,11 +574,12 @@ export function CalendarPage() {
         }
         nav.setDateLabel(api.view.title);
       } else {
-        // Time-grid views: let the browser handle native hour scrolling
+        // Time-grid views (native hour scrolling) or wheel-nav disabled.
         return;
       }
 
-      wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 150);
+      // WS3 #10 — one period per gesture; 250ms lockout beats 150ms's overshoot.
+      wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 250);
     };
 
     el.addEventListener('wheel', handler, { passive: false });
@@ -554,7 +587,7 @@ export function CalendarPage() {
       el.removeEventListener('wheel', handler);
       if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
     };
-  }, [nav]);
+  }, [nav, wheelNavEnabled]);
 
   // ---- Computed FC events ----
   const fcEvents = useMemo(
@@ -616,17 +649,38 @@ export function CalendarPage() {
     const newStart  = arg.event.start!;
     const newEnd    = arg.event.end ?? new Date(newStart.getTime() + (prevEnd.getTime() - prevStart.getTime()));
 
+    // WS3 #6 — ⌥/Alt-drag duplicates: leave the original in place and create a
+    // copy at the drop time (macOS muscle memory).
+    if ((arg.jsEvent as MouseEvent | undefined)?.altKey) {
+      arg.revert();
+      const { id: _oldId, ...base } = ev;
+      const copyPayload = { ...base, start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
+      try {
+        const { event: created } = await createEvent(copyPayload);
+        pushUndo({
+          label: `Duplicate "${ev.title}"`,
+          undo: async () => { await deleteEvent(created.id); await loadAll(); },
+          redo: async () => { /* re-create not directly reversible */ },
+        });
+        await loadAll();
+      } catch {
+        addNotification({ type: 'error', title: 'Duplicate failed', message: 'Could not copy event.' });
+      }
+      return;
+    }
+
     const payload = { ...ev, start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
     const revert  = { ...ev, start_time: prevStart.toISOString(), end_time: prevEnd.toISOString() };
 
-    pushUndo({
-      label: `Move "${ev.title}"`,
-      undo: async () => { await updateEvent(ev.id, revert); await loadAll(); },
-      redo: async () => { await updateEvent(ev.id, payload); await loadAll(); },
-    });
-
     try {
+      // Optimistic: FC already moved the pill. Persist, then record undo — a
+      // failed PUT reverts and pushes no undo entry (WS3 #9).
       await updateEvent(ev.id, payload);
+      pushUndo({
+        label: `Move "${ev.title}"`,
+        undo: async () => { await updateEvent(ev.id, revert); await loadAll(); },
+        redo: async () => { await updateEvent(ev.id, payload); await loadAll(); },
+      });
       await loadAll();
       const sw = checkSleepWindow(payload.start_time, payload.end_time, !!ev.is_all_day);
       if (sw) {
@@ -646,14 +700,19 @@ export function CalendarPage() {
 
   // ---- Drag shader callbacks (Phase 2) ----
   const handleEventDragStart = useCallback((arg: EventDragStartArg) => {
+    // WS3 #5 — dim the source occurrence so it reads as a "ghost at origin".
+    const el = arg.el as HTMLElement | undefined;
+    if (el) { el.classList.add('loom-drag-source'); dragSourceElRef.current = el; }
     if (!dragShaderEnabled) return;
     const ev = arg.event.extendedProps.event as Event;
     const start = arg.event.start ?? new Date();
     const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
-    setDragging({ id: ev.id, start, end });
+    setDragging({ id: ev.id, fcId: arg.event.id, start, end });
   }, [dragShaderEnabled]);
 
   const handleEventDragStop = useCallback((_arg: EventDragStartArg) => {
+    dragSourceElRef.current?.classList.remove('loom-drag-source');
+    dragSourceElRef.current = null;
     setDragging(null);
   }, []);
 
@@ -669,7 +728,7 @@ export function CalendarPage() {
     const ev = arg.event.extendedProps.event as Event;
     const start = arg.event.start ?? new Date();
     const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
-    setDragging({ id: ev.id, start, end });
+    setDragging({ id: ev.id, fcId: arg.event.id, start, end });
   }, [dragShaderEnabled]);
 
   const handleResizeStop = useCallback((_arg: EventResizeStartArg) => {
@@ -682,14 +741,13 @@ export function CalendarPage() {
     const prevEnd  = arg.oldEvent.end!;
     const newEnd   = arg.event.end!;
 
-    pushUndo({
-      label: `Resize "${ev.title}"`,
-      undo: async () => { await updateEvent(ev.id, { ...ev, end_time: prevEnd.toISOString() }); await loadAll(); },
-      redo: async () => { await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });  await loadAll(); },
-    });
-
     try {
       await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });
+      pushUndo({
+        label: `Resize "${ev.title}"`,
+        undo: async () => { await updateEvent(ev.id, { ...ev, end_time: prevEnd.toISOString() }); await loadAll(); },
+        redo: async () => { await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });  await loadAll(); },
+      });
       await loadAll();
       const sw = checkSleepWindow(ev.start_time, newEnd.toISOString(), !!ev.is_all_day);
       if (sw) {
@@ -709,32 +767,31 @@ export function CalendarPage() {
 
   const handleEventClick = useCallback((arg: EventClickArg) => {
     const fcId = arg.event.id;
-    if (lastClickedIdRef.current === fcId && clickTimerRef.current !== null) {
-      // Double-click
-      clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
+    const ev: Event = arg.event.extendedProps.event;
+    const now = Date.now();
+
+    // Double-click (same occurrence within 350ms) opens the editor. Single click
+    // selects immediately — no artificial delay (WS3 #2).
+    if (lastClickedIdRef.current === fcId && now - lastClickTimeRef.current < 350) {
       lastClickedIdRef.current = null;
-      const ev: Event = arg.event.extendedProps.event;
+      lastClickTimeRef.current = 0;
       const instanceDate: string | undefined = arg.event.extendedProps.instanceDate;
       openEventEditor(ev, undefined, instanceDate);
       return;
     }
-    // Single click — 200 ms timer before treating as selection
+
     lastClickedIdRef.current = fcId;
-    clickTimerRef.current = setTimeout(() => {
-      clickTimerRef.current = null;
-      lastClickedIdRef.current = null;
-      const ev: Event = arg.event.extendedProps.event;
-      setSelectedEventIds(prev => {
-        const next = new Set(prev);
-        if (arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey) {
-          if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id);
-        } else {
-          if (next.has(ev.id) && next.size === 1) next.clear(); else { next.clear(); next.add(ev.id); }
-        }
-        return next;
-      });
-    }, 200);
+    lastClickTimeRef.current = now;
+    setQuickCreate(null);
+    setSelectedEventIds(prev => {
+      const next = new Set(prev);
+      if (arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey) {
+        if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id);
+      } else {
+        if (next.has(ev.id) && next.size === 1) next.clear(); else { next.clear(); next.add(ev.id); }
+      }
+      return next;
+    });
   }, [openEventEditor]);
 
   const handleMouseEnter = useCallback((arg: EventHoveringArg) => {
@@ -752,14 +809,87 @@ export function CalendarPage() {
     setPeek(null);
   }, []);
 
-  const handleSelect = useCallback((_arg: DateSelectArg) => {
-    // drag-to-select on calendar — handled by Click handler for multi-select;
-    // for new-event creation from dragging, open the editor
-    // openEventEditor(null, arg.startStr);
-    // calRef.current?.getApi().unselect();
-    // Clear the select-range tint once the drag ends.
+  // WS3 #1 — a drag (or click) on the empty grid opens the quick-create popover
+  // anchored to the selection rect, rather than jumping straight to the full
+  // 560px editor. The DragShader selection tint clears here; the popover renders
+  // over the (persisted) selection mirror.
+  const handleSelect = useCallback((arg: DateSelectArg) => {
     setSelectRange(null);
+
+    // Anchor to the union of the selection-highlight cells; fall back to the
+    // pointer position when the highlight isn't in the DOM.
+    let anchor: QuickCreateAnchor | null = null;
+    const els = document.querySelectorAll('.fc-highlight');
+    if (els.length) {
+      let top = Infinity, left = Infinity, bottom = -Infinity, right = -Infinity;
+      els.forEach(el => {
+        const r = el.getBoundingClientRect();
+        top = Math.min(top, r.top); left = Math.min(left, r.left);
+        bottom = Math.max(bottom, r.bottom); right = Math.max(right, r.right);
+      });
+      anchor = { top, left, bottom, right };
+    } else if (arg.jsEvent) {
+      const x = (arg.jsEvent as MouseEvent).clientX;
+      const y = (arg.jsEvent as MouseEvent).clientY;
+      anchor = { top: y, left: x, bottom: y, right: x };
+    }
+    if (!anchor) { calRef.current?.getApi().unselect(); return; }
+
+    setSelectedEventIds(new Set());
+    setPeek(null);
+    setQuickCreate({ start: arg.start, end: arg.end, allDay: arg.allDay, anchor });
   }, []);
+
+  const discardQuickCreate = useCallback(() => {
+    setQuickCreate(null);
+    calRef.current?.getApi().unselect();
+  }, []);
+
+  const buildQuickPayload = useCallback((title: string, calendarId: number, start: Date, end: Date, allDay: boolean): EventCreate => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+    return {
+      title,
+      start_time: allDay ? `${dateStr}T00:00:00` : start.toISOString(),
+      end_time:   allDay ? `${dateStr}T23:59:00` : end.toISOString(),
+      calendar_id: calendarId,
+      is_recurring: false, recurrence_days: '', recurrence_end: '',
+      description: '', unique_description: '', reminder_minutes: 0,
+      external_uid: '', timezone: 'local', is_all_day: allDay,
+      skipped_dates: '', per_day_times: '', checklist: '',
+    };
+  }, []);
+
+  const handleQuickCreateSubmit = useCallback(async (title: string, calendarId: number, end: Date) => {
+    if (!quickCreate) return;
+    localStorage.setItem('loom_last_timeline', String(calendarId));
+    const payload = buildQuickPayload(title, calendarId, quickCreate.start, end, quickCreate.allDay);
+    try {
+      const { event: created } = await createEvent(payload);
+      pushUndo({
+        label: `Create "${title}"`,
+        undo: async () => { await deleteEvent(created.id); await loadAll(); },
+        redo: async () => { /* re-create not directly reversible */ },
+      });
+      setQuickCreate(null);
+      calRef.current?.getApi().unselect();
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Could not create event', message: title });
+    }
+  }, [quickCreate, buildQuickPayload, pushUndo, loadAll, addNotification]);
+
+  const handleQuickCreateMore = useCallback((title: string, calendarId: number, end: Date) => {
+    if (!quickCreate) return;
+    localStorage.setItem('loom_last_timeline', String(calendarId));
+    const start = quickCreate.start;
+    setQuickCreate(null);
+    calRef.current?.getApi().unselect();
+    openEventEditor(null, undefined, undefined, start.toISOString(), end.toISOString(), {
+      title: title || undefined,
+      calendarId,
+    });
+  }, [quickCreate, openEventEditor]);
 
   // FullCalendar fires selectAllow on every drag-tick; we use it to track the
   // current selection range so DragShader can tint conflicts in --warning.
@@ -912,17 +1042,11 @@ export function CalendarPage() {
   }, [events.length]);
 
   // ---- Timeline actions ----
-  const handleNewTimeline = useCallback(async () => {
-    const name = window.prompt('New timeline name:');
-    if (!name?.trim()) return;
-    const cal = await createCalendar({ name: name.trim(), description: '', color: DEFAULT_TIMELINE_COLOR });
-    pushUndo({
-      label: `Create timeline "${cal.name}"`,
-      undo: async () => { await deleteCalendar(cal.id); await loadAll(); },
-      redo: async () => { /* re-create not possible without re-issuing POST, skip */ },
-    });
-    await loadAll();
-  }, [pushUndo, loadAll]);
+  // WS3 #11 — open the themed timeline editor in create mode instead of a raw
+  // window.prompt.
+  const handleNewTimeline = useCallback(() => {
+    openTimelineEditor();
+  }, [openTimelineEditor]);
 
   const handleRenameTimeline = useCallback(async (id: number, name: string) => {
     const prev = timelines.find(t => t.id === id)?.name ?? '';
@@ -948,8 +1072,19 @@ export function CalendarPage() {
     await loadAll();
   }, [timelines, pushUndo, loadAll]);
 
-  const handleApplyTemplate = useCallback((_t: EventTemplate) => {
-    openEventEditor(null, undefined, undefined);
+  // WS3 #3 — templates are quick-create accelerators: pre-fill the editor from
+  // the template (title, duration → now-rounded-to-next-15, recurrence, timeline)
+  // instead of discarding it.
+  const handleApplyTemplate = useCallback((t: EventTemplate) => {
+    const ms = 15 * 60_000;
+    const start = new Date(Math.ceil(Date.now() / ms) * ms);
+    const end = new Date(start.getTime() + (t.duration_minutes || 60) * 60_000);
+    openEventEditor(null, undefined, undefined, start.toISOString(), end.toISOString(), {
+      title: t.title,
+      calendarId: t.calendar_id || undefined,
+      isRecurring: t.is_recurring,
+      recurrenceDays: t.recurrence_days,
+    });
   }, [openEventEditor]);
 
   // ---- Time Block Template handlers ----
@@ -1112,7 +1247,7 @@ export function CalendarPage() {
           eventAllow={handleEventAllow}
           eventResizeStart={handleResizeStart}
           eventResizeStop={handleResizeStop}
-          datesSet={info => nav.setDateLabel(info.view.title)}
+          datesSet={info => { nav.setDateLabel(info.view.title); setQuickCreate(null); }}
           eventClassNames={arg => {
             const ev: Event = arg.event.extendedProps.event;
             const classes: string[] = [];
@@ -1128,7 +1263,7 @@ export function CalendarPage() {
         />
 
         {dragShaderEnabled && (
-          <DragShader dragging={dragging} selectRange={selectRange} events={events} />
+          <DragShader dragging={dragging} selectRange={selectRange} fcEvents={fcEvents} />
         )}
         <TodayLineFreshness view={nav.view} />
 
@@ -1148,7 +1283,35 @@ export function CalendarPage() {
         {peek && (
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />
         )}
+
+        {quickCreate && timelines.length > 0 && (
+          <QuickCreatePopover
+            start={quickCreate.start}
+            end={quickCreate.end}
+            allDay={quickCreate.allDay}
+            anchor={quickCreate.anchor}
+            timelines={timelines}
+            templates={templates}
+            defaultTimelineId={
+              (() => {
+                const last = Number(localStorage.getItem('loom_last_timeline'));
+                return timelines.some(t => t.id === last) ? last : (timelines[0]?.id ?? 0);
+              })()
+            }
+            onSubmit={handleQuickCreateSubmit}
+            onMoreOptions={handleQuickCreateMore}
+            onDiscard={discardQuickCreate}
+          />
+        )}
         </div>
+
+        <SelectionBar
+          count={selectedEventIds.size}
+          onDelete={() => void bulkDelete()}
+          onSnoozeDay={() => void snoozeSelected(1)}
+          onSnoozeWeek={() => void snoozeSelected(7)}
+          onClear={() => setSelectedEventIds(new Set())}
+        />
         <WarningStack>
           {examClusterWarning && !isClusterDismissed(getClusterEventIds(examClusterWarning)) && (
             <ExamClusterBanner

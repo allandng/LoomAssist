@@ -103,17 +103,27 @@ function toLocalDate(iso: string): string {
   return iso ? iso.split('T')[0] : '';
 }
 
+// WS3 #1/#3 — quick-create "More options" and template-apply seed a NEW event's
+// title / timeline / recurrence. Ignored when editing an existing `event`.
+export interface EventEditorPrefill {
+  title?: string;
+  calendarId?: number;
+  isRecurring?: boolean;
+  recurrenceDays?: string;
+}
+
 interface EventEditorModalProps {
   event?: Event | null;
   date?: string;         // pre-fill date (YYYY-MM-DD)
   instanceDate?: string; // for recurring occurrences
   startISO?: string;     // pre-fill exact start (ISO datetime, from smart scheduler)
   endISO?: string;       // pre-fill exact end
+  prefill?: EventEditorPrefill; // pre-fill fields for a new event (quick-create / template)
   timelines: Calendar[];
   onSaved: () => void;
 }
 
-export function EventEditorModal({ event, date, instanceDate, startISO, endISO, timelines, onSaved }: EventEditorModalProps) {
+export function EventEditorModal({ event, date, instanceDate, startISO, endISO, prefill, timelines, onSaved }: EventEditorModalProps) {
   const { close, openStudyBlock } = useModal();
   const { push: pushUndo } = useUndo();
   const { addNotification } = useNotifications();
@@ -122,7 +132,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const isLocked = event?.title === 'Meeting (availability booking)';
 
   // ---- Form state ----
-  const [title, setTitle]           = useState(event?.title ?? '');
+  const [title, setTitle]           = useState(event?.title ?? prefill?.title ?? '');
   const [allDay, setAllDay]         = useState(event?.is_all_day ?? false);
   const [startVal, setStartVal]     = useState(
     event    ? (event.is_all_day ? toLocalDate(event.start_time) : toLocalDT(event.start_time))
@@ -134,7 +144,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     : endISO ? toLocalDT(endISO)
     : (date  ? `${date}T10:00` : toLocalDT(new Date(Date.now() + 3_600_000).toISOString()))
   );
-  const [calendarId, setCalendarId] = useState(event?.calendar_id ?? timelines[0]?.id ?? 0);
+  const [calendarId, setCalendarId] = useState(event?.calendar_id ?? prefill?.calendarId ?? timelines[0]?.id ?? 0);
   const [reminder, setReminder]     = useState(event?.reminder_minutes ?? 0);
   const [reminderSource, setReminderSource] = useState<'user' | 'inferred' | 'none'>(
     event?.reminder_source === 'inferred' ? 'inferred' : event?.reminder_source === 'user' ? 'user' : 'none'
@@ -147,10 +157,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [checklist, setChecklist]   = useState<ChecklistItem[]>(parseChecklist(event?.checklist ?? ''));
 
   // Recurrence
-  const [recurring, setRecurring]   = useState(event?.is_recurring ?? false);
-  const [recurDays, setRecurDays]   = useState<number[]>(
-    event?.recurrence_days ? event.recurrence_days.split(',').map(Number).filter(n => !isNaN(n)) : []
-  );
+  const [recurring, setRecurring]   = useState(event?.is_recurring ?? prefill?.isRecurring ?? false);
+  const [recurDays, setRecurDays]   = useState<number[]>(() => {
+    const src = event?.recurrence_days ?? (event ? '' : prefill?.recurrenceDays) ?? '';
+    return src ? src.split(',').map(Number).filter(n => !isNaN(n)) : [];
+  });
   const [recurEnd, setRecurEnd]     = useState(event?.recurrence_end ? toLocalDate(event.recurrence_end) : '');
   const [skipDates, setSkipDates]   = useState(event?.skipped_dates ?? '');
 

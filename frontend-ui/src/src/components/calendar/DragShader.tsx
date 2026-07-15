@@ -1,7 +1,8 @@
-import type { Event } from '../../types';
+import type { EventInput } from '@fullcalendar/core';
 
 export interface DragState {
-  id: number;
+  id: number;      // numeric event id (kept for callers)
+  fcId: string;    // FullCalendar occurrence id of the element being dragged
   start: Date;
   end: Date;
 }
@@ -15,28 +16,42 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return !(aEnd <= bStart || aStart >= bEnd);
 }
 
-function hasConflict(start: Date, end: Date, events: Event[], excludeId: number): boolean {
-  for (const ev of events) {
-    if (ev.id === excludeId) continue;
-    try {
-      const evStart = new Date(ev.start_time);
-      const evEnd   = new Date(ev.end_time);
-      if (overlaps(start, end, evStart, evEnd)) return true;
-    } catch {
-      // ignore unparseable events
-    }
+// Parse an EventInput's start/end (ISO string in our pipeline) to a Date.
+function toDate(v: unknown): Date | null {
+  if (v == null) return null;
+  const d = new Date(v as string);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function isPrep(occ: EventInput): boolean {
+  return !!(occ.extendedProps as { isPrepBlock?: boolean } | undefined)?.isPrepBlock;
+}
+
+// WS3 #4 — conflict math runs over the EXPANDED occurrences (fcEvents), not the
+// raw stored rows. This makes recurring occurrences visible to the check and,
+// because fcEvents is already filtered to visible timelines, automatically
+// excludes hidden ones. Prep blocks and the dragged occurrence itself are
+// skipped.
+function hasConflict(start: Date, end: Date, occs: EventInput[], excludeFcId: string): boolean {
+  for (const occ of occs) {
+    if (occ.id === excludeFcId) continue;
+    if (isPrep(occ)) continue;
+    const s = toDate(occ.start);
+    const e = toDate(occ.end);
+    if (!s || !e) continue;
+    if (overlaps(start, end, s, e)) return true;
   }
   return false;
 }
 
-function countConflicts(start: Date, end: Date, events: Event[]): number {
+function countConflicts(start: Date, end: Date, occs: EventInput[]): number {
   let n = 0;
-  for (const ev of events) {
-    try {
-      const evStart = new Date(ev.start_time);
-      const evEnd   = new Date(ev.end_time);
-      if (overlaps(start, end, evStart, evEnd)) n++;
-    } catch { /* skip */ }
+  for (const occ of occs) {
+    if (isPrep(occ)) continue;
+    const s = toDate(occ.start);
+    const e = toDate(occ.end);
+    if (!s || !e) continue;
+    if (overlaps(start, end, s, e)) n++;
   }
   return n;
 }
@@ -45,9 +60,9 @@ function countConflicts(start: Date, end: Date, events: Event[]): number {
  * Injects dynamic styles into the document to tint the FullCalendar drag mirror
  * and highlight cells during event drag OR drag-to-select on empty grid.
  *
- * Phase v3.0 §8 ride-along #2: when drag-to-select overlaps existing events,
- * the highlight gains a 2px --warning left edge so the user sees the conflict
- * before the (eventual) Quick Create popover appears.
+ * WS3 #5 ride-along: while an event drag is active we keep the source rendered
+ * at reduced opacity (`.loom-drag-source`, class added by CalendarPage) so the
+ * user can compare the origin against the new slot.
  *
  * The component returns null — it works purely through a <style> tag so no DOM
  * wrapper is needed.
@@ -55,18 +70,20 @@ function countConflicts(start: Date, end: Date, events: Event[]): number {
 export function DragShader({
   dragging,
   selectRange,
-  events,
+  fcEvents,
 }: {
   dragging: DragState | null;
   selectRange?: SelectRange | null;
-  events: Event[];
+  fcEvents: EventInput[];
 }) {
   if (!dragging && !selectRange) return null;
 
   if (dragging) {
-    const conflicted = hasConflict(dragging.start, dragging.end, events, dragging.id);
+    const conflicted = hasConflict(dragging.start, dragging.end, fcEvents, dragging.fcId);
     const mirrorBg   = conflicted ? 'var(--drag-conflict)' : 'var(--drag-free)';
-    const mirrorBdr  = conflicted ? 'rgba(248,113,113,0.5)' : 'rgba(74,222,128,0.4)';
+    const mirrorBdr  = conflicted
+      ? 'color-mix(in srgb, var(--error) 50%, transparent)'
+      : 'color-mix(in srgb, var(--success) 40%, transparent)';
     const hlBg       = conflicted ? 'var(--drag-conflict)' : 'var(--drag-free)';
 
     return (
@@ -79,12 +96,16 @@ export function DragShader({
         .fc-highlight {
           background-color: ${hlBg} !important;
         }
+        .fc-event.loom-drag-source {
+          opacity: 0.4 !important;
+          visibility: visible !important;
+        }
       `}</style>
     );
   }
 
   // Drag-to-select on empty grid — count conflicts to set tint + left edge.
-  const n = selectRange ? countConflicts(selectRange.start, selectRange.end, events) : 0;
+  const n = selectRange ? countConflicts(selectRange.start, selectRange.end, fcEvents) : 0;
   const hlBg     = n > 0 ? 'var(--drag-conflict)' : 'var(--drag-free)';
   const leftEdge = n > 0 ? '2px solid var(--warning)' : '2px solid transparent';
   return (

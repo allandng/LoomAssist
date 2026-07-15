@@ -25,6 +25,11 @@ interface CalendarNavContextValue {
   goPrev: () => void;
   goToday: () => void;
   fcView: (v: CalendarView) => string;
+  // WS3 #8 — imperative refetch handoff. CalendarPage registers its `loadAll`
+  // here so save/voice paths can refresh the grid in place instead of
+  // remounting the whole page (which threw away scroll/view/selection).
+  registerReload: (fn: () => void | Promise<void>) => void;
+  reload: () => void;
 }
 
 const CalendarNavContext = createContext<CalendarNavContextValue | null>(null);
@@ -33,10 +38,17 @@ export function CalendarNavProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<CalendarView>('Month');
   const [dateLabel, setDateLabel] = useState('');
   const actionsRef = useRef<{ prev(): void; next(): void; today(): void; changeView(v: string): void } | null>(null);
+  const reloadRef = useRef<(() => void | Promise<void>) | null>(null);
 
   const registerActions = useCallback((actions: typeof actionsRef.current) => {
     actionsRef.current = actions;
   }, []);
+
+  const registerReload = useCallback((fn: () => void | Promise<void>) => {
+    reloadRef.current = fn;
+  }, []);
+
+  const reload = useCallback(() => { void reloadRef.current?.(); }, []);
 
   const goNext  = useCallback(() => actionsRef.current?.next(),  []);
   const goPrev  = useCallback(() => actionsRef.current?.prev(),  []);
@@ -49,8 +61,8 @@ export function CalendarNavProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<CalendarNavContextValue>(() => ({
-    view, dateLabel, setView: changeView, setDateLabel, registerActions, goNext, goPrev, goToday, fcView: v => FC_VIEW[v],
-  }), [view, dateLabel, changeView, setDateLabel, registerActions, goNext, goPrev, goToday]);
+    view, dateLabel, setView: changeView, setDateLabel, registerActions, goNext, goPrev, goToday, fcView: v => FC_VIEW[v], registerReload, reload,
+  }), [view, dateLabel, changeView, setDateLabel, registerActions, goNext, goPrev, goToday, registerReload, reload]);
 
   return <CalendarNavContext value={value}>{children}</CalendarNavContext>;
 }

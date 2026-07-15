@@ -69,6 +69,9 @@ function Shell() {
   const navigate   = useNavigate();
   const location   = useLocation();
   const nav        = useCalendarNav();
+  // WS3 #8 — stable imperative refetch. Save/voice paths refresh the calendar in
+  // place (CalendarPage registers its loader) instead of remounting the page.
+  const reloadCalendar = nav.reload;
   const { unreadCount, addNotification, panelOpen, togglePanel } = useNotifications();
 
   // First-launch redirect: route to /onboarding once.
@@ -83,7 +86,6 @@ function Shell() {
   const pathRoot = '/' + (location.pathname.split('/')[1] || '');
   const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'home';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
-  const [reloadKey, setReloadKey] = useState(0);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
 
   // Inbox panel state (Phase 4)
@@ -170,7 +172,7 @@ function Shell() {
                 destructive: action === 'cancel_event',
                 onConfirm: async () => {
                   await applyVoiceIntent({ action, event_id: ev.id as unknown as number, proposed_change: change });
-                  setReloadKey(k => k + 1);
+                  reloadCalendar();
                 },
               }]);
             } else if (result.status === 'not_found') {
@@ -191,7 +193,7 @@ function Shell() {
     } catch {
       addNotification({ type: 'error', title: 'Microphone unavailable', message: 'Grant microphone permission.' });
     }
-  }, [micActive, addNotification, setReloadKey]);
+  }, [micActive, addNotification, reloadCalendar]);
 
   useEffect(() => {
     const onChanged = () => setKeybinds(loadKeybinds());
@@ -358,7 +360,7 @@ function Shell() {
         <div className={styles.content}>
           <Routes>
             <Route path="/home"                        element={<HomePage />} />
-            <Route path="/calendar"                   element={<CalendarPage key={reloadKey} />} />
+            <Route path="/calendar"                   element={<CalendarPage />} />
             <Route path="/calendar/sync-review"        element={<SyncReviewPage />} />
             <Route path="/tasks"                       element={<TaskBoardPage />} />
             <Route path="/focus"                       element={<FocusPage />} />
@@ -371,7 +373,7 @@ function Shell() {
             <Route path="/settings/connections/:id"    element={<ConnectionDetailPage />} />
             <Route path="*"                            element={<Navigate to="/home" replace />} />
           </Routes>
-          <ModalRoot onSaved={() => setReloadKey(k => k + 1)} />
+          <ModalRoot onSaved={reloadCalendar} />
           <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         </div>
       </div>

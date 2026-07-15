@@ -130,6 +130,16 @@ export function SettingsPage() {
     localStorage.setItem('loom_dim_past', val ? 'true' : 'false');
   }
 
+  // ---- Wheel navigation (WS3) ----
+  const [wheelNav, setWheelNav] = useState<boolean>(
+    () => localStorage.getItem('loom_wheel_nav') !== 'false',
+  );
+  function handleWheelNavToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setWheelNav(val);
+    localStorage.setItem('loom_wheel_nav', val ? 'true' : 'false');
+  }
+
   // ---- Weekend wash (WS2) ----
   const [weekendWash, setWeekendWash] = useState<boolean>(
     () => localStorage.getItem('loom_weekend_wash') !== 'false',
@@ -492,6 +502,10 @@ export function SettingsPage() {
         <label className={styles.checkRow}>
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={wheelNav} onChange={handleWheelNavToggle} />
+          <span>Navigate months by scrolling the calendar</span>
         </label>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={weekendWash} onChange={handleWeekendWashToggle} />

@@ -173,6 +173,21 @@ export function CalendarSidebar({
   // Time Block Template apply week-picker state
   const [applyWeekFor,   setApplyWeekFor]   = useState<number | null>(null);
   const [applyWeekValue, setApplyWeekValue] = useState('');
+  // WS3 #11 — inline two-step confirm for time-block-template delete (the button
+  // flips to "Delete?" for 3s instead of a no-confirm native OS dialog).
+  const [confirmDeleteTbt, setConfirmDeleteTbt] = useState<number | null>(null);
+  const confirmDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestDeleteTbt = useCallback((id: number) => {
+    if (confirmDeleteTbt === id) {
+      if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+      setConfirmDeleteTbt(null);
+      onDeleteTimeBlockTemplate(id);
+      return;
+    }
+    setConfirmDeleteTbt(id);
+    if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+    confirmDeleteTimerRef.current = setTimeout(() => setConfirmDeleteTbt(null), 3000);
+  }, [confirmDeleteTbt, onDeleteTimeBlockTemplate]);
 
   const [filtersOpen, setFiltersOpen] = useState(true);
 
@@ -449,10 +464,10 @@ export function CalendarSidebar({
                     )}
                     <button
                       className={styles.tbtDeleteBtn}
-                      onClick={() => onDeleteTimeBlockTemplate(t.id)}
-                      title="Delete template"
+                      onClick={() => requestDeleteTbt(t.id)}
+                      title={confirmDeleteTbt === t.id ? 'Click again to confirm' : 'Delete template'}
                     >
-                      🗑
+                      {confirmDeleteTbt === t.id ? 'Delete?' : '🗑'}
                     </button>
                   </div>
                 </div>
