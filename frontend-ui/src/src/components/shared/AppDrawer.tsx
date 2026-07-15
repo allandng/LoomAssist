@@ -66,8 +66,6 @@ export function AppDrawer({ active, onNavigate, inboxCount = 0 }: AppDrawerProps
       })}
 
       <div className={styles.spacer} />
-
-      <div className={styles.avatar} aria-hidden="true">AN</div>
     </nav>
   );
 }

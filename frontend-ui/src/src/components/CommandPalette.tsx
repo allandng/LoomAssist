@@ -1,21 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styles from './CommandPalette.module.css';
 import { useModal } from '../contexts/ModalContext';
 import { listEvents, listTasks, listCalendars, runAllSync } from '../api';
+import { pushEscapeHandler } from '../lib/escapeStack';
 import type { Event, Task, Calendar } from '../types';
 
 interface PaletteItem {
   id: string;
   label: string;
   hint?: string;
-  group: 'Actions' | 'Events' | 'Tasks' | 'Timelines' | 'Settings';
+  group: 'Recent' | 'Actions' | 'Events' | 'Tasks' | 'Timelines' | 'Settings';
   run: () => void;
 }
 
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
+  onOpenShortcuts?: () => void;
+  onJumpToDate?: () => void;
+}
+
+const RECENTS_KEY = 'loom_palette_recents';
+
+function loadRecents(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENTS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function score(query: string, target: string): number {
@@ -34,7 +48,7 @@ function score(query: string, target: string): number {
   return s;
 }
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onOpenShortcuts, onJumpToDate }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { openEventEditor } = useModal();
   const [query, setQuery] = useState('');
@@ -42,6 +56,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [events, setEvents]       = useState<Event[]>([]);
   const [tasks, setTasks]         = useState<Task[]>([]);
   const [timelines, setTimelines] = useState<Calendar[]>([]);
+  const [recents, setRecents]     = useState<string[]>(loadRecents);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -50,21 +65,26 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     if (!open) return;
     setQuery('');
     setActive(0);
+    setRecents(loadRecents());
     listEvents().then(setEvents).catch(() => {});
     listTasks().then(setTasks).catch(() => {});
     listCalendars().then(setTimelines).catch(() => {});
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
-  // Trap Tab inside the dialog
+  // Own the top of the shared escape stack while open.
   useEffect(() => {
     if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return pushEscapeHandler(() => onClose());
   }, [open, onClose]);
+
+  // Persist the last 8 executed command ids (recents-first ranking).
+  const recordRecent = useCallback((id: string) => {
+    // Only remember stable action/settings ids — event/task rows churn.
+    if (!/^[as]:/.test(id)) return;
+    const next = [id, ...loadRecents().filter(x => x !== id)].slice(0, 8);
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  }, []);
 
   const items: PaletteItem[] = useMemo(() => {
     const out: PaletteItem[] = [];
@@ -81,6 +101,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       { id: 'a:sync-review',     label: 'Open Sync Review',           group: 'Actions', run: () => { navigate('/calendar/sync-review'); onClose(); } },
       { id: 'a:sync-now',        label: 'Sync all connections now',   group: 'Actions', run: () => { runAllSync().catch(() => {}); onClose(); } },
       { id: 'a:print',           label: 'Print current view',         group: 'Actions', run: () => { onClose(); setTimeout(() => window.print(), 50); } },
+      { id: 'a:jump-date',       label: 'Go to date…',                group: 'Actions', run: () => { onClose(); onJumpToDate?.(); } },
+      { id: 'a:shortcuts',       label: 'Show keyboard shortcuts',    group: 'Actions', run: () => { onClose(); onOpenShortcuts?.(); } },
       { id: 's:appearance',      label: 'Settings → Appearance',      group: 'Settings', run: () => { navigate('/settings#appearance'); onClose(); } },
       { id: 's:keybindings',     label: 'Settings → Keybindings',     group: 'Settings', run: () => { navigate('/settings#keybindings'); onClose(); } },
       { id: 's:lan-sync',        label: 'Settings → LAN Sync',        group: 'Settings', run: () => { navigate('/settings#lan-sync'); onClose(); } },
@@ -125,25 +147,54 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
 
     return out;
-  }, [events, tasks, timelines, navigate, openEventEditor, onClose]);
+  }, [events, tasks, timelines, navigate, openEventEditor, onClose, onJumpToDate, onOpenShortcuts]);
+
+  const runItem = useCallback((it: PaletteItem) => {
+    recordRecent(it.id);
+    it.run();
+  }, [recordRecent]);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return items.slice(0, 60);
+    if (!query.trim()) {
+      // Recents-first: surface the last-used commands in a synthetic group
+      // above the long tail (WS4 #11).
+      const byId = new Map(items.map(it => [it.id, it]));
+      const recentItems: PaletteItem[] = recents
+        .map(id => byId.get(id))
+        .filter((it): it is PaletteItem => !!it)
+        .map(it => ({ ...it, group: 'Recent' as const }));
+      const recentIds = new Set(recents);
+      const rest = items.filter(it => !recentIds.has(it.id));
+      return [...recentItems, ...rest].slice(0, 60);
+    }
     return items
       .map(it => ({ it, s: score(query, it.label) + (it.hint ? score(query, it.hint) * 0.2 : 0) }))
       .filter(({ s }) => s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, 60)
       .map(({ it }) => it);
-  }, [items, query]);
+  }, [items, query, recents]);
 
   // Reset active index when filtered list changes
   useEffect(() => { setActive(0); }, [query]);
 
+  // Panel-scoped Tab trap (WS4 #11 — the previous "trap" comment was a no-op).
+  const handleDialogKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusables = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button, [href], input, [tabindex]:not([tabindex="-1"])',
+    ) ?? [];
+    const arr = Array.from(focusables).filter(el => !(el as HTMLButtonElement).disabled);
+    if (arr.length === 0) return;
+    const first = arr[0], last = arr[arr.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }, []);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(i + 1, filtered.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(i - 1, 0)); }
-    else if (e.key === 'Enter')   { e.preventDefault(); filtered[active]?.run(); }
+    else if (e.key === 'Enter')   { e.preventDefault(); if (filtered[active]) runItem(filtered[active]); }
   }
 
   if (!open) return null;
@@ -167,8 +218,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         ref={dialogRef}
         className={styles.dialog}
         role="dialog"
+        aria-modal="true"
         aria-label="Command palette"
         onClick={e => e.stopPropagation()}
+        onKeyDown={handleDialogKey}
       >
         <input
           ref={inputRef}
@@ -198,7 +251,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       key={it.id}
                       className={`${styles.item} ${isActive ? styles.itemActive : ''}`}
                       onMouseEnter={() => setActive(itemIdx)}
-                      onClick={it.run}
+                      onClick={() => runItem(it)}
                     >
                       <span className={styles.itemLabel}>{it.label}</span>
                       {it.hint && <span className={styles.itemHint}>{it.hint}</span>}

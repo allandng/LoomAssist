@@ -21,8 +21,9 @@ import styles from './SettingsPage.module.css';
 
 const ACTION_ORDER: KeybindAction[] = [
   'new_event', 'today', 'sidebar_toggle', 'focus_mode',
-  'view_month', 'view_week', 'view_day', 'view_agenda',
-  'snooze_day', 'snooze_week', 'command_palette',
+  'view_month', 'view_week', 'view_day', 'view_year', 'view_agenda',
+  'prev_period', 'next_period', 'search', 'jump_date',
+  'delete_selected', 'snooze_day', 'snooze_week', 'shortcut_sheet', 'command_palette',
 ];
 
 export function SettingsPage() {

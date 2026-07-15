@@ -32,7 +32,7 @@ import { SyncProvider } from './contexts/SyncContext';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { listCalendars, listInbox } from './api';
 import { useShortcuts } from './hooks/useShortcuts';
-import { loadKeybinds } from './lib/keybindConfig';
+import { loadKeybinds, type KeybindAction } from './lib/keybindConfig';
 import { UndoProvider } from './contexts/UndoContext';
 import { ModalProvider } from './contexts/ModalContext';
 import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavContext';
@@ -41,8 +41,10 @@ import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { CommandPalette } from './components/CommandPalette';
 import { NotifPanel } from './components/NotifPanel';
+import { ShortcutSheet } from './components/shell/ShortcutSheet';
+import { JumpToDate } from './components/shell/JumpToDate';
 import { ConfirmBar, type ConfirmBarItem } from './components/ConfirmBar';
-import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
+import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
@@ -92,6 +94,9 @@ function Shell() {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // WS4 #8/#9 — keyboard cheat sheet + jump-to-date overlays.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [appTimelines, setAppTimelines] = useState<import('./types').Calendar[]>([]);
 
   useEffect(() => {
@@ -102,22 +107,20 @@ function Shell() {
     listInbox().then(items => setInboxCount(items.length)).catch(() => {});
   }, [inboxOpen]);
 
-  // Semantic search (Phase 6)
+  // Semantic search toggle (Phase 6). The results dropdown itself lives in the
+  // TopBar's search input (WS4 #5) — no more results-as-notification path.
   const [semanticEnabled, setSemanticEnabled] = useState(false);
-  const handleSearch = useCallback(async (q: string) => {
-    if (!semanticEnabled || q.trim().length < 3) return;
-    try {
-      const res = await semanticSearch(q.trim(), 5);
-      if (res.results.length === 0) {
-        addNotification({ type: 'info', title: 'No semantic matches', message: `No events match "${q}"` });
-      } else {
-        const titles = res.results.map(r => `${r.event.title} (${Math.round(r.score * 100)}%)`).join(', ');
-        addNotification({ type: 'info', title: `Semantic results for "${q}"`, message: titles, autoRemoveMs: 8000 });
-      }
-    } catch {
-      addNotification({ type: 'error', title: 'Semantic search failed', message: 'Is the backend running?' });
+
+  // WS4 #9 — jump to a date. On the calendar we nudge the live FullCalendar via
+  // a window event; from elsewhere we route to /calendar carrying the date.
+  const handleJump = useCallback((date: Date) => {
+    setJumpOpen(false);
+    if (dest === 'calendar') {
+      window.dispatchEvent(new CustomEvent('loom-jump-date', { detail: { date: date.toISOString() } }));
+    } else {
+      navigate('/calendar', { state: { date: date.toISOString() } });
     }
-  }, [semanticEnabled, addNotification]);
+  }, [dest, navigate]);
 
   // Voice intent handler (Phase 5)
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -302,20 +305,41 @@ function Shell() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useShortcuts(useMemo(() => [
-    { key: keybinds.sidebar_toggle.key, ctrl: keybinds.sidebar_toggle.ctrl, meta: keybinds.sidebar_toggle.meta, shift: keybinds.sidebar_toggle.shift, handler: () => toggleSidebar() },
-    { key: keybinds.focus_mode.key,     ctrl: keybinds.focus_mode.ctrl,     meta: keybinds.focus_mode.meta,     shift: keybinds.focus_mode.shift,     handler: () => goTo('focus') },
-    { key: keybinds.view_month.key,     ctrl: keybinds.view_month.ctrl,     meta: keybinds.view_month.meta,     shift: keybinds.view_month.shift,     handler: () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar') },
-    { key: keybinds.view_week.key,      ctrl: keybinds.view_week.ctrl,      meta: keybinds.view_week.meta,      shift: keybinds.view_week.shift,      handler: () => dest === 'calendar' ? nav.setView('Week')   : undefined },
-    { key: keybinds.view_day.key,       ctrl: keybinds.view_day.ctrl,       meta: keybinds.view_day.meta,       shift: keybinds.view_day.shift,       handler: () => dest === 'calendar' ? nav.setView('Day')    : undefined },
-    { key: keybinds.view_agenda.key,    ctrl: keybinds.view_agenda.ctrl,    meta: keybinds.view_agenda.meta,    shift: keybinds.view_agenda.shift,    handler: () => dest === 'calendar' ? nav.setView('Agenda') : undefined },
-    { key: keybinds.new_event.key,      ctrl: keybinds.new_event.ctrl,      meta: keybinds.new_event.meta,      shift: keybinds.new_event.shift,      handler: () => openEventEditor() },
-    { key: keybinds.today.key,          ctrl: keybinds.today.ctrl,          meta: keybinds.today.meta,          shift: keybinds.today.shift,          handler: () => nav.goToday() },
-    { key: keybinds.snooze_week.key,    ctrl: keybinds.snooze_week.ctrl,    meta: keybinds.snooze_week.meta,    shift: keybinds.snooze_week.shift,    handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })); } },
-    { key: keybinds.snooze_day.key,     ctrl: keybinds.snooze_day.ctrl,     meta: keybinds.snooze_day.meta,     shift: keybinds.snooze_day.shift,     handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })); } },
-    { key: 'i', ctrl: false, meta: false, shift: false, handler: () => setInboxOpen(o => !o) },
-    { key: keybinds.command_palette.key, ctrl: keybinds.command_palette.ctrl, meta: keybinds.command_palette.meta, shift: keybinds.command_palette.shift, force: true, handler: (e) => { e.preventDefault(); setPaletteOpen(o => !o); } },
-  ], [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
+  // WS4 #2/#3 — one truthful keyboard registry. Every binding reads its
+  // key + modifiers from keybindConfig (so Settings rebinds propagate) and the
+  // Shell dispatches by the current destination. Calendar-scoped actions
+  // reach CalendarPage through CalendarNavContext or a window event; the
+  // duplicate per-page useShortcuts call is gone.
+  useShortcuts(useMemo(() => {
+    const b = (action: KeybindAction, handler: (e: KeyboardEvent) => void, force = false) => {
+      const k = keybinds[action];
+      return { key: k.key, ctrl: k.ctrl, meta: k.meta, shift: k.shift, force, handler };
+    };
+    const onCal = (fn: () => void) => () => { if (dest === 'calendar') fn(); };
+    return [
+      b('sidebar_toggle',  () => toggleSidebar()),
+      b('focus_mode',      () => goTo('focus')),
+      b('view_month',      () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar')),
+      b('view_week',       onCal(() => nav.setView('Week'))),
+      b('view_day',        onCal(() => nav.setView('Day'))),
+      b('view_year',       onCal(() => nav.setView('Year'))),
+      b('view_agenda',     onCal(() => nav.setView('Agenda'))),
+      b('new_event',       () => openEventEditor()),
+      b('today',           onCal(() => nav.goToday())),
+      b('prev_period',     onCal(() => nav.goPrev())),
+      b('next_period',     onCal(() => nav.goNext())),
+      b('delete_selected', onCal(() => window.dispatchEvent(new CustomEvent('loom-delete-selected')))),
+      // Backspace is a non-rebindable alias for Delete on the calendar surface.
+      { key: 'Backspace', handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-delete-selected')); } },
+      b('snooze_week',     onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })))),
+      b('snooze_day',      onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })))),
+      b('search',          () => document.querySelector<HTMLInputElement>('.loom-search')?.focus()),
+      b('inbox',           () => setInboxOpen(o => !o)),
+      b('jump_date',       () => setJumpOpen(true)),
+      b('shortcut_sheet',  () => setSheetOpen(o => !o)),
+      b('command_palette', (e) => { e.preventDefault(); setPaletteOpen(o => !o); }, true),
+    ];
+  }, [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
 
   const topBarKind = (dest === 'home' ? 'home' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
@@ -344,7 +368,6 @@ function Shell() {
           unread={unreadCount}
           onBell={togglePanel}
           onMic={handleMic}
-          onSearch={handleSearch}
           semanticEnabled={semanticEnabled}
           onSemanticToggle={() => setSemanticEnabled(e => !e)}
           right={
@@ -374,7 +397,9 @@ function Shell() {
             <Route path="*"                            element={<Navigate to="/home" replace />} />
           </Routes>
           <ModalRoot onSaved={reloadCalendar} />
-          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setSheetOpen(true)} onJumpToDate={() => setJumpOpen(true)} />
+          {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
+          {jumpOpen && <JumpToDate onPick={handleJump} onClose={() => setJumpOpen(false)} />}
         </div>
       </div>
     </div>

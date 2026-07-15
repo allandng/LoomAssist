@@ -1,0 +1,116 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  display: grid;
+  place-items: center;
+  z-index: 400;
+}
+
+.sheet {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sheet { animation: sheetIn var(--motion-modal) var(--ease-decel); }
+  @keyframes sheetIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-main);
+  flex-shrink: 0;
+}
+
+.search {
+  flex: 1;
+  height: 32px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-main);
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.search:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.body {
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.group { margin-top: var(--space-5); }
+.group:first-child { margin-top: 0; }
+
+.groupLabel {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.rowDesc {
+  font-size: var(--text-sm);
+  color: var(--text-main);
+}
+
+.key {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-3);
+  white-space: nowrap;
+}
+
+.footer {
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.empty {
+  padding: var(--space-6);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

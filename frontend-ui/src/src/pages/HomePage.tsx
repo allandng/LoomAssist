@@ -43,9 +43,8 @@ export function HomePage() {
   const dateLabel = `${now.toLocaleDateString([], { weekday: 'long' })} ${dayN}${ORDINAL_SUFFIX(dayN)} ${now.toLocaleDateString([], { month: 'long' })}`;
 
   function handleHeatmapDay(date: Date) {
-    sessionStorage.setItem('loom_pending_date', date.toISOString());
-    sessionStorage.setItem('loom_pending_view', 'Day');
-    navigate('/calendar');
+    // WS4 #12 — hand off via route state instead of a sessionStorage side channel.
+    navigate('/calendar', { state: { date: date.toISOString(), view: 'Day' } });
   }
 
   return (

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -26,7 +27,7 @@ import { TodayLineFreshness } from '../components/calendar/TodayLineFreshness';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
-import { useShortcuts } from '../hooks/useShortcuts';
+import { pushEscapeHandler } from '../lib/escapeStack';
 import { useReminders } from '../hooks/useReminders';
 import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
@@ -151,6 +152,7 @@ let pendingMissedRecovery = false;
 export function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
   const pendingDateRef = useRef<Date | null>(null);
+  const location = useLocation();
   const nav = useCalendarNav();
   const { push: pushUndo } = useUndo();
   const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, modal } = useModal();
@@ -164,6 +166,9 @@ export function CalendarPage() {
   const [hiddenTimelineIds, setHiddenTimelineIds] = useState<Set<number>>(new Set());
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
+  // WS4 #10 — mini-calendar anchor + the main view's visible range (band).
+  const [miniAnchor, setMiniAnchor] = useState<Date>(() => new Date());
+  const [miniRange, setMiniRange] = useState<{ start: Date; end: Date } | null>(null);
   const [wellness, setWellness] = useState<{ date: string; message: string } | null>(null);
   // The detector emits at most one disjoint cluster today; the array shape on
   // /schedule/* allows more, so we render the first non-dismissed one.
@@ -437,15 +442,14 @@ export function CalendarPage() {
     pendingDateRef.current = null;
   }, [nav.view]);
 
-  // Cross-page navigation bridge: Home heatmap writes loom_pending_date.
-  // Picked up once on mount; switches to the requested view + date.
+  // Cross-page navigation bridge (WS4 #12): Home hands off via route state
+  // `{ date, view }` instead of an invisible sessionStorage side channel.
+  // Consumed once on mount.
   useEffect(() => {
-    const dateISO = sessionStorage.getItem('loom_pending_date');
-    const viewReq = sessionStorage.getItem('loom_pending_view');
-    if (!dateISO) return;
-    sessionStorage.removeItem('loom_pending_date');
-    sessionStorage.removeItem('loom_pending_view');
-    pendingDateRef.current = new Date(dateISO);
+    const st = location.state as { date?: string; view?: string } | null;
+    if (!st?.date) return;
+    pendingDateRef.current = new Date(st.date);
+    const viewReq = st.view;
     if (viewReq === 'Day' || viewReq === 'Week' || viewReq === 'Month' || viewReq === 'Agenda') {
       nav.setView(viewReq);
     } else {
@@ -468,6 +472,27 @@ export function CalendarPage() {
   const handleYearMonthClick = useCallback((date: Date) => {
     pendingDateRef.current = date;
     nav.setView('Month');
+  }, [nav]);
+
+  // WS4 #10 — mini-calendar: single click moves the anchor date without
+  // changing the view type; double-click drops into Day view.
+  const handleMiniPick = useCallback((date: Date) => {
+    if (nav.view === 'Year') {
+      pendingDateRef.current = date;
+      nav.setView('Month');
+      return;
+    }
+    const api = calRef.current?.getApi();
+    if (api) {
+      api.gotoDate(date);
+      nav.setDateLabel(api.view.title);
+      setMiniAnchor(api.view.currentStart);
+    }
+  }, [nav]);
+
+  const handleMiniPickDay = useCallback((date: Date) => {
+    pendingDateRef.current = date;
+    nav.setView('Day');
   }, [nav]);
 
   const handleFindFreeSlots = useCallback(async (durationMins: number): Promise<FreeSlot[]> => {
@@ -1144,17 +1169,40 @@ export function CalendarPage() {
     await loadAll();
   }, [loadAll]);
 
-  // ---- Keyboard shortcuts ----
-  useShortcuts(useMemo(() => [
-    { key: 'n', handler: () => openEventEditor(null) },
-    { key: 't', handler: () => calRef.current?.getApi().today() },
-    { key: '[', handler: () => { calRef.current?.getApi().prev(); nav.setDateLabel(calRef.current?.getApi().view.title ?? ''); } },
-    { key: ']', handler: () => { calRef.current?.getApi().next(); nav.setDateLabel(calRef.current?.getApi().view.title ?? ''); } },
-    { key: 'Delete',    handler: () => bulkDelete() },
-    { key: 'Backspace', handler: () => bulkDelete() },
-    { key: 'Escape', handler: () => setSelectedEventIds(new Set()) },
-    { key: '/', handler: () => { document.querySelector<HTMLInputElement>('.loom-search')?.focus(); } },
-  ], [openEventEditor, bulkDelete, nav]));
+  // ---- Keyboard shortcuts (WS4 #2) ----
+  // The calendar's keys now live in the single central registry (App/Shell +
+  // keybindConfig). New-event / today / prev / next / search dispatch through
+  // CalendarNavContext; delete arrives as a window event (like snooze) and
+  // Escape-to-clear-selection sits at the BOTTOM of the shared escape stack so
+  // it only fires once nothing more specific (modal, popover, palette) is open.
+  const selectedIdsRef = useRef(selectedEventIds);
+  useEffect(() => { selectedIdsRef.current = selectedEventIds; }, [selectedEventIds]);
+  useEffect(() => pushEscapeHandler(() => {
+    if (selectedIdsRef.current.size === 0) return false; // fall through
+    setSelectedEventIds(new Set());
+  }), []);
+
+  useEffect(() => {
+    const handler = () => void bulkDelete();
+    window.addEventListener('loom-delete-selected', handler);
+    return () => window.removeEventListener('loom-delete-selected', handler);
+  }, [bulkDelete]);
+
+  // WS4 #9 — jump-to-date from the TopBar overlay navigates the live calendar
+  // while preserving the current view.
+  useEffect(() => {
+    const handler = (e: globalThis.Event) => {
+      const detail = (e as CustomEvent<{ date: string }>).detail;
+      if (!detail?.date) return;
+      const d = new Date(detail.date);
+      if (isNaN(d.getTime())) return;
+      if (nav.view === 'Year') { pendingDateRef.current = d; nav.setView('Month'); return; }
+      const api = calRef.current?.getApi();
+      if (api) { api.gotoDate(d); nav.setDateLabel(api.view.title); setMiniAnchor(api.view.currentStart); }
+    };
+    window.addEventListener('loom-jump-date', handler as EventListener);
+    return () => window.removeEventListener('loom-jump-date', handler as EventListener);
+  }, [nav]);
 
   return (
     <div className={styles.page}>
@@ -1190,6 +1238,12 @@ export function CalendarPage() {
         onDeleteTimeBlockTemplate={handleDeleteTimeBlockTemplate}
         missedCount={missedItems.length}
         onOpenMissed={handleOpenMissed}
+        events={events}
+        miniAnchor={miniAnchor}
+        miniRangeStart={miniRange?.start ?? null}
+        miniRangeEnd={miniRange?.end ?? null}
+        onMiniPick={handleMiniPick}
+        onMiniPickDay={handleMiniPickDay}
       />
 
       <div ref={mainRef} className={styles.main}>
@@ -1247,7 +1301,12 @@ export function CalendarPage() {
           eventAllow={handleEventAllow}
           eventResizeStart={handleResizeStart}
           eventResizeStop={handleResizeStop}
-          datesSet={info => { nav.setDateLabel(info.view.title); setQuickCreate(null); }}
+          datesSet={info => {
+            nav.setDateLabel(info.view.title);
+            setQuickCreate(null);
+            setMiniAnchor(info.view.currentStart);
+            setMiniRange({ start: info.start, end: info.end });
+          }}
           eventClassNames={arg => {
             const ev: Event = arg.event.extendedProps.event;
             const classes: string[] = [];

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './NotifPanel.module.css';
 import { Icon, Icons } from './shared/Icon';
+import { pushEscapeHandler } from '../lib/escapeStack';
 import { useNotifications, type Notification } from '../store/notifications';
 
 interface NotifPanelProps {
@@ -134,15 +135,18 @@ export function NotifPanel({ onClose }: NotifPanelProps) {
   const { notifications, dismissNotification, dismissChild, clearAllNotifications, markAllRead } = useNotifications();
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Light-dismiss popover (WS7 #5): no dimming backdrop, no aria-modal. Esc,
-  // click-outside, and a panel-scoped Tab trap. Marking read is now an explicit
-  // user action (the "Mark all read" button) — not a side effect of opening.
+  // Light-dismiss popover (WS7 #5): no dimming backdrop, no aria-modal. Esc goes
+  // through the shared escape stack (WS4 #7) so it only closes the top layer;
+  // click-outside + a panel-scoped Tab trap stay local. Marking read is an
+  // explicit user action (the "Mark all read" button) — not a side effect of
+  // opening.
   useEffect(() => {
     const firstFocusable = panelRef.current?.querySelector<HTMLElement>('button, [href], input');
     firstFocusable?.focus();
 
+    const popEscape = pushEscapeHandler(() => onClose());
+
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { onClose(); return; }
       if (e.key === 'Tab') {
         const focusables = panelRef.current?.querySelectorAll<HTMLElement>('button, [href], input, [tabindex]:not([tabindex="-1"])') ?? [];
         const arr = Array.from(focusables).filter(el => !(el as HTMLButtonElement).disabled);
@@ -165,6 +169,7 @@ export function NotifPanel({ onClose }: NotifPanelProps) {
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', onPointerDown, true);
     return () => {
+      popEscape();
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointerDown, true);
     };

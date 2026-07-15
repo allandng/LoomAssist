@@ -3,8 +3,9 @@ import styles from './CalendarSidebar.module.css';
 import { Icon, Icons } from '../shared/Icon';
 import { Kbd } from '../shared/Kbd';
 import { SectionLabel } from '../shared/SectionLabel';
+import { MiniCalendar } from './MiniCalendar';
 import { useModal } from '../../contexts/ModalContext';
-import type { Calendar, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
+import type { Calendar, Event, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
 
 export interface ScanEventEdit {
   title: string;
@@ -52,6 +53,13 @@ interface CalendarSidebarProps {
   onDeleteTimeBlockTemplate: (id: number) => void;
   missedCount: number;
   onOpenMissed: () => void;
+  // WS4 #10 — mini-calendar data + navigation.
+  events: Event[];
+  miniAnchor: Date;
+  miniRangeStart: Date | null;
+  miniRangeEnd: Date | null;
+  onMiniPick: (d: Date) => void;
+  onMiniPickDay: (d: Date) => void;
 }
 
 // ── Scan event card ──────────────────────────────────────────────
@@ -162,6 +170,12 @@ export function CalendarSidebar({
   onDeleteTimeBlockTemplate,
   missedCount,
   onOpenMissed,
+  events,
+  miniAnchor,
+  miniRangeStart,
+  miniRangeEnd,
+  onMiniPick,
+  onMiniPickDay,
 }: CalendarSidebarProps) {
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const { openTimelineEditor } = useModal();
@@ -280,6 +294,16 @@ export function CalendarSidebar({
       {/* ── Normal mode ────────────────── */}
       {open && !isScanMode && (
         <div className={styles.scroll}>
+          <MiniCalendar
+            events={events}
+            timelines={timelines}
+            anchorDate={miniAnchor}
+            rangeStart={miniRangeStart}
+            rangeEnd={miniRangeEnd}
+            onPick={onMiniPick}
+            onPickDay={onMiniPickDay}
+          />
+
           {/* Timelines */}
           <SectionLabel right={
             <button className={styles.miniPlus} onClick={onNewTimeline} title="New timeline">

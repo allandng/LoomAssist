@@ -1,0 +1,64 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 18vh;
+  z-index: 400;
+}
+
+.popover {
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  padding: var(--space-5);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .popover { animation: jumpIn var(--motion-base) var(--ease-decel); }
+  @keyframes jumpIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}
+
+.label {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.input {
+  height: 38px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-md);
+  color: var(--text-main);
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.error {
+  font-size: var(--text-xs);
+  color: var(--error);
+}
+
+.hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}

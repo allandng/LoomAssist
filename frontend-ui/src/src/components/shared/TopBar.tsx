@@ -1,8 +1,9 @@
 import type { ReactNode, ChangeEvent, KeyboardEvent } from 'react';
-import { useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import styles from './TopBar.module.css';
 import { Icon, Icons } from './Icon';
 import { Kbd } from './Kbd';
+import { SearchDropdown } from '../topbar/SearchDropdown';
 
 type TopBarKind = 'home' | 'calendar' | 'tasks' | 'focus' | 'settings';
 type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
@@ -26,12 +27,9 @@ interface TopBarProps {
   onNext?: () => void;
   unread?: number;
   onBell?: () => void;
-  onSearch?: (query: string) => void;
   onMic?: () => void;
   semanticEnabled?: boolean;
   onSemanticToggle?: () => void;
-  syncStatus?: 'ok' | 'error' | 'syncing';
-  syncLabel?: string;
   right?: ReactNode;
 }
 
@@ -45,23 +43,23 @@ export function TopBar({
   onNext,
   unread = 0,
   onBell,
-  onSearch,
   onMic,
   semanticEnabled = false,
   onSemanticToggle,
-  syncStatus = 'ok',
-  syncLabel = 'Synced',
   right,
 }: TopBarProps) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
 
   function handleSearchKey(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Escape') searchRef.current?.blur();
+    if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); }
   }
 
   function handleSearchChange(e: ChangeEvent<HTMLInputElement>) {
-    onSearch?.(e.target.value);
+    setQuery(e.target.value);
   }
+
+  const closeSearch = useCallback(() => { setQuery(''); searchRef.current?.blur(); }, []);
 
   return (
     <header className={styles.bar}>
@@ -101,19 +99,23 @@ export function TopBar({
       )}
 
       <div className={styles.spacer} />
-      {right}
 
       {/* Search */}
-      <label className={styles.searchWrap}>
+      <label className={`${styles.searchWrap} loom-search-wrap`}>
         <Icon d={Icons.search} size={14} className={styles.searchIcon} />
         <input
           ref={searchRef}
-          className={styles.searchInput}
+          className={`${styles.searchInput} loom-search`}
           placeholder={semanticEnabled ? 'Semantic search…' : 'Search events, timelines…'}
+          value={query}
           onChange={handleSearchChange}
           onKeyDown={handleSearchKey}
+          aria-label="Search"
         />
         <Kbd small>/</Kbd>
+        {query.trim().length >= 2 && (
+          <SearchDropdown query={query} semantic={semanticEnabled} onClose={closeSearch} />
+        )}
       </label>
       {onSemanticToggle && (
         <button
@@ -137,15 +139,6 @@ export function TopBar({
         </span>
       </button>
 
-      {/* Sync indicator */}
-      <div
-        className={`${styles.sync} ${syncStatus === 'error' ? styles.syncError : ''}`}
-        title={syncLabel}
-      >
-        <span className={`${styles.syncDot} ${syncStatus === 'syncing' ? styles.syncDotPulse : ''}`} />
-        {syncLabel}
-      </div>
-
       {/* Bell */}
       <div className={styles.bellWrap}>
         <button className={styles.iconBtn} onClick={onBell} aria-label="Notifications">
@@ -157,6 +150,9 @@ export function TopBar({
           </span>
         )}
       </div>
+
+      {/* SyncCenter + AccountAvatar (avatar rightmost per CLAUDE.md contract) */}
+      {right}
     </header>
   );
 }
