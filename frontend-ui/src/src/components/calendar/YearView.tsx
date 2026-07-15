@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import type { Event, Calendar } from '../../types';
+import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 import styles from './YearView.module.css';
 
 const MONTH_NAMES = [
@@ -40,10 +41,25 @@ export function YearView({ events, onDayClick, onMonthClick, timelines = [], onE
     wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 200);
   }, []);
 
-  const eventDates = new Set<string>();
+  // Per-day density: event count + the dominant timeline's color, so the
+  // mini-calendar shows 1–3 density dots pre-navigation (WS2 §10).
+  const dayDensity = new Map<string, { count: number; byCal: Record<number, number> }>();
   for (const ev of events) {
-    eventDates.add(ev.start_time.slice(0, 10));
+    const ds = ev.start_time.slice(0, 10);
+    const info = dayDensity.get(ds) ?? { count: 0, byCal: {} };
+    info.count += 1;
+    info.byCal[ev.calendar_id] = (info.byCal[ev.calendar_id] ?? 0) + 1;
+    dayDensity.set(ds, info);
   }
+
+  const dotColorFor = (byCal: Record<number, number>): string => {
+    let bestId = -1;
+    let bestN = -1;
+    for (const [id, n] of Object.entries(byCal)) {
+      if (n > bestN) { bestN = n; bestId = Number(id); }
+    }
+    return timelines.find(t => t.id === bestId)?.color ?? DEFAULT_TIMELINE_COLOR;
+  };
 
   return (
     <div className={styles.root} onWheel={handleWheel}>
@@ -105,7 +121,9 @@ export function YearView({ events, onDayClick, onMonthClick, timelines = [], onE
                   if (!day) return <span key={i} className={styles.empty} />;
                   const ds = `${year}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                   const isToday = ds === todayStr;
-                  const hasEvent = eventDates.has(ds);
+                  const density = dayDensity.get(ds);
+                  const dotCount = density ? (density.count >= 5 ? 3 : density.count >= 3 ? 2 : 1) : 0;
+                  const dotColor = density ? dotColorFor(density.byCal) : undefined;
                   return (
                     <button
                       key={i}
@@ -114,7 +132,13 @@ export function YearView({ events, onDayClick, onMonthClick, timelines = [], onE
                       title={ds}
                     >
                       <span className={styles.dayNum}>{day}</span>
-                      {hasEvent && <span className={styles.dot} />}
+                      {dotCount > 0 && (
+                        <span className={styles.dots}>
+                          {Array.from({ length: dotCount }, (_, di) => (
+                            <span key={di} className={styles.dot} style={{ background: dotColor }} />
+                          ))}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

@@ -141,11 +141,19 @@
   font-weight: 700;
 }
 
+.dots {
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+  align-items: center;
+  height: 3px;
+}
+
 .dot {
   display: block;
   width: 3px;
   height: 3px;
   border-radius: 50%;
   background: var(--accent);
-  opacity: 0.7;
+  opacity: 0.85;
 }

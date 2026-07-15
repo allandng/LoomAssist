@@ -30,7 +30,7 @@ import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPr
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
-import { DEFAULT_TIMELINE_COLOR } from '../lib/colors';
+import { DEFAULT_TIMELINE_COLOR, tint } from '../lib/colors';
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
   listCalendars, createCalendar, updateCalendar, deleteCalendar,
@@ -56,6 +56,18 @@ const FC_VIEW: Record<string, string> = {
   Month: 'dayGridMonth', Week: 'timeGridWeek', Day: 'timeGridDay', Agenda: 'listWeek',
 };
 
+// Module-level cache of the deadline-chip threshold (days). Read once at module
+// load instead of on every EventPill render; refreshed when another window
+// changes the setting via the `storage` event (WS2 audit #18).
+let deadlineChipDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'loom_deadline_chip_days' || e.key === null) {
+      deadlineChipDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+    }
+  });
+}
+
 // ---- EventPill rendered inside FullCalendar ----
 function EventPill({ info, timelines }: { info: EventContentArg; timelines: Calendar[] }) {
   const ev: Event = info.event.extendedProps.event;
@@ -71,7 +83,7 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
 
   const now = new Date();
   const start = info.event.start;
-  const thresholdDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+  const thresholdDays = deadlineChipDays;
   let chipLabel = '';
   let isUrgent = false;
   if (!isPrepBlock && start && start > now) {
@@ -85,12 +97,17 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
     }
   }
 
+  // Contrast recipe (anatomy unchanged): tint the timeline hue over the themed
+  // panel surface so the wash follows light/dark mode, and derive the inherited
+  // text tone by mixing the hue toward the theme's text color (guarantees
+  // legibility while preserving the hue as the cue). All-day spans keep the
+  // solid fill + white text. See WS2 §7 / contrast test.
   return (
     <div
       className={`${styles.pill}${isPrepBlock ? ` ${styles.prepPill}` : ''}`}
       style={{
-        background: isSpan ? color : `${color}${isPrepBlock ? '11' : '22'}`,
-        color: isSpan ? 'white' : color,
+        background: isSpan ? color : tint(color, isPrepBlock ? 8 : 14, 'var(--bg-panel)'),
+        color: isSpan ? 'white' : `color-mix(in srgb, ${color} 55%, var(--text-main))`,
         borderLeft: isSpan ? 'none' : `2px solid ${color}`,
       }}
       draggable={!isPrepBlock}
@@ -168,6 +185,21 @@ export function CalendarPage() {
   // Drag-to-select tint (Phase v3.0 §8 ride-along #2)
   const [selectRange, setSelectRange] = useState<SelectRange | null>(null);
   const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
+
+  // WS2: past-event dimming (opt-out). Read once on mount so a Settings toggle
+  // takes effect the next time the calendar is navigated to (this route
+  // remounts), without a localStorage read per pill.
+  const dimPast = useMemo(() => localStorage.getItem('loom_dim_past') !== 'false', []);
+
+  // Empty-grid overlay (one-time, dismissible, month view only).
+  const [emptyDismissed, setEmptyDismissed] = useState(false);
+
+  // WS2: weekend-wash toggle → body class the grid CSS keys off. Applied on
+  // mount so it survives a boot where Settings was never opened.
+  useEffect(() => {
+    const washOn = localStorage.getItem('loom_weekend_wash') !== 'false';
+    document.body.classList.toggle('loom-no-weekend-wash', !washOn);
+  }, []);
 
   // QuickPeek state
   const [peek, setPeek] = useState<{ event: Event; x: number; y: number } | null>(null);
@@ -1059,6 +1091,14 @@ export function CalendarPage() {
           eventStartEditable={true}
           selectable
           selectMirror
+          snapDuration="00:15:00"
+          eventDragMinDistance={5}
+          dragRevertDuration={200}
+          slotEventOverlap={false}
+          nowIndicator={true}
+          dayMaxEvents={true}
+          moreLinkClick="popover"
+          defaultTimedEventDuration="00:30:00"
           height="100%"
           eventDrop={handleEventDrop}
           eventResize={handleEventResize}
@@ -1075,7 +1115,15 @@ export function CalendarPage() {
           datesSet={info => nav.setDateLabel(info.view.title)}
           eventClassNames={arg => {
             const ev: Event = arg.event.extendedProps.event;
-            return selectedEventIds.has(ev.id) ? ['loom-event-selected'] : [];
+            const classes: string[] = [];
+            if (selectedEventIds.has(ev.id)) classes.push('loom-event-selected');
+            // Dim occurrences whose end is in the past (per-occurrence — uses the
+            // FC event's own end, so a single recurring row dims only its
+            // elapsed instances).
+            if (dimPast && arg.event.end && arg.event.end.getTime() < Date.now()) {
+              classes.push('loom-event-past');
+            }
+            return classes;
           }}
         />
 
@@ -1083,6 +1131,19 @@ export function CalendarPage() {
           <DragShader dragging={dragging} selectRange={selectRange} events={events} />
         )}
         <TodayLineFreshness view={nav.view} />
+
+        {nav.view === 'Month' && lastSync && events.length === 0 && !emptyDismissed && (
+          <div className={styles.emptyOverlay}>
+            <div className={styles.emptyCard}>
+              <p className={styles.emptyText}>
+                Drag on the grid or press <kbd className={styles.emptyKbd}>N</kbd> to create your first event.
+              </p>
+              <button className="loom-btn-ghost" onClick={() => setEmptyDismissed(true)}>
+                Got it
+              </button>
+            </div>
+          </div>
+        )}
 
         {peek && (
           <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />

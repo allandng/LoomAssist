@@ -120,6 +120,28 @@ export function SettingsPage() {
     localStorage.setItem('loom_drag_shader_enabled', val ? 'true' : 'false');
   }
 
+  // ---- Past-event dimming (WS2) ----
+  const [dimPast, setDimPast] = useState<boolean>(
+    () => localStorage.getItem('loom_dim_past') !== 'false',
+  );
+  function handleDimPastToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setDimPast(val);
+    localStorage.setItem('loom_dim_past', val ? 'true' : 'false');
+  }
+
+  // ---- Weekend wash (WS2) ----
+  const [weekendWash, setWeekendWash] = useState<boolean>(
+    () => localStorage.getItem('loom_weekend_wash') !== 'false',
+  );
+  function handleWeekendWashToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setWeekendWash(val);
+    localStorage.setItem('loom_weekend_wash', val ? 'true' : 'false');
+    // Apply immediately so the grid reflects it on next visit / behind this page.
+    document.body.classList.toggle('loom-no-weekend-wash', !val);
+  }
+
   // ---- Spoken briefing (Future-features 2C) ----
   const [speakBriefing, setSpeakBriefing] = useState<boolean>(
     () => localStorage.getItem('loom_speak_briefing') === 'true',
@@ -407,6 +429,11 @@ export function SettingsPage() {
           <input type="checkbox" checked={dyslexicFont} onChange={e => setDyslexicFont(e.target.checked)} />
           <span>Use dyslexia-friendly font (OpenDyslexic if installed)</span>
         </label>
+
+        <label className={styles.checkRow} style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={dimPast} onChange={handleDimPastToggle} />
+          <span>Reduce brightness of past events</span>
+        </label>
       </section>
 
       {/* Keyboard Shortcuts */}
@@ -465,6 +492,10 @@ export function SettingsPage() {
         <label className={styles.checkRow}>
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={weekendWash} onChange={handleWeekendWashToggle} />
+          <span>Highlight weekends in the calendar grid</span>
         </label>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={speakBriefing} onChange={handleSpeakBriefingToggle} />

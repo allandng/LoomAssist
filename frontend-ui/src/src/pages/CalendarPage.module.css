@@ -22,9 +22,53 @@
   --fc-page-bg-color: var(--bg-main);
   --fc-neutral-bg-color: var(--bg-panel);
   --fc-list-event-hover-bg-color: var(--bg-elevated);
+  --fc-now-indicator-color: var(--error);
   font-family: var(--font-sans);
   font-size: 13px;
   height: 100%;
+}
+
+/* ── WS2: time-grid density + layered gridlines ──
+   24px per 30-min slot → 48px/hour, the desktop standard. */
+:global(.fc .fc-timegrid-slot) {
+  height: 24px;
+}
+
+/* Two-weight line system: solid hour lines (--border), dotted + faded
+   half-hour lines. Never --border-strong inside the grid. */
+:global(.fc .fc-timegrid-slot-minor) {
+  border-top-style: dotted;
+  border-top-color: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+/* ── WS2: now-line — 2px, with a filled dot at the left terminus ── */
+:global(.fc .fc-timegrid-now-indicator-line) {
+  border-width: 2px;
+}
+
+:global(.fc .fc-timegrid-now-indicator-line::before) {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+/* ── WS2: weekend wash (opt-out via body.loom-no-weekend-wash) ──
+   Kept beneath the today tint via :not(.fc-day-today). */
+:global(body:not(.loom-no-weekend-wash) .fc .fc-day-sat:not(.fc-day-today) .fc-timegrid-col-frame),
+:global(body:not(.loom-no-weekend-wash) .fc .fc-day-sun:not(.fc-day-today) .fc-timegrid-col-frame),
+:global(body:not(.loom-no-weekend-wash) .fc .fc-day-sat.fc-daygrid-day:not(.fc-day-today)),
+:global(body:not(.loom-no-weekend-wash) .fc .fc-day-sun.fc-daygrid-day:not(.fc-day-today)) {
+  background: color-mix(in srgb, var(--text-main) 3%, transparent);
+}
+
+:global(body:not(.loom-no-weekend-wash) .fc .fc-col-header-cell.fc-day-sat .fc-col-header-cell-cushion),
+:global(body:not(.loom-no-weekend-wash) .fc .fc-col-header-cell.fc-day-sun .fc-col-header-cell-cushion) {
+  opacity: 0.55;
 }
 
 :global(.fc .fc-scrollgrid) {
@@ -105,6 +149,29 @@
   border-radius: 4px;
 }
 
+/* Month-view chips get a subtle radius (WS2 §9). */
+:global(.fc-daygrid-event) {
+  border-radius: var(--radius-sm);
+}
+
+/* WS2 §6: past-event dimming. Swap the color treatment (desaturate the hue
+   wash + fade the type) rather than dropping whole-pill opacity. The
+   .loom-event-past marker is set on FC's outer event element per occurrence. */
+:global(.loom-event-past) .pill {
+  filter: saturate(0.6);
+}
+
+:global(.loom-event-past) .pillTitle,
+:global(.loom-event-past) .pillTime {
+  opacity: 0.6;
+}
+
+/* WS2 §8: short events (< ~22px tall) drop the time label — vertical position
+   already encodes the start. */
+:global(.fc-timegrid-event-short) .pillTime {
+  display: none;
+}
+
 /* Custom event pill */
 .pill {
   display: flex;
@@ -118,6 +185,7 @@
   white-space: nowrap;
   width: 100%;
   height: 100%;
+  min-height: 16px;
 }
 
 .pillTime {
@@ -163,9 +231,11 @@
   animation: chipPulse 1.5s ease-in-out infinite;
 }
 
+/* Clamped floor of 0.75 — a critical (deadline) chip must never dip below its
+   contrast threshold, so the pulse only breathes the top quarter (WS2 §7). */
 @keyframes chipPulse {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.55; }
+  50%       { opacity: 0.75; }
 }
 
 .travelChip {
@@ -217,4 +287,47 @@
   justify-content: flex-end;
   padding: 6px 12px 2px;
   gap: 8px;
+}
+
+/* WS2 §11: one-time empty-grid overlay (month view, no events). Sits over the
+   grid without blanking it; dismissible. No illustration — copy only. */
+.emptyOverlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.emptyCard {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: 340px;
+  padding: var(--space-6);
+  text-align: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+.emptyText {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.emptyKbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-main);
 }
