@@ -212,6 +212,7 @@ function Shell() {
         type: 'error',
         title: 'LoomAssist crashed last session',
         message: 'Click to export logs for debugging.',
+        severity: 'important',
         actionable: true,
         actionLabel: 'Export logs',
         actionFn: async () => {
@@ -260,7 +261,7 @@ function Shell() {
     (async () => {
       try {
         const { text } = await getBriefing();
-        addNotification({ type: 'info', title: 'Today', message: text, autoRemoveMs: 8000 });
+        addNotification({ type: 'info', title: 'Today', message: text, severity: 'ambient', autoRemoveMs: 8000 });
         const tauri = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args: object) => Promise<unknown> } } }).__TAURI__;
         if (tauri?.core?.invoke) {
           tauri.core.invoke('speak_briefing', { text }).catch(() => {});
@@ -295,6 +296,7 @@ function Shell() {
           type: 'info',
           title: 'Your weekly review is ready',
           message: row.markdown.length > 100 ? row.markdown.slice(0, 97) + '…' : row.markdown,
+          severity: 'important',
           actionable: true,
           actionLabel: 'Open',
           actionFn: () => openWeeklyReview(row!.markdown, weekStartISO),

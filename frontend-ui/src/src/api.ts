@@ -69,6 +69,9 @@ export const deleteEvent = (id: number): Promise<void> =>
 export const skipEventDate = (id: number, payload: SkipDatePayload): Promise<Event> =>
   req('POST', `/events/${id}/skip-date`, payload);
 
+export const unskipEventDate = (id: number, payload: SkipDatePayload): Promise<Event> =>
+  req('DELETE', `/events/${id}/skip-date`, payload);
+
 export const clockEvent = (id: number, action: 'in' | 'out'): Promise<Event> =>
   req('PATCH', `/events/${id}/clock`, { action });
 

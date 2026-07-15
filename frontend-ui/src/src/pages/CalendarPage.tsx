@@ -53,7 +53,7 @@ import type { FreeSlot } from '../types';
 import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef, ProcrastinationWarning, WellnessWarning } from '../types';
 import { getDismissed, dismiss as dismissRadar } from '../lib/radarDismissals';
 import { checkSleepWindow } from '../lib/sleepWindow';
-import { useNotifications } from '../store/notifications';
+import { useNotifications, buildMutationToast } from '../store/notifications';
 
 // ---- FullCalendar view name map ----
 const FC_VIEW: Record<string, string> = {
@@ -155,7 +155,7 @@ export function CalendarPage() {
   const pendingDateRef = useRef<Date | null>(null);
   const location = useLocation();
   const nav = useCalendarNav();
-  const { push: pushUndo } = useUndo();
+  const { push: pushUndo, undo: undoLast } = useUndo();
   const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, modal } = useModal();
   const { addNotification } = useNotifications();
 
@@ -938,12 +938,15 @@ export function CalendarPage() {
         undo: async () => { const { id: _id, ...p } = snapshot; await createEvent(p); await loadAll(); },
         redo: async () => { await deleteEvent(ev.id); await loadAll(); },
       });
-      addNotification({ type: 'success', title: `Deleted "${ev.title}"`, message: 'Undo from the toolbar or ⌘Z.', autoRemoveMs: 6000 });
+      // WS7 #6 — the toast is a pointer into the undo stack: its Undo button
+      // pops the top entry (the delete we just pushed) rather than telling the
+      // user to recover elsewhere.
+      addNotification(buildMutationToast({ verb: 'Deleted', object: ev.title, undo: undoLast }));
       await loadAll();
     } catch {
       addNotification({ type: 'error', title: 'Delete failed', message: 'Could not delete event.' });
     }
-  }, [closePeek, pushUndo, loadAll, addNotification]);
+  }, [closePeek, pushUndo, undoLast, loadAll, addNotification]);
 
   const handlePeekChecklistToggle = useCallback(async (ev: Event, index: number) => {
     const items = parseChecklist(ev.checklist);
@@ -954,7 +957,9 @@ export function CalendarPage() {
     // Optimistically reflect the toggle in the open peek.
     setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: updated } : prev));
     try {
-      await updateEvent(ev.id, { checklist: nextJson });
+      // The backend PUT binds to EventBase (title/start/end/calendar_id all
+      // required), so a partial `{ checklist }` body 422s. Send the full event.
+      await updateEvent(ev.id, updated);
       await loadAll();
     } catch {
       setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: ev } : prev));

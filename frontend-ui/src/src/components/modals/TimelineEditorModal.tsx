@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useModal } from '../../contexts/ModalContext';
+import { useUndo } from '../../contexts/UndoContext';
 import { ModalShell, ModalFooter } from './ModalShell';
 import { useNotifications } from '../../store/notifications';
-import { listCalendars, updateCalendar, createCalendar } from '../../api';
+import { listCalendars, updateCalendar, createCalendar, deleteCalendar } from '../../api';
 import { DEFAULT_TIMELINE_COLOR, TIMELINE_PALETTE } from '../../lib/colors';
 import type { Calendar } from '../../types';
 
@@ -16,6 +17,7 @@ const PALETTE = TIMELINE_PALETTE;
 export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModalProps) {
   const { close } = useModal();
   const { addNotification } = useNotifications();
+  const { push: pushUndo } = useUndo();
   const isEditing = timelineId != null;
 
   const [tl, setTl]               = useState<Calendar | null>(null);
@@ -63,7 +65,14 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
       if (isEditing && tl) {
         await updateCalendar(tl.id, payload);
       } else {
-        await createCalendar(payload);
+        // Keep timeline creation undoable (plan hard constraint: no mutation
+        // path may lose undo coverage). Undo deletes the just-created row.
+        const created = await createCalendar(payload);
+        pushUndo({
+          label: `Create timeline "${created.name}"`,
+          undo: async () => { await deleteCalendar(created.id); onSaved(); },
+          redo: async () => { await createCalendar(payload); onSaved(); },
+        });
       }
       addNotification({ type: 'success', title: 'Timeline saved', autoRemoveMs: 2500 });
       onSaved();

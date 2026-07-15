@@ -13,7 +13,7 @@ import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
   parseDateTime, clockEvent, resolveConflict, listCourses,
-  cascadeDependents, listEvents, checkConflicts, skipEventDate,
+  cascadeDependents, listEvents, checkConflicts, skipEventDate, unskipEventDate,
 } from '../../api';
 import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
 import { SuggestionChip } from '../shared/SuggestionChip';
@@ -422,11 +422,12 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   // Delete an occurrence of a recurring series = append it to skipped_dates.
   const doDeleteOccurrence = useCallback(async () => {
     if (!event || !instanceDate) return;
-    const prevSkips = event.skipped_dates ?? '';
     await skipEventDate(event.id, { date: instanceDate });
     pushUndo({
+      // Restore via the dedicated unskip route — a partial `{ skipped_dates }`
+      // PUT would 422 against EventBase (required title/start/end/calendar_id).
       label: `Skip ${instanceDate} of "${event.title}"`,
-      undo: async () => { await updateEvent(event.id, { skipped_dates: prevSkips }); },
+      undo: async () => { await unskipEventDate(event.id, { date: instanceDate }); },
       redo: async () => { await skipEventDate(event.id, { date: instanceDate }); },
     });
     onSaved();

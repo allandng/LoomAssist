@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import styles from './QuickCreatePopover.module.css';
 import { TLDot } from '../shared/TLDot';
 import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
+import { pushEscapeHandler } from '../../lib/escapeStack';
 import type { Calendar, EventTemplate } from '../../types';
 
 export interface QuickCreateAnchor {
@@ -93,6 +94,10 @@ export function QuickCreatePopover({
     return () => window.removeEventListener('mousedown', onDown, true);
   }, [onDiscard]);
 
+  // WS4 #7 — Esc dismissal goes through the shared escapeStack so the popover
+  // participates in single-owner Escape ordering (topmost layer only).
+  useEffect(() => pushEscapeHandler(() => onDiscard()), [onDiscard]);
+
   const canCreate = title.trim().length > 0 && !busy;
 
   const create = async () => {
@@ -106,10 +111,8 @@ export function QuickCreatePopover({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      onDiscard();
-    } else if (e.key === 'Enter') {
+    // Esc is owned by the escapeStack handler above; only Enter is local.
+    if (e.key === 'Enter') {
       e.preventDefault();
       if (e.metaKey || e.ctrlKey) {
         onMoreOptions(title.trim(), calendarId, endDate);

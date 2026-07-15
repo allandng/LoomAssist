@@ -92,9 +92,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
                 autoRemoveMs: 30_000,
               });
             } else {
+              // A clean sync is phase noise — ambient severity so it auto-removes
+              // and never increments the bell badge (WS7 #4). The review-needed
+              // branch above stays standard: it's actionable and should badge.
               addNotification({
                 type: 'info',
                 title: `${conn?.display_name ?? 'Sync'} synced`,
+                severity: 'ambient',
                 collapseKey,
                 autoRemoveMs: 8_000,
               });

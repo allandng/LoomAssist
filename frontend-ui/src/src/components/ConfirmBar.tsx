@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './ConfirmBar.module.css';
+import { pushEscapeHandler } from '../lib/escapeStack';
 
 /**
  * WS7 #1 — destructive confirmations live here, not in the transient toast
@@ -78,18 +79,16 @@ function ConfirmRow({ item, onResolve, autoFocus }: {
 }
 
 export function ConfirmBar({ items, onResolve }: ConfirmBarProps) {
-  // Plain Esc handler cancels the most-recent (top) bar. NOTE: WS4's escapeStack
-  // does not exist yet, so this is a standalone listener for now.
+  // Esc cancels the most-recent (top) bar via the shared escapeStack, so a
+  // ConfirmBar sits above the calendar's clear-selection handler and dismisses
+  // one layer per press instead of being swallowed by a capture-phase consumer.
   useEffect(() => {
     if (items.length === 0) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return;
+    return pushEscapeHandler(() => {
       const top = items[items.length - 1];
       top.onCancel?.();
       onResolve(top.id);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    });
   }, [items, onResolve]);
 
   if (items.length === 0) return null;
