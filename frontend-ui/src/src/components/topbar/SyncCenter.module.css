@@ -266,6 +266,25 @@
   100% { transform: translateX(400%); }
 }
 
+/* WS6 §6 — reduce ≠ remove. The shimmer *means* "syncing"; under reduced-motion
+   the animation is clamped to nothing, so swap the moving bar for a static
+   "Syncing…" label instead of a frozen, meaningless stripe. */
+@media (prefers-reduced-motion: reduce) {
+  .progressFill { display: none; }
+  .progressTrack {
+    height: auto;
+    background: transparent;
+    overflow: visible;
+    margin-top: 2px;
+  }
+  .progressTrack::before {
+    content: 'Syncing…';
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    color: var(--accent);
+  }
+}
+
 .footer {
   padding: 10px 16px;
   border-top: 1px solid var(--border);

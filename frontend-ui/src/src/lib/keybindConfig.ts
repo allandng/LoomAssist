@@ -25,6 +25,9 @@ export type KeybindAction =
   | 'delete_selected'
   | 'snooze_day'
   | 'snooze_week'
+  | 'event_next'
+  | 'event_prev'
+  | 'event_edit'
   | 'search'
   | 'inbox'
   | 'jump_date'
@@ -53,6 +56,13 @@ export const KEYBIND_DEFAULTS: Record<KeybindAction, KeybindDef> = {
   delete_selected: { key: 'Delete',     label: 'Del', description: 'Delete selected event(s)',      context: 'Calendar' },
   snooze_day:      { key: 'arrowright', label: '→',   description: 'Snooze selected event +1 day',  context: 'Calendar' },
   snooze_week:     { key: 'arrowright', shift: true, label: '→', description: 'Snooze selected event +1 week', context: 'Calendar' },
+  // WS6 §3 — keyboard event navigation. The plan named n/b, but those are taken
+  // globally by new_event (N) and sidebar_toggle (B); j/k (vim next/prev) are
+  // the closest conflict-free calendar-context bindings. Enter opens the pinned
+  // peek, ⌘/Ctrl+arrows move — both handled in useEventKeyNav, not rebindable.
+  event_next:      { key: 'j',          label: 'J',   description: 'Select next event',            context: 'Calendar' },
+  event_prev:      { key: 'k',          label: 'K',   description: 'Select previous event',         context: 'Calendar' },
+  event_edit:      { key: 'e',          label: 'E',   description: 'Edit selected event',           context: 'Calendar' },
 };
 
 const LS_KEY = 'loom-keybinds';

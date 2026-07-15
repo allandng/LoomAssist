@@ -29,6 +29,7 @@ import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
 import { pushEscapeHandler } from '../lib/escapeStack';
 import { useReminders } from '../hooks/useReminders';
+import { useEventKeyNav } from '../hooks/useEventKeyNav';
 import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
@@ -629,6 +630,19 @@ export function CalendarPage() {
     () => buildFCEvents(events, timelines, hiddenTimelineIds, activeFilters),
     [events, timelines, hiddenTimelineIds, activeFilters],
   );
+
+  // WS6 §3/§4 — keyboard event navigation + move-mode. Roving focus over the
+  // mounted occurrences (fed by eventDidMount/eventWillUnmount below); selecting
+  // syncs the highlight, Enter opens the pinned keyboard peek (WS5).
+  const { registerEl, unregisterEl } = useEventKeyNav({
+    active: nav.view !== 'Year',
+    calRef,
+    onSelect: (id) => setSelectedEventIds(id == null ? new Set() : new Set([id])),
+    onOpenPeek: (ev, el) => {
+      const r = el.getBoundingClientRect();
+      setPeek({ event: ev, x: r.right, y: r.top, pinned: true, keyboard: true, anchorEl: el });
+    },
+  });
 
   // ---- Filter counts ----
   const filterCounts = useMemo(() => {
@@ -1403,6 +1417,45 @@ export function CalendarPage() {
           moreLinkClick="popover"
           defaultTimedEventDuration="00:30:00"
           height="100%"
+          // WS6 §1 — descriptive a11y hints ($0 = FC's view-unit / button-text
+          // placeholder). closeHint labels the "+N more" popover's close button.
+          buttonHints={{ prev: 'Previous $0', next: 'Next $0', today: 'This $0' }}
+          viewHint="$0 view"
+          navLinkHint="Go to $0"
+          closeHint="Close"
+          // WS6 §2 — event + day-cell ARIA and roving-nav registration. ARIA goes
+          // on FC's outer element (info.el), never inside the sacred pill.
+          eventDidMount={(info) => {
+            if (info.event.display === 'background') return; // move-mode phantom
+            const ev: Event = info.event.extendedProps.event;
+            const isPrep = !!info.event.extendedProps.isPrepBlock;
+            const start = info.event.start;
+            const end = info.event.end;
+            const tlName = timelines.find(t => t.id === ev.calendar_id)?.name ?? '';
+            const startStr = start ? start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+            const endStr = end ? end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+            const recur = ev.is_recurring ? ', recurring' : '';
+            info.el.setAttribute(
+              'aria-label',
+              `${isPrep ? 'Prep, ' : ''}${ev.title}, ${startStr} to ${endStr}${tlName ? `, ${tlName}` : ''}${recur}`,
+            );
+            info.el.setAttribute('role', 'button');
+            info.el.setAttribute('tabindex', '-1');
+            // Decorative chips inside the pill are already covered by aria-label.
+            info.el
+              .querySelectorAll('[class*="pillTime"],[class*="travelChip"],[class*="pillChk"],[class*="clockDot"],[class*="deadlineChip"]')
+              .forEach(n => n.setAttribute('aria-hidden', 'true'));
+            if (!isPrep && start && end) {
+              registerEl(info.event.id, { el: info.el as HTMLElement, ev, instanceDate: info.event.extendedProps.instanceDate, start, end });
+            }
+          }}
+          eventWillUnmount={(info) => {
+            if (info.event.display === 'background') return;
+            unregisterEl(info.event.id);
+          }}
+          dayCellDidMount={(info) => {
+            info.el.setAttribute('aria-label', info.date.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+          }}
           eventDrop={handleEventDrop}
           eventResize={handleEventResize}
           eventClick={handleEventClick}

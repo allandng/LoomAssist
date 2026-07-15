@@ -21,6 +21,25 @@ body {
   outline-offset: 2px;
 }
 
+/* WS6 §3 — roving keyboard focus on an event chip. Applied to FullCalendar's
+   outer element (info.el), never inside the sacred pill. An explicit class ring
+   (not just :focus-visible) guarantees the indicator shows for programmatic
+   .focus() during j/k navigation, in both themes. */
+.loom-event-kbfocus {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+  z-index: 6;
+}
+
+/* WS6 §4 — the translucent preview shown while keyboard move-mode is active.
+   FullCalendar puts `loom-move-phantom` on the background event's element. */
+.fc .fc-bg-event.loom-move-phantom {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1.5px dashed var(--accent);
+  opacity: 1;
+}
+
 /* Thin dark scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

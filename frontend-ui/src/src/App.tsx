@@ -27,6 +27,7 @@ import { ConnectionDetailPage } from './pages/ConnectionDetailPage';
 import { SyncReviewPage } from './pages/SyncReviewPage';
 import { AccountAvatar } from './components/topbar/AccountAvatar';
 import { SyncCenter } from './components/topbar/SyncCenter';
+import { LiveRegion } from './components/shared/LiveRegion';
 import { AccountProvider } from './contexts/AccountContext';
 import { SyncProvider } from './contexts/SyncContext';
 import { InboxPanel } from './components/inbox/InboxPanel';
@@ -333,6 +334,11 @@ function Shell() {
       { key: 'Backspace', handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-delete-selected')); } },
       b('snooze_week',     onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })))),
       b('snooze_day',      onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })))),
+      // WS6 §3 — keyboard event navigation dispatched into CalendarPage's
+      // useEventKeyNav (roving focus + open editor on the focused chip).
+      b('event_next',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-nav', { detail: { dir: 'next' } })))),
+      b('event_prev',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-nav', { detail: { dir: 'prev' } })))),
+      b('event_edit',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-edit')))),
       b('search',          () => document.querySelector<HTMLInputElement>('.loom-search')?.focus()),
       b('inbox',           () => setInboxOpen(o => !o)),
       b('jump_date',       () => setJumpOpen(true)),
@@ -415,6 +421,9 @@ export default function App() {
             <UndoProvider>
               <ModalProvider>
                 <CalendarNavProvider>
+                  {/* WS6 §5 — the single SR live region, mounted before any
+                      announcement so the node pre-exists in the DOM. */}
+                  <LiveRegion />
                   {/* Full-bleed routes bypass <Shell/> entirely (no app drawer / no top bar). */}
                   <Routes>
                     <Route path="/auth/sign-in" element={<SignInPage />} />
