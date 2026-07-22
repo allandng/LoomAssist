@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(6, 11, 24, 0.7);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(6px);
   display: grid;
   place-items: center;
@@ -14,11 +14,11 @@
   max-height: calc(100vh - 40px);
   background: var(--bg-panel);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  box-shadow: var(--shadow-modal);
 }
 
 .header {
@@ -67,6 +67,8 @@
   background: var(--bg-subtle);
   align-items: center;
   flex-shrink: 0;
+  position: relative; /* anchor for footer-scoped popovers (e.g. delete scope) */
+  flex-wrap: wrap;
 }
 
 /* FieldLabel */
@@ -79,59 +81,48 @@
   margin-bottom: 5px;
 }
 
-/* Shared field styles — imported by other modal CSS modules */
-:global(.loom-field) {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 12.5px;
-  font-family: inherit;
-  color: var(--text-main);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  outline: none;
-  transition: border-color 100ms;
-}
-
-:global(.loom-field:focus) {
-  border-color: var(--accent);
-}
-
-:global(.loom-btn-primary) {
-  display: inline-flex;
+/* WS5 #2 — inline discard-guard bar shown when a dirty modal is dismissed via
+   backdrop click / Escape, instead of silently destroying the form. */
+.discardBar {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: 7px;
-  font-size: 12.5px;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--warning-soft);
+  flex-shrink: 0;
+}
+
+.discardText {
+  font-size: var(--text-base);
   font-weight: 600;
-  background: var(--accent);
-  color: white;
-  border: none;
-  cursor: pointer;
-  transition: background 100ms;
+  color: var(--text-main);
 }
 
-:global(.loom-btn-primary:hover) {
-  background: var(--accent-hover);
+.discardActions {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
 }
 
-:global(.loom-btn-ghost) {
+.discardConfirm {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 7px;
-  font-size: 12.5px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
   font-weight: 500;
   background: transparent;
-  color: var(--text-main);
-  border: 1px solid var(--border);
+  color: var(--error);
+  border: 1px solid var(--error);
   cursor: pointer;
-  transition: background 100ms, border-color 100ms;
+  transition: background var(--motion-fast) var(--ease-standard);
 }
 
-:global(.loom-btn-ghost:hover) {
-  background: var(--bg-elevated);
-  border-color: var(--border-strong);
+.discardConfirm:hover {
+  background: var(--error-soft);
 }
+
+/* The `loom-field` / `loom-btn-primary` / `loom-btn-ghost` utilities moved to
+   styles/primitives.css — they are app-wide, not modal-scoped. */

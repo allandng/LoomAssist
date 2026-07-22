@@ -96,6 +96,7 @@
 
 /* Search */
 .searchWrap {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -120,6 +121,12 @@
   background: transparent;
   border: none;
   outline: none;
+}
+
+.searchInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .searchInput::placeholder {

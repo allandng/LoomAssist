@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useModal } from '../../contexts/ModalContext';
+import { useUndo } from '../../contexts/UndoContext';
 import { ModalShell, ModalFooter } from './ModalShell';
 import { useNotifications } from '../../store/notifications';
-import { listCalendars, updateCalendar, createCalendar } from '../../api';
+import { listCalendars, updateCalendar, createCalendar, deleteCalendar } from '../../api';
+import { DEFAULT_TIMELINE_COLOR, TIMELINE_PALETTE } from '../../lib/colors';
 import type { Calendar } from '../../types';
 
 interface TimelineEditorModalProps {
@@ -10,17 +12,18 @@ interface TimelineEditorModalProps {
   onSaved: () => void;
 }
 
-const PALETTE = ['#6366F1', '#10B981', '#F59E0B', '#EC4899', '#06B6D4', '#8B5CF6', '#EF4444'];
+const PALETTE = TIMELINE_PALETTE;
 
 export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModalProps) {
   const { close } = useModal();
   const { addNotification } = useNotifications();
+  const { push: pushUndo } = useUndo();
   const isEditing = timelineId != null;
 
   const [tl, setTl]               = useState<Calendar | null>(null);
   const [name, setName]           = useState('');
   const [description, setDescription] = useState('');
-  const [color, setColor]         = useState('#6366F1');
+  const [color, setColor]         = useState(DEFAULT_TIMELINE_COLOR);
   const [isCourse, setIsCourse]   = useState(false);
   const [courseCode, setCourseCode] = useState('');
   const [termStart, setTermStart] = useState('');
@@ -35,7 +38,7 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
       setTl(found);
       setName(found.name ?? '');
       setDescription(found.description ?? '');
-      setColor(found.color ?? '#6366F1');
+      setColor(found.color ?? DEFAULT_TIMELINE_COLOR);
       setIsCourse(!!found.is_course);
       setCourseCode(found.course_code ?? '');
       setTermStart(found.term_start ?? '');
@@ -62,7 +65,14 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
       if (isEditing && tl) {
         await updateCalendar(tl.id, payload);
       } else {
-        await createCalendar(payload);
+        // Keep timeline creation undoable (plan hard constraint: no mutation
+        // path may lose undo coverage). Undo deletes the just-created row.
+        const created = await createCalendar(payload);
+        pushUndo({
+          label: `Create timeline "${created.name}"`,
+          undo: async () => { await deleteCalendar(created.id); onSaved(); },
+          redo: async () => { await createCalendar(payload); onSaved(); },
+        });
       }
       addNotification({ type: 'success', title: 'Timeline saved', autoRemoveMs: 2500 });
       onSaved();

@@ -13,7 +13,7 @@ import {
   createEvent, updateEvent, deleteEvent,
   createTemplate, createTask, listTasks, deleteTask,
   parseDateTime, clockEvent, resolveConflict, listCourses,
-  cascadeDependents, listEvents,
+  cascadeDependents, listEvents, checkConflicts, skipEventDate, unskipEventDate,
 } from '../../api';
 import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
 import { SuggestionChip } from '../shared/SuggestionChip';
@@ -35,6 +35,9 @@ function NLDateInput({ value, onChange }: { value: string; onChange: (v: string)
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // WS5 #4 — remember the last string we actually sent to the Ollama parser so an
+  // unchanged value (e.g. edited then reverted) doesn't re-fire the LLM.
+  const lastParsedRef = useRef<string>('');
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
@@ -52,6 +55,8 @@ function NLDateInput({ value, onChange }: { value: string; onChange: (v: string)
         setPreview(formatDT(local));
         return;
       }
+      if (raw === lastParsedRef.current) return; // no change since last LLM parse
+      lastParsedRef.current = raw;
       setParsing(true);
       try {
         const res = await parseDateTime(raw);
@@ -74,7 +79,11 @@ function NLDateInput({ value, onChange }: { value: string; onChange: (v: string)
         placeholder='e.g. "next fri 2pm"'
       />
       {parsing && <div className={`${styles.nlPreview} ${styles.nlParsing}`}>Parsing…</div>}
-      {!parsing && preview && <div className={styles.nlPreview}>✓ {preview}</div>}
+      {!parsing && preview && (
+        <div className={styles.nlPreview}>
+          <Icon d={Icons.check} size={11} stroke="var(--accent)" strokeWidth={2.5} /> {preview}
+        </div>
+      )}
     </div>
   );
 }
@@ -103,17 +112,27 @@ function toLocalDate(iso: string): string {
   return iso ? iso.split('T')[0] : '';
 }
 
+// WS3 #1/#3 — quick-create "More options" and template-apply seed a NEW event's
+// title / timeline / recurrence. Ignored when editing an existing `event`.
+export interface EventEditorPrefill {
+  title?: string;
+  calendarId?: number;
+  isRecurring?: boolean;
+  recurrenceDays?: string;
+}
+
 interface EventEditorModalProps {
   event?: Event | null;
   date?: string;         // pre-fill date (YYYY-MM-DD)
   instanceDate?: string; // for recurring occurrences
   startISO?: string;     // pre-fill exact start (ISO datetime, from smart scheduler)
   endISO?: string;       // pre-fill exact end
+  prefill?: EventEditorPrefill; // pre-fill fields for a new event (quick-create / template)
   timelines: Calendar[];
   onSaved: () => void;
 }
 
-export function EventEditorModal({ event, date, instanceDate, startISO, endISO, timelines, onSaved }: EventEditorModalProps) {
+export function EventEditorModal({ event, date, instanceDate, startISO, endISO, prefill, timelines, onSaved }: EventEditorModalProps) {
   const { close, openStudyBlock } = useModal();
   const { push: pushUndo } = useUndo();
   const { addNotification } = useNotifications();
@@ -122,7 +141,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const isLocked = event?.title === 'Meeting (availability booking)';
 
   // ---- Form state ----
-  const [title, setTitle]           = useState(event?.title ?? '');
+  const [title, setTitle]           = useState(event?.title ?? prefill?.title ?? '');
   const [allDay, setAllDay]         = useState(event?.is_all_day ?? false);
   const [startVal, setStartVal]     = useState(
     event    ? (event.is_all_day ? toLocalDate(event.start_time) : toLocalDT(event.start_time))
@@ -134,7 +153,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     : endISO ? toLocalDT(endISO)
     : (date  ? `${date}T10:00` : toLocalDT(new Date(Date.now() + 3_600_000).toISOString()))
   );
-  const [calendarId, setCalendarId] = useState(event?.calendar_id ?? timelines[0]?.id ?? 0);
+  const [calendarId, setCalendarId] = useState(event?.calendar_id ?? prefill?.calendarId ?? timelines[0]?.id ?? 0);
   const [reminder, setReminder]     = useState(event?.reminder_minutes ?? 0);
   const [reminderSource, setReminderSource] = useState<'user' | 'inferred' | 'none'>(
     event?.reminder_source === 'inferred' ? 'inferred' : event?.reminder_source === 'user' ? 'user' : 'none'
@@ -147,12 +166,14 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [checklist, setChecklist]   = useState<ChecklistItem[]>(parseChecklist(event?.checklist ?? ''));
 
   // Recurrence
-  const [recurring, setRecurring]   = useState(event?.is_recurring ?? false);
-  const [recurDays, setRecurDays]   = useState<number[]>(
-    event?.recurrence_days ? event.recurrence_days.split(',').map(Number).filter(n => !isNaN(n)) : []
-  );
+  const [recurring, setRecurring]   = useState(event?.is_recurring ?? prefill?.isRecurring ?? false);
+  const [recurDays, setRecurDays]   = useState<number[]>(() => {
+    const src = event?.recurrence_days ?? (event ? '' : prefill?.recurrenceDays) ?? '';
+    return src ? src.split(',').map(Number).filter(n => !isNaN(n)) : [];
+  });
   const [recurEnd, setRecurEnd]     = useState(event?.recurrence_end ? toLocalDate(event.recurrence_end) : '');
   const [skipDates, setSkipDates]   = useState(event?.skipped_dates ?? '');
+  const [skipDraft, setSkipDraft]   = useState(''); // WS5 #5 — date-input adder
 
   // Task board status
   const [isOnTaskBoard, setIsOnTaskBoard] = useState(false);
@@ -178,6 +199,14 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   // "Missed" opt-in marker — drives the footer Mark/Unmark button.
   const [missedAt, setMissedAt] = useState<string | null>(event?.missed_at ?? null);
+
+  // WS5 #6 — in-modal replacements for window.prompt/confirm.
+  const [confirmingDelete, setConfirmingDelete] = useState(false); // two-step delete (non-recurring)
+  const [deleteScopeOpen, setDeleteScopeOpen] = useState(false);   // scope popover (recurring)
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [templateNaming, setTemplateNaming] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  useEffect(() => () => { if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current); }, []);
 
   // Load task board status for existing events
   useEffect(() => {
@@ -250,26 +279,29 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       per_day_times: event?.per_day_times ?? '',
       missed_at: opts?.missedAt ?? null,
     };
-  }, [title, allDay, startVal, endVal, calendarId, reminder, location, travelTime,
-      eventType, prepMinutes, description, checklist, recurring, recurDays, recurEnd, skipDates, event]);
+  }, [title, allDay, startVal, endVal, calendarId, reminder, reminderSource, location, travelTime,
+      eventType, prepMinutes, description, checklist, recurring, recurDays, recurEnd, skipDates,
+      dependsOnId, dependsOffset, event]);
 
-  const handleSubmit = useCallback(async () => {
-    if (!title.trim()) return;
+  // WS5 #4 — client-side validation: end must be after start. Blocks the save.
+  const endInvalid = allDay
+    ? (!!endVal && !!startVal && endVal < startVal)
+    : (new Date(endVal).getTime() <= new Date(startVal).getTime());
 
+  // The single write. Only runs once the conflict pre-check has cleared or the
+  // user has explicitly confirmed "Save anyway" — never before (WS5 #3).
+  const performWrite = useCallback(async () => {
     const payload = buildPayload();
-    let conflicts: Array<{ id: number; title: string; conflict_type?: 'event' | 'travel' | 'prep' }>;
     let createdEvent: Event | null = null;
 
     if (isEdit && event) {
       const prev = event;
-      const { conflicts: c, dependents = [] } = await updateEvent(event.id, payload);
-      conflicts = c;
+      const { dependents = [] } = await updateEvent(event.id, payload);
       pushUndo({
         label: `Edit "${prev.title}"`,
         undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
         redo: async () => { await updateEvent(event.id, payload); },
       });
-      // Phase 10: cascade toast
       if (dependents.length > 0) {
         const eid = event.id;
         addNotification({
@@ -278,53 +310,17 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           message: dependents.map(d => d.title).join(', '),
           actionable: true,
           actionLabel: 'Yes, cascade',
-          actionFn: async () => {
-            await cascadeDependents(eid);
-            onSaved();
-          },
+          actionFn: async () => { await cascadeDependents(eid); onSaved(); },
         });
       }
     } else {
-      const { event: created, conflicts: c } = await createEvent(payload);
-      conflicts = c;
+      const { event: created } = await createEvent(payload);
       createdEvent = created;
       pushUndo({
         label: `Create "${created.title}"`,
         undo: async () => { await deleteEvent(created.id); },
         redo: async () => { /* re-create not directly reversible */ },
       });
-    }
-
-    if (conflicts.length) {
-      const names = conflicts.map(c => {
-        const label = c.conflict_type === 'travel'
-          ? `the travel buffer for "${c.title}"`
-          : c.conflict_type === 'prep'
-            ? `the prep buffer for "${c.title}"`
-            : `"${c.title}"`;
-        return label;
-      }).join(', ');
-      setConflictWarning(`Overlaps with: ${names}`);
-      setNeedsConfirm(true);
-      setSuggestions([]);
-      setSuggestionsOpen(false);
-      addNotification({
-        type: 'warning',
-        title: 'Schedule conflict',
-        message: `Overlaps with: ${names}`,
-        dismissible: true,
-      });
-      // Fetch LLM suggestions asynchronously — never block the save flow
-      const p = buildPayload();
-      resolveConflict({
-        event: { title: p.title, start_time: p.start_time, end_time: p.end_time, calendar_id: p.calendar_id },
-        conflicts,
-      }).then(res => {
-        if (res.suggestions.length) {
-          setSuggestions(res.suggestions);
-          setSuggestionsOpen(true);
-        }
-      }).catch(() => { /* silently ignore */ });
     }
 
     const sw = checkSleepWindow(payload.start_time, payload.end_time, !!payload.is_all_day);
@@ -345,11 +341,73 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     } else {
       close();
     }
-  }, [title, isEdit, event, buildPayload, pushUndo, onSaved, close, openStudyBlock, addNotification]);
+  }, [isEdit, event, buildPayload, pushUndo, onSaved, close, openStudyBlock, addNotification]);
 
-  const handleDelete = useCallback(async () => {
+  const handleSubmit = useCallback(async () => {
+    if (!title.trim() || endInvalid) return;
+
+    // First click (not yet confirmed): dry-run the conflict check and, if it
+    // overlaps, warn + offer alternatives WITHOUT writing. The second click
+    // ("Save anyway") skips the check and performs the single write (WS5 #3).
+    if (!needsConfirm) {
+      const p = buildPayload();
+      let conflicts: Array<{ id: number; title: string; conflict_type?: string }> = [];
+      try {
+        const res = await checkConflicts({
+          start_time: p.start_time, end_time: p.end_time,
+          calendar_id: p.calendar_id, exclude_event_id: event?.id ?? null,
+        });
+        conflicts = res.conflicts;
+      } catch { /* if the pre-check itself fails, fall through and let the write proceed */ }
+
+      if (conflicts.length) {
+        const names = conflicts.map(c => (
+          c.conflict_type === 'travel' ? `the travel buffer for "${c.title}"`
+          : c.conflict_type === 'prep' ? `the prep buffer for "${c.title}"`
+          : `"${c.title}"`
+        )).join(', ');
+        setConflictWarning(`Overlaps with: ${names}`);
+        setNeedsConfirm(true);
+        setSuggestions([]);
+        setSuggestionsOpen(false);
+        resolveConflict({
+          event: { title: p.title, start_time: p.start_time, end_time: p.end_time, calendar_id: p.calendar_id },
+          conflicts: conflicts.map(c => ({ id: c.id, title: c.title })),
+        }).then(res => {
+          if (res.suggestions.length) { setSuggestions(res.suggestions); setSuggestionsOpen(true); }
+        }).catch(() => { /* silently ignore */ });
+        return; // nothing written yet
+      }
+    }
+
+    await performWrite();
+  }, [title, endInvalid, needsConfirm, event, buildPayload, performWrite]);
+
+  // Changing the time / timeline / all-day invalidates a prior conflict verdict —
+  // clear it so the next save re-runs the pre-check instead of writing straight
+  // away. Reset from the change handlers (not an effect) to keep renders clean.
+  const resetConfirm = useCallback(() => {
+    setNeedsConfirm(false);
+    setConflictWarning('');
+    setSuggestions([]);
+    setSuggestionsOpen(false);
+  }, []);
+  const changeStart = useCallback((v: string) => { setStartVal(v); resetConfirm(); }, [resetConfirm]);
+  const changeEnd   = useCallback((v: string) => { setEndVal(v);   resetConfirm(); }, [resetConfirm]);
+
+  // WS5 #2 — a dirty editor must not be lost to a stray backdrop click. Snapshot
+  // the initial field values on first render and compare each render.
+  const currentSnapshot = JSON.stringify({
+    title, allDay, startVal, endVal, calendarId, reminder, reminderSource,
+    location, travelTime, eventType, prepMinutes, description,
+    checklist: JSON.stringify(checklist), recurring, recurDays: recurDays.join(','),
+    recurEnd, skipDates, dependsOnId, dependsOffset, courseId, missedAt,
+  });
+  const [initialSnapshot] = useState(() => currentSnapshot);
+  const dirty = currentSnapshot !== initialSnapshot;
+
+  const doDeleteAll = useCallback(async () => {
     if (!event) return;
-    if (!window.confirm(`Delete "${event.title}"?`)) return;
     const snapshot = { ...event };
     await deleteEvent(event.id);
     pushUndo({
@@ -360,6 +418,36 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     onSaved();
     close();
   }, [event, pushUndo, onSaved, close]);
+
+  // Delete an occurrence of a recurring series = append it to skipped_dates.
+  const doDeleteOccurrence = useCallback(async () => {
+    if (!event || !instanceDate) return;
+    await skipEventDate(event.id, { date: instanceDate });
+    pushUndo({
+      // Restore via the dedicated unskip route — a partial `{ skipped_dates }`
+      // PUT would 422 against EventBase (required title/start/end/calendar_id).
+      label: `Skip ${instanceDate} of "${event.title}"`,
+      undo: async () => { await unskipEventDate(event.id, { date: instanceDate }); },
+      redo: async () => { await skipEventDate(event.id, { date: instanceDate }); },
+    });
+    onSaved();
+    close();
+  }, [event, instanceDate, pushUndo, onSaved, close]);
+
+  // WS5 #6 — no window.confirm. Recurring events open a scope popover; single
+  // events use a two-step inline confirm that self-resets after 3s.
+  const handleDeleteClick = useCallback(() => {
+    if (!event) return;
+    if (event.is_recurring) { setDeleteScopeOpen(true); return; }
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+      deleteTimerRef.current = setTimeout(() => setConfirmingDelete(false), 3000);
+      return;
+    }
+    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+    void doDeleteAll();
+  }, [event, confirmingDelete, doDeleteAll]);
 
   const handleMarkToggle = useCallback(async () => {
     if (!event) return;
@@ -378,10 +466,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const handleSkipDate = useCallback(async () => {
     if (!event || !instanceDate) return;
-    await fetch(`http://localhost:8000/events/${event.id}/skip-date`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date: instanceDate }),
-    });
+    await skipEventDate(event.id, { date: instanceDate });
     onSaved();
     close();
   }, [event, instanceDate, onSaved, close]);
@@ -400,27 +485,46 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   }, [event, isOnTaskBoard, taskId]);
 
   const handleSaveAsTemplate = useCallback(async () => {
-    const name = window.prompt('Template name:');
-    if (!name?.trim()) return;
+    const name = templateName.trim();
+    if (!name) return;
     await createTemplate({
-      name: name.trim(), title: title.trim(), description,
+      name, title: title.trim(), description,
       duration_minutes: Math.round((new Date(endVal).getTime() - new Date(startVal).getTime()) / 60_000) || 60,
       is_recurring: recurring, recurrence_days: recurDays.join(','), calendar_id: calendarId,
     });
-    addNotification({ type: 'success', title: 'Template saved', message: `"${name.trim()}" added to templates`, autoRemoveMs: 3000 });
-  }, [title, description, startVal, endVal, recurring, recurDays, calendarId, addNotification]);
+    setTemplateNaming(false);
+    setTemplateName('');
+    addNotification({ type: 'success', title: 'Template saved', message: `"${name}" added to templates`, autoRemoveMs: 3000 });
+  }, [templateName, title, description, startVal, endVal, recurring, recurDays, calendarId, addNotification]);
 
   const toggleRecurDay = useCallback((dow: number) => {
     setRecurDays(prev => prev.includes(dow) ? prev.filter(d => d !== dow) : [...prev, dow]);
   }, []);
 
+  // WS5 #5 — skip-dates as a removable chip list backed by the comma string.
+  const skipDatesList = skipDates.split(',').map(s => s.trim()).filter(Boolean);
+  const addSkipDate = useCallback(() => {
+    const d = skipDraft.trim();
+    if (!d) return;
+    setSkipDates(prev => {
+      const list = prev.split(',').map(s => s.trim()).filter(Boolean);
+      if (!list.includes(d)) list.push(d);
+      list.sort();
+      return list.join(',');
+    });
+    setSkipDraft('');
+  }, [skipDraft]);
+  const removeSkipDate = useCallback((d: string) => {
+    setSkipDates(prev => prev.split(',').map(s => s.trim()).filter(Boolean).filter(x => x !== d).join(','));
+  }, []);
+
   return (
-    <ModalShell title={isEdit ? 'Edit event' : 'New event'} width={560} onClose={close}>
+    <ModalShell title={isEdit ? 'Edit event' : 'New event'} width={560} onClose={close} confirmOnClose={dirty}>
       <div className={styles.form}>
 
         {isLocked && (
           <div className={styles.lockedBanner}>
-            🔒 Time set by availability booking — description is read-only.
+            <Icon d={Icons.lock} size={13} stroke="var(--accent)" /> Time set by availability booking — description is read-only.
           </div>
         )}
 
@@ -433,6 +537,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             onChange={e => setTitle(e.target.value)}
             placeholder="Event title"
             autoFocus
+            data-autofocus
           />
         </div>
 
@@ -441,28 +546,32 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           <div>
             <FieldLabel>Start</FieldLabel>
             {allDay
-              ? <input className="loom-field" type="date" value={startVal} onChange={e => setStartVal(e.target.value)} />
-              : <NLDateInput value={startVal} onChange={setStartVal} />
+              ? <input className="loom-field" type="date" value={startVal} onChange={e => changeStart(e.target.value)} />
+              : <NLDateInput value={startVal} onChange={changeStart} />
             }
           </div>
           <div>
             <FieldLabel>End</FieldLabel>
             {allDay
-              ? <input className="loom-field" type="date" value={endVal} onChange={e => setEndVal(e.target.value)} />
-              : <NLDateInput value={endVal} onChange={setEndVal} />
+              ? <input className="loom-field" type="date" value={endVal} onChange={e => changeEnd(e.target.value)} />
+              : <NLDateInput value={endVal} onChange={changeEnd} />
             }
           </div>
           <label className={styles.alldayLabel}>
             <div
               className={styles.checkbox}
               style={{ borderColor: allDay ? 'var(--accent)' : 'var(--border-strong)', background: allDay ? 'var(--accent)' : 'transparent' }}
-              onClick={() => { setAllDay(v => !v); if (recurring) setRecurring(false); }}
+              onClick={() => { setAllDay(v => !v); resetConfirm(); if (recurring) setRecurring(false); }}
             >
               {allDay && <Icon d={Icons.check} size={9} stroke="white" strokeWidth={3} />}
             </div>
             All-day
           </label>
         </div>
+
+        {endInvalid && (
+          <div className={styles.validationError}>End must be after start.</div>
+        )}
 
         {/* Timeline + Reminder */}
         <div className={styles.row2}>
@@ -473,7 +582,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
               <select
                 className={styles.selectInline}
                 value={calendarId}
-                onChange={e => setCalendarId(Number(e.target.value))}
+                onChange={e => { setCalendarId(Number(e.target.value)); resetConfirm(); }}
               >
                 {timelines.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
@@ -503,12 +612,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
             <FieldLabel>
               Reminder
               {reminderSource === 'inferred' && (
-                <span style={{
-                  marginLeft: 6, fontSize: 10, fontWeight: 600,
-                  background: 'var(--accent)', color: '#fff',
-                  borderRadius: 99, padding: '1px 7px', verticalAlign: 'middle',
-                  cursor: 'default',
-                }} title="AI-suggested based on event title">Suggested</span>
+                <span className={styles.suggestedPill} title="AI-suggested based on event title">Suggested</span>
               )}
             </FieldLabel>
             <div className={styles.timelineSelect}>
@@ -591,12 +695,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
         {/* Depends on (Phase 10) */}
         {allEvents.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 140 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Depends on</div>
+          <div className={styles.dependsRow}>
+            <div className={styles.dependsMain}>
+              <div className={styles.dependsLabel}>Depends on</div>
               <select
-                className="loom-field"
-                style={{ fontSize: 12 }}
+                className={`loom-field ${styles.dependsSelect}`}
                 value={dependsOnId ?? ''}
                 onChange={e => setDependsOnId(Number(e.target.value) || null)}
               >
@@ -607,12 +710,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
               </select>
             </div>
             {dependsOnId && (
-              <div style={{ minWidth: 110 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Offset (min)</div>
+              <div className={styles.dependsOffset}>
+                <div className={styles.dependsLabel}>Offset (min)</div>
                 <input
                   type="number"
-                  className="loom-field"
-                  style={{ fontSize: 12, width: 90 }}
+                  className={`loom-field ${styles.dependsOffsetInput}`}
                   value={dependsOffset}
                   onChange={e => setDependsOffset(Number(e.target.value))}
                   title="Minutes after parent event ends (+) or before parent starts (-)"
@@ -649,20 +751,44 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
                   );
                 })}
               </div>
-              <div className={styles.row2}>
-                <div>
-                  <FieldLabel>Ends</FieldLabel>
-                  <input className="loom-field" type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} style={{ padding: '6px 8px', fontSize: 11.5 }} />
-                </div>
-                <div>
-                  <FieldLabel>Skip dates</FieldLabel>
+              <div className={styles.recurEndField}>
+                <FieldLabel>Ends</FieldLabel>
+                <input className={`loom-field ${styles.recurEndInput}`} type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} />
+              </div>
+              <div className={styles.recurEndField}>
+                <FieldLabel>Skip dates</FieldLabel>
+                {skipDatesList.length > 0 && (
+                  <div className={styles.skipChips}>
+                    {skipDatesList.map(d => (
+                      <span key={d} className={styles.skipChip}>
+                        {d}
+                        <button
+                          type="button"
+                          className={styles.skipChipRemove}
+                          onClick={() => removeSkipDate(d)}
+                          aria-label={`Remove ${d}`}
+                        >
+                          <Icon d={Icons.x} size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className={styles.skipAdder}>
                   <input
-                    className="loom-field"
-                    placeholder="YYYY-MM-DD, YYYY-MM-DD"
-                    value={skipDates}
-                    onChange={e => setSkipDates(e.target.value)}
-                    style={{ padding: '6px 8px', fontSize: 11.5, color: 'var(--accent)' }}
+                    className={`loom-field ${styles.skipDateInput}`}
+                    type="date"
+                    value={skipDraft}
+                    onChange={e => setSkipDraft(e.target.value)}
                   />
+                  <button
+                    type="button"
+                    className="loom-btn-ghost"
+                    onClick={addSkipDate}
+                    disabled={!skipDraft.trim()}
+                  >
+                    Add
+                  </button>
                 </div>
               </div>
             </>
@@ -714,11 +840,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           <div className={styles.clockRow}>
             {!actualStart ? (
               <button type="button" className={styles.clockBtn} onClick={() => handleClock('in')}>
-                ▶ Start Tracking
+                <Icon d={Icons.play} size={12} /> Start Tracking
               </button>
             ) : !actualEnd ? (
               <button type="button" className={`${styles.clockBtn} ${styles.clockBtnStop}`} onClick={() => handleClock('out')}>
-                ■ Stop Tracking
+                <Icon d={Icons.stop} size={12} /> Stop Tracking
               </button>
             ) : (
               <span className={styles.clockDone}>
@@ -732,11 +858,11 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
           <div>
             <div className={styles.conflictWarn}>{conflictWarning}</div>
             {suggestionsOpen && suggestions.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              <div className={styles.suggestionBox}>
+                <div className={styles.suggestionHeader}>
                   Suggested alternatives
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div className={styles.suggestionList}>
                   {suggestions.map((s, i) => (
                     <SuggestionChip
                       key={i}
@@ -775,41 +901,86 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       </div>
 
       <ModalFooter>
-        {isEdit && (
+        {templateNaming ? (
+          <div className={styles.templateNameRow}>
+            <input
+              className={`loom-field ${styles.templateNameInput}`}
+              placeholder="Template name"
+              value={templateName}
+              onChange={e => setTemplateName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveAsTemplate(); } }}
+              autoFocus
+            />
+            <button className="loom-btn-ghost" onClick={() => { setTemplateNaming(false); setTemplateName(''); }}>Cancel</button>
+            <button className="loom-btn-primary" onClick={handleSaveAsTemplate} disabled={!templateName.trim()}>Save template</button>
+          </div>
+        ) : (
           <>
-            <button className="loom-btn-ghost" onClick={handleAddToTaskBoard}>
-              {isOnTaskBoard ? '✓ On Task Board' : '+ Task Board'}
-            </button>
-            {instanceDate && (
-              <button className="loom-btn-ghost" onClick={handleSkipDate}>
-                Skip this date
+            {isEdit && (
+              <>
+                <button className="loom-btn-ghost" onClick={handleAddToTaskBoard}>
+                  {isOnTaskBoard
+                    ? <><Icon d={Icons.check} size={12} /> On Task Board</>
+                    : '+ Task Board'}
+                </button>
+                {instanceDate && (
+                  <button className="loom-btn-ghost" onClick={handleSkipDate}>
+                    Skip this date
+                  </button>
+                )}
+              </>
+            )}
+            <button className="loom-btn-ghost" onClick={() => setTemplateNaming(true)}>Save as template</button>
+            <div style={{ flex: 1 }} />
+            {(() => {
+              const missedBtn = getMissedButtonState(event, missedAt);
+              if (!isEdit || !missedBtn.visible) return null;
+              return (
+                <button className="loom-btn-ghost" onClick={handleMarkToggle}>
+                  {missedBtn.label}
+                </button>
+              );
+            })()}
+            {isEdit && (
+              <button className={styles.deleteBtn} onClick={handleDeleteClick}>
+                {confirmingDelete ? 'Really delete?' : 'Delete'}
               </button>
             )}
+            <button className="loom-btn-ghost" onClick={close}>Cancel</button>
+            <button
+              className="loom-btn-primary"
+              onClick={handleSubmit}
+              disabled={!title.trim() || endInvalid}
+              title={endInvalid ? 'End must be after start' : undefined}
+            >
+              {needsConfirm ? 'Save anyway' : isEdit ? 'Save changes' : 'Create event'}
+              <Kbd small>⏎</Kbd>
+            </button>
           </>
         )}
-        <button className="loom-btn-ghost" onClick={handleSaveAsTemplate}>Save as template</button>
-        <div style={{ flex: 1 }} />
-        {(() => {
-          const missedBtn = getMissedButtonState(event, missedAt);
-          if (!isEdit || !missedBtn.visible) return null;
-          return (
-            <button className="loom-btn-ghost" onClick={handleMarkToggle}>
-              {missedBtn.label}
+
+        {deleteScopeOpen && (
+          <div className={styles.scopePopover} role="dialog" aria-label="Delete recurring event">
+            <div className={styles.scopeTitle}>Delete recurring event</div>
+            {instanceDate && (
+              <button
+                className={styles.scopeBtn}
+                onClick={() => { setDeleteScopeOpen(false); void doDeleteOccurrence(); }}
+              >
+                This occurrence
+              </button>
+            )}
+            <button
+              className={`${styles.scopeBtn} ${styles.scopeBtnDanger}`}
+              onClick={() => { setDeleteScopeOpen(false); void doDeleteAll(); }}
+            >
+              All occurrences
             </button>
-          );
-        })()}
-        {isEdit && (
-          <button className={styles.deleteBtn} onClick={handleDelete}>Delete</button>
+            <button className={styles.scopeBtn} onClick={() => setDeleteScopeOpen(false)}>
+              Cancel
+            </button>
+          </div>
         )}
-        <button className="loom-btn-ghost" onClick={close}>Cancel</button>
-        <button
-          className="loom-btn-primary"
-          onClick={handleSubmit}
-          disabled={!title.trim()}
-        >
-          {needsConfirm ? 'Confirm save' : isEdit ? 'Save changes' : 'Create event'}
-          <Kbd small>⏎</Kbd>
-        </button>
       </ModalFooter>
     </ModalShell>
   );

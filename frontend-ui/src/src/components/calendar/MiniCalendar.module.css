@@ -1,0 +1,135 @@
+.mini {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.monthLabel {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.steppers {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.stepBtn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.stepBtn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-main);
+}
+
+.dow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: var(--space-2);
+}
+
+.dow span {
+  text-align: center;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+
+.blank {
+  aspect-ratio: 1;
+}
+
+.day {
+  position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+}
+
+.day:hover {
+  background: var(--bg-elevated);
+}
+
+.day:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.banded {
+  background: var(--accent-soft);
+}
+
+.banded:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.num {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.today .num {
+  color: #fff;
+  font-weight: 700;
+}
+
+.today::before {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  z-index: 0;
+}
+
+.today .num,
+.today .dot {
+  position: relative;
+  z-index: 1;
+}
+
+.dot {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+}
+
+.today .dot {
+  background: #fff !important;
+}

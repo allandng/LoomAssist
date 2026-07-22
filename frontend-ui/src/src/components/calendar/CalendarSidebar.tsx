@@ -3,8 +3,9 @@ import styles from './CalendarSidebar.module.css';
 import { Icon, Icons } from '../shared/Icon';
 import { Kbd } from '../shared/Kbd';
 import { SectionLabel } from '../shared/SectionLabel';
+import { MiniCalendar } from './MiniCalendar';
 import { useModal } from '../../contexts/ModalContext';
-import type { Calendar, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
+import type { Calendar, Event, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
 
 export interface ScanEventEdit {
   title: string;
@@ -52,6 +53,13 @@ interface CalendarSidebarProps {
   onDeleteTimeBlockTemplate: (id: number) => void;
   missedCount: number;
   onOpenMissed: () => void;
+  // WS4 #10 — mini-calendar data + navigation.
+  events: Event[];
+  miniAnchor: Date;
+  miniRangeStart: Date | null;
+  miniRangeEnd: Date | null;
+  onMiniPick: (d: Date) => void;
+  onMiniPickDay: (d: Date) => void;
 }
 
 // ── Scan event card ──────────────────────────────────────────────
@@ -162,6 +170,12 @@ export function CalendarSidebar({
   onDeleteTimeBlockTemplate,
   missedCount,
   onOpenMissed,
+  events,
+  miniAnchor,
+  miniRangeStart,
+  miniRangeEnd,
+  onMiniPick,
+  onMiniPickDay,
 }: CalendarSidebarProps) {
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
   const { openTimelineEditor } = useModal();
@@ -173,6 +187,21 @@ export function CalendarSidebar({
   // Time Block Template apply week-picker state
   const [applyWeekFor,   setApplyWeekFor]   = useState<number | null>(null);
   const [applyWeekValue, setApplyWeekValue] = useState('');
+  // WS3 #11 — inline two-step confirm for time-block-template delete (the button
+  // flips to "Delete?" for 3s instead of a no-confirm native OS dialog).
+  const [confirmDeleteTbt, setConfirmDeleteTbt] = useState<number | null>(null);
+  const confirmDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestDeleteTbt = useCallback((id: number) => {
+    if (confirmDeleteTbt === id) {
+      if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+      setConfirmDeleteTbt(null);
+      onDeleteTimeBlockTemplate(id);
+      return;
+    }
+    setConfirmDeleteTbt(id);
+    if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+    confirmDeleteTimerRef.current = setTimeout(() => setConfirmDeleteTbt(null), 3000);
+  }, [confirmDeleteTbt, onDeleteTimeBlockTemplate]);
 
   const [filtersOpen, setFiltersOpen] = useState(true);
 
@@ -265,6 +294,16 @@ export function CalendarSidebar({
       {/* ── Normal mode ────────────────── */}
       {open && !isScanMode && (
         <div className={styles.scroll}>
+          <MiniCalendar
+            events={events}
+            timelines={timelines}
+            anchorDate={miniAnchor}
+            rangeStart={miniRangeStart}
+            rangeEnd={miniRangeEnd}
+            onPick={onMiniPick}
+            onPickDay={onMiniPickDay}
+          />
+
           {/* Timelines */}
           <SectionLabel right={
             <button className={styles.miniPlus} onClick={onNewTimeline} title="New timeline">
@@ -449,10 +488,10 @@ export function CalendarSidebar({
                     )}
                     <button
                       className={styles.tbtDeleteBtn}
-                      onClick={() => onDeleteTimeBlockTemplate(t.id)}
-                      title="Delete template"
+                      onClick={() => requestDeleteTbt(t.id)}
+                      title={confirmDeleteTbt === t.id ? 'Click again to confirm' : 'Delete template'}
                     >
-                      🗑
+                      {confirmDeleteTbt === t.id ? 'Delete?' : '🗑'}
                     </button>
                   </div>
                 </div>

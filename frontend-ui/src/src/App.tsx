@@ -27,12 +27,13 @@ import { ConnectionDetailPage } from './pages/ConnectionDetailPage';
 import { SyncReviewPage } from './pages/SyncReviewPage';
 import { AccountAvatar } from './components/topbar/AccountAvatar';
 import { SyncCenter } from './components/topbar/SyncCenter';
+import { LiveRegion } from './components/shared/LiveRegion';
 import { AccountProvider } from './contexts/AccountContext';
 import { SyncProvider } from './contexts/SyncContext';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { listCalendars, listInbox } from './api';
 import { useShortcuts } from './hooks/useShortcuts';
-import { loadKeybinds } from './lib/keybindConfig';
+import { loadKeybinds, type KeybindAction } from './lib/keybindConfig';
 import { UndoProvider } from './contexts/UndoContext';
 import { ModalProvider } from './contexts/ModalContext';
 import { CalendarNavProvider, useCalendarNav } from './contexts/CalendarNavContext';
@@ -41,7 +42,10 @@ import { NotificationsProvider, useNotifications } from './store/notifications';
 import { ModalRoot } from './components/modals/ModalRoot';
 import { CommandPalette } from './components/CommandPalette';
 import { NotifPanel } from './components/NotifPanel';
-import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent, semanticSearch } from './api';
+import { ShortcutSheet } from './components/shell/ShortcutSheet';
+import { JumpToDate } from './components/shell/JumpToDate';
+import { ConfirmBar, type ConfirmBarItem } from './components/ConfirmBar';
+import { getCrashFlag, exportLogs, getCachedWeeklyReview, generateWeeklyReview, getBriefing, transcribeAudio, applyVoiceIntent } from './api';
 import { getISOWeek, lastMonday } from './lib/eventUtils';
 
 const DEST_TO_PATH: Record<Destination, string> = {
@@ -68,6 +72,9 @@ function Shell() {
   const navigate   = useNavigate();
   const location   = useLocation();
   const nav        = useCalendarNav();
+  // WS3 #8 — stable imperative refetch. Save/voice paths refresh the calendar in
+  // place (CalendarPage registers its loader) instead of remounting the page.
+  const reloadCalendar = nav.reload;
   const { unreadCount, addNotification, panelOpen, togglePanel } = useNotifications();
 
   // First-launch redirect: route to /onboarding once.
@@ -82,13 +89,15 @@ function Shell() {
   const pathRoot = '/' + (location.pathname.split('/')[1] || '');
   const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'home';
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
-  const [reloadKey, setReloadKey] = useState(0);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
 
   // Inbox panel state (Phase 4)
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // WS4 #8/#9 — keyboard cheat sheet + jump-to-date overlays.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [appTimelines, setAppTimelines] = useState<import('./types').Calendar[]>([]);
 
   useEffect(() => {
@@ -99,22 +108,20 @@ function Shell() {
     listInbox().then(items => setInboxCount(items.length)).catch(() => {});
   }, [inboxOpen]);
 
-  // Semantic search (Phase 6)
+  // Semantic search toggle (Phase 6). The results dropdown itself lives in the
+  // TopBar's search input (WS4 #5) — no more results-as-notification path.
   const [semanticEnabled, setSemanticEnabled] = useState(false);
-  const handleSearch = useCallback(async (q: string) => {
-    if (!semanticEnabled || q.trim().length < 3) return;
-    try {
-      const res = await semanticSearch(q.trim(), 5);
-      if (res.results.length === 0) {
-        addNotification({ type: 'info', title: 'No semantic matches', message: `No events match "${q}"` });
-      } else {
-        const titles = res.results.map(r => `${r.event.title} (${Math.round(r.score * 100)}%)`).join(', ');
-        addNotification({ type: 'info', title: `Semantic results for "${q}"`, message: titles, autoRemoveMs: 8000 });
-      }
-    } catch {
-      addNotification({ type: 'error', title: 'Semantic search failed', message: 'Is the backend running?' });
+
+  // WS4 #9 — jump to a date. On the calendar we nudge the live FullCalendar via
+  // a window event; from elsewhere we route to /calendar carrying the date.
+  const handleJump = useCallback((date: Date) => {
+    setJumpOpen(false);
+    if (dest === 'calendar') {
+      window.dispatchEvent(new CustomEvent('loom-jump-date', { detail: { date: date.toISOString() } }));
+    } else {
+      navigate('/calendar', { state: { date: date.toISOString() } });
     }
-  }, [semanticEnabled, addNotification]);
+  }, [dest, navigate]);
 
   // Voice intent handler (Phase 5)
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -122,6 +129,14 @@ function Shell() {
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
   const [micActive, setMicActive] = useState(false);
+
+  // WS7 #1 — voice-intent confirmations render in a dedicated ConfirmBar
+  // (explicit Confirm/Cancel, no auto-dismiss), not in a transient toast.
+  const [confirmItems, setConfirmItems] = useState<ConfirmBarItem[]>([]);
+  const resolveConfirm = useCallback(
+    (id: string) => setConfirmItems(items => items.filter(c => c.id !== id)),
+    [],
+  );
 
   const handleMic = useCallback(async () => {
     if (micActive && recorderRef.current) {
@@ -153,17 +168,17 @@ function Shell() {
                 : action === 'move_event'
                   ? `Move "${ev.title}" to ${new Date(change.start_time as string).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}?`
                   : `Resize "${ev.title}" to end ${new Date(change.end_time as string).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}?`;
-              addNotification({
-                type: 'warning',
-                title: label,
-                message: '',
-                actionable: true,
-                actionLabel: 'Confirm',
-                actionFn: async () => {
+              const confirmId = `voice-${ev.id}-${Date.now()}`;
+              setConfirmItems(items => [...items, {
+                id: confirmId,
+                message: label,
+                confirmLabel: 'Confirm',
+                destructive: action === 'cancel_event',
+                onConfirm: async () => {
                   await applyVoiceIntent({ action, event_id: ev.id as unknown as number, proposed_change: change });
-                  setReloadKey(k => k + 1);
+                  reloadCalendar();
                 },
-              });
+              }]);
             } else if (result.status === 'not_found') {
               addNotification({ type: 'warning', title: 'No matching event found', message: String(result.detail ?? '') });
             } else if (result.status === 'ambiguous') {
@@ -182,7 +197,7 @@ function Shell() {
     } catch {
       addNotification({ type: 'error', title: 'Microphone unavailable', message: 'Grant microphone permission.' });
     }
-  }, [micActive, addNotification, setReloadKey]);
+  }, [micActive, addNotification, reloadCalendar]);
 
   useEffect(() => {
     const onChanged = () => setKeybinds(loadKeybinds());
@@ -197,6 +212,7 @@ function Shell() {
         type: 'error',
         title: 'LoomAssist crashed last session',
         message: 'Click to export logs for debugging.',
+        severity: 'important',
         actionable: true,
         actionLabel: 'Export logs',
         actionFn: async () => {
@@ -245,7 +261,7 @@ function Shell() {
     (async () => {
       try {
         const { text } = await getBriefing();
-        addNotification({ type: 'info', title: 'Today', message: text, autoRemoveMs: 8000 });
+        addNotification({ type: 'info', title: 'Today', message: text, severity: 'ambient', autoRemoveMs: 8000 });
         const tauri = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args: object) => Promise<unknown> } } }).__TAURI__;
         if (tauri?.core?.invoke) {
           tauri.core.invoke('speak_briefing', { text }).catch(() => {});
@@ -280,6 +296,7 @@ function Shell() {
           type: 'info',
           title: 'Your weekly review is ready',
           message: row.markdown.length > 100 ? row.markdown.slice(0, 97) + '…' : row.markdown,
+          severity: 'important',
           actionable: true,
           actionLabel: 'Open',
           actionFn: () => openWeeklyReview(row!.markdown, weekStartISO),
@@ -291,20 +308,46 @@ function Shell() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useShortcuts(useMemo(() => [
-    { key: keybinds.sidebar_toggle.key, ctrl: keybinds.sidebar_toggle.ctrl, meta: keybinds.sidebar_toggle.meta, shift: keybinds.sidebar_toggle.shift, handler: () => toggleSidebar() },
-    { key: keybinds.focus_mode.key,     ctrl: keybinds.focus_mode.ctrl,     meta: keybinds.focus_mode.meta,     shift: keybinds.focus_mode.shift,     handler: () => goTo('focus') },
-    { key: keybinds.view_month.key,     ctrl: keybinds.view_month.ctrl,     meta: keybinds.view_month.meta,     shift: keybinds.view_month.shift,     handler: () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar') },
-    { key: keybinds.view_week.key,      ctrl: keybinds.view_week.ctrl,      meta: keybinds.view_week.meta,      shift: keybinds.view_week.shift,      handler: () => dest === 'calendar' ? nav.setView('Week')   : undefined },
-    { key: keybinds.view_day.key,       ctrl: keybinds.view_day.ctrl,       meta: keybinds.view_day.meta,       shift: keybinds.view_day.shift,       handler: () => dest === 'calendar' ? nav.setView('Day')    : undefined },
-    { key: keybinds.view_agenda.key,    ctrl: keybinds.view_agenda.ctrl,    meta: keybinds.view_agenda.meta,    shift: keybinds.view_agenda.shift,    handler: () => dest === 'calendar' ? nav.setView('Agenda') : undefined },
-    { key: keybinds.new_event.key,      ctrl: keybinds.new_event.ctrl,      meta: keybinds.new_event.meta,      shift: keybinds.new_event.shift,      handler: () => openEventEditor() },
-    { key: keybinds.today.key,          ctrl: keybinds.today.ctrl,          meta: keybinds.today.meta,          shift: keybinds.today.shift,          handler: () => nav.goToday() },
-    { key: keybinds.snooze_week.key,    ctrl: keybinds.snooze_week.ctrl,    meta: keybinds.snooze_week.meta,    shift: keybinds.snooze_week.shift,    handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })); } },
-    { key: keybinds.snooze_day.key,     ctrl: keybinds.snooze_day.ctrl,     meta: keybinds.snooze_day.meta,     shift: keybinds.snooze_day.shift,     handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })); } },
-    { key: 'i', ctrl: false, meta: false, shift: false, handler: () => setInboxOpen(o => !o) },
-    { key: keybinds.command_palette.key, ctrl: keybinds.command_palette.ctrl, meta: keybinds.command_palette.meta, shift: keybinds.command_palette.shift, force: true, handler: (e) => { e.preventDefault(); setPaletteOpen(o => !o); } },
-  ], [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
+  // WS4 #2/#3 — one truthful keyboard registry. Every binding reads its
+  // key + modifiers from keybindConfig (so Settings rebinds propagate) and the
+  // Shell dispatches by the current destination. Calendar-scoped actions
+  // reach CalendarPage through CalendarNavContext or a window event; the
+  // duplicate per-page useShortcuts call is gone.
+  useShortcuts(useMemo(() => {
+    const b = (action: KeybindAction, handler: (e: KeyboardEvent) => void, force = false) => {
+      const k = keybinds[action];
+      return { key: k.key, ctrl: k.ctrl, meta: k.meta, shift: k.shift, force, handler };
+    };
+    const onCal = (fn: () => void) => () => { if (dest === 'calendar') fn(); };
+    return [
+      b('sidebar_toggle',  () => toggleSidebar()),
+      b('focus_mode',      () => goTo('focus')),
+      b('view_month',      () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar')),
+      b('view_week',       onCal(() => nav.setView('Week'))),
+      b('view_day',        onCal(() => nav.setView('Day'))),
+      b('view_year',       onCal(() => nav.setView('Year'))),
+      b('view_agenda',     onCal(() => nav.setView('Agenda'))),
+      b('new_event',       () => openEventEditor()),
+      b('today',           onCal(() => nav.goToday())),
+      b('prev_period',     onCal(() => nav.goPrev())),
+      b('next_period',     onCal(() => nav.goNext())),
+      b('delete_selected', onCal(() => window.dispatchEvent(new CustomEvent('loom-delete-selected')))),
+      // Backspace is a non-rebindable alias for Delete on the calendar surface.
+      { key: 'Backspace', handler: () => { if (dest === 'calendar') window.dispatchEvent(new CustomEvent('loom-delete-selected')); } },
+      b('snooze_week',     onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 7 } })))),
+      b('snooze_day',      onCal(() => window.dispatchEvent(new CustomEvent('loom-snooze-selected', { detail: { days: 1 } })))),
+      // WS6 §3 — keyboard event navigation dispatched into CalendarPage's
+      // useEventKeyNav (roving focus + open editor on the focused chip).
+      b('event_next',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-nav', { detail: { dir: 'next' } })))),
+      b('event_prev',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-nav', { detail: { dir: 'prev' } })))),
+      b('event_edit',      onCal(() => window.dispatchEvent(new CustomEvent('loom-event-edit')))),
+      b('search',          () => document.querySelector<HTMLInputElement>('.loom-search')?.focus()),
+      b('inbox',           () => setInboxOpen(o => !o)),
+      b('jump_date',       () => setJumpOpen(true)),
+      b('shortcut_sheet',  () => setSheetOpen(o => !o)),
+      b('command_palette', (e) => { e.preventDefault(); setPaletteOpen(o => !o); }, true),
+    ];
+  }, [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
 
   const topBarKind = (dest === 'home' ? 'home' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
 
@@ -333,7 +376,6 @@ function Shell() {
           unread={unreadCount}
           onBell={togglePanel}
           onMic={handleMic}
-          onSearch={handleSearch}
           semanticEnabled={semanticEnabled}
           onSemanticToggle={() => setSemanticEnabled(e => !e)}
           right={
@@ -344,11 +386,12 @@ function Shell() {
           }
         />
         {panelOpen && <NotifPanel onClose={togglePanel} />}
+        <ConfirmBar items={confirmItems} onResolve={resolveConfirm} />
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
           <Routes>
             <Route path="/home"                        element={<HomePage />} />
-            <Route path="/calendar"                   element={<CalendarPage key={reloadKey} />} />
+            <Route path="/calendar"                   element={<CalendarPage />} />
             <Route path="/calendar/sync-review"        element={<SyncReviewPage />} />
             <Route path="/tasks"                       element={<TaskBoardPage />} />
             <Route path="/focus"                       element={<FocusPage />} />
@@ -361,8 +404,10 @@ function Shell() {
             <Route path="/settings/connections/:id"    element={<ConnectionDetailPage />} />
             <Route path="*"                            element={<Navigate to="/home" replace />} />
           </Routes>
-          <ModalRoot onSaved={() => setReloadKey(k => k + 1)} />
-          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+          <ModalRoot onSaved={reloadCalendar} />
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setSheetOpen(true)} onJumpToDate={() => setJumpOpen(true)} />
+          {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
+          {jumpOpen && <JumpToDate onPick={handleJump} onClose={() => setJumpOpen(false)} />}
         </div>
       </div>
     </div>
@@ -378,6 +423,9 @@ export default function App() {
             <UndoProvider>
               <ModalProvider>
                 <CalendarNavProvider>
+                  {/* WS6 §5 — the single SR live region, mounted before any
+                      announcement so the node pre-exists in the DOM. */}
+                  <LiveRegion />
                   {/* Full-bleed routes bypass <Shell/> entirely (no app drawer / no top bar). */}
                   <Routes>
                     <Route path="/auth/sign-in" element={<SignInPage />} />

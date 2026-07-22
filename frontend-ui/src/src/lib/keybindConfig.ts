@@ -1,3 +1,5 @@
+export type KeybindContext = 'Global' | 'Calendar';
+
 export interface KeybindDef {
   key: string;
   ctrl?: boolean;
@@ -5,6 +7,7 @@ export interface KeybindDef {
   shift?: boolean;
   label: string;
   description: string;
+  context: KeybindContext;
 }
 
 export type KeybindAction =
@@ -13,25 +16,53 @@ export type KeybindAction =
   | 'view_month'
   | 'view_week'
   | 'view_day'
+  | 'view_year'
   | 'view_agenda'
   | 'new_event'
   | 'today'
+  | 'prev_period'
+  | 'next_period'
+  | 'delete_selected'
   | 'snooze_day'
   | 'snooze_week'
+  | 'event_next'
+  | 'event_prev'
+  | 'event_edit'
+  | 'search'
+  | 'inbox'
+  | 'jump_date'
+  | 'shortcut_sheet'
   | 'command_palette';
 
+// WS4 shell audit #7 — the number keys must match the TopBar view-switcher
+// order exactly: 1=Month, 2=Week, 3=Day, 4=Year, 5=Agenda.
 export const KEYBIND_DEFAULTS: Record<KeybindAction, KeybindDef> = {
-  sidebar_toggle:  { key: 'b',          label: 'B',           description: 'Toggle sidebar' },
-  focus_mode:      { key: 'f',          label: 'F',           description: 'Go to Focus Mode' },
-  view_month:      { key: '1',          label: '1',           description: 'Month view / go to Calendar' },
-  view_week:       { key: '2',          label: '2',           description: 'Week view' },
-  view_day:        { key: '3',          label: '3',           description: 'Day view' },
-  view_agenda:     { key: '4',          label: '4',           description: 'Agenda view' },
-  new_event:       { key: 'n',          label: 'N',           description: 'New event' },
-  today:           { key: 't',          label: 'T',           description: 'Go to today' },
-  snooze_day:      { key: 'arrowright', label: '→',           description: 'Snooze selected event +1 day' },
-  snooze_week:     { key: 'arrowright', shift: true, label: '→', description: 'Snooze selected event +1 week' },
-  command_palette: { key: 'k',          meta: true, label: 'K', description: 'Open command palette' },
+  sidebar_toggle:  { key: 'b',          label: 'B',   description: 'Toggle sidebar',                context: 'Global' },
+  focus_mode:      { key: 'f',          label: 'F',   description: 'Go to Focus Mode',              context: 'Global' },
+  new_event:       { key: 'n',          label: 'N',   description: 'New event',                     context: 'Global' },
+  search:          { key: '/',          label: '/',   description: 'Focus search',                  context: 'Global' },
+  inbox:           { key: 'i',          label: 'I',   description: 'Toggle inbox',                  context: 'Global' },
+  jump_date:       { key: 'g',          label: 'G',   description: 'Jump to date',                  context: 'Global' },
+  shortcut_sheet:  { key: '?', shift: true, label: '?', description: 'Show keyboard shortcuts',     context: 'Global' },
+  command_palette: { key: 'k', meta: true,  label: 'K', description: 'Open command palette',        context: 'Global' },
+  view_month:      { key: '1',          label: '1',   description: 'Month view / go to Calendar',   context: 'Calendar' },
+  view_week:       { key: '2',          label: '2',   description: 'Week view',                     context: 'Calendar' },
+  view_day:        { key: '3',          label: '3',   description: 'Day view',                      context: 'Calendar' },
+  view_year:       { key: '4',          label: '4',   description: 'Year view',                     context: 'Calendar' },
+  view_agenda:     { key: '5',          label: '5',   description: 'Agenda view',                   context: 'Calendar' },
+  today:           { key: 't',          label: 'T',   description: 'Go to today',                   context: 'Calendar' },
+  prev_period:     { key: '[',          label: '[',   description: 'Previous period',               context: 'Calendar' },
+  next_period:     { key: ']',          label: ']',   description: 'Next period',                   context: 'Calendar' },
+  delete_selected: { key: 'Delete',     label: 'Del', description: 'Delete selected event(s)',      context: 'Calendar' },
+  snooze_day:      { key: 'arrowright', label: '→',   description: 'Snooze selected event +1 day',  context: 'Calendar' },
+  snooze_week:     { key: 'arrowright', shift: true, label: '→', description: 'Snooze selected event +1 week', context: 'Calendar' },
+  // WS6 §3 — keyboard event navigation. The plan named n/b, but those are taken
+  // globally by new_event (N) and sidebar_toggle (B); j/k (vim next/prev) are
+  // the closest conflict-free calendar-context bindings. Enter opens the pinned
+  // peek, ⌘/Ctrl+arrows move — both handled in useEventKeyNav, not rebindable.
+  event_next:      { key: 'j',          label: 'J',   description: 'Select next event',            context: 'Calendar' },
+  event_prev:      { key: 'k',          label: 'K',   description: 'Select previous event',         context: 'Calendar' },
+  event_edit:      { key: 'e',          label: 'E',   description: 'Edit selected event',           context: 'Calendar' },
 };
 
 const LS_KEY = 'loom-keybinds';

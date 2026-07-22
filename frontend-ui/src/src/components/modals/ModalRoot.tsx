@@ -41,6 +41,7 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           instanceDate={modal.props.instanceDate as string | undefined}
           startISO={modal.props.startISO as string | undefined}
           endISO={modal.props.endISO as string | undefined}
+          prefill={modal.props.prefill as Parameters<typeof EventEditorModal>[0]['prefill']}
           timelines={timelines}
           onSaved={onSaved}
         />

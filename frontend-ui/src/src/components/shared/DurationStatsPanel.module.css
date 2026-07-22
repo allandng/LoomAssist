@@ -44,9 +44,9 @@
   white-space: nowrap;
 }
 
-.under  { color: #22c55e; font-weight: 500; }
+.under  { color: var(--success); font-weight: 500; }
 .over   { color: var(--accent); font-weight: 500; }
-.overRed { color: #ef4444; font-weight: 500; }
+.overRed { color: var(--error); font-weight: 500; }
 
 .summary {
   list-style: none;

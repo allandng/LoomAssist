@@ -45,8 +45,12 @@ export function TodayLineFreshness({ view }: { view: string }) {
     .pop();
   if (!latest) return null;
 
+  const label = `synced ${relativeTime(latest)}`;
   return (
     <div
+      role="status"
+      aria-live="polite"
+      aria-label={`Calendar ${label}`}
       style={{
         position: 'absolute',
         top: 12,
@@ -61,9 +65,8 @@ export function TodayLineFreshness({ view }: { view: string }) {
         borderRadius: 999,
         border: '1px solid var(--border)',
       }}
-      aria-hidden
     >
-      synced {relativeTime(latest)}
+      {label}
     </div>
   );
 }

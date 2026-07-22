@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -20,19 +21,23 @@ import { ProcrastinationToast } from '../components/calendar/ProcrastinationToas
 import { WarningStack } from '../components/calendar/WarningStack';
 import { YearView } from '../components/calendar/YearView';
 import { DragShader, type DragState, type SelectRange } from '../components/calendar/DragShader';
+import { QuickCreatePopover, type QuickCreateAnchor } from '../components/calendar/QuickCreatePopover';
+import { SelectionBar } from '../components/calendar/SelectionBar';
 import { TodayLineFreshness } from '../components/calendar/TodayLineFreshness';
 import { useCalendarNav } from '../contexts/CalendarNavContext';
 import { useUndo } from '../contexts/UndoContext';
 import { useModal } from '../contexts/ModalContext';
-import { useShortcuts } from '../hooks/useShortcuts';
+import { pushEscapeHandler } from '../lib/escapeStack';
 import { useReminders } from '../hooks/useReminders';
+import { useEventKeyNav } from '../hooks/useEventKeyNav';
 import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
 import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
+import { tint } from '../lib/colors';
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
-  listCalendars, createCalendar, updateCalendar, deleteCalendar,
+  listCalendars, updateCalendar, deleteCalendar,
   listTemplates,
   analyzeSchedule,
   detectExamClusters,
@@ -48,12 +53,24 @@ import type { FreeSlot } from '../types';
 import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef, ProcrastinationWarning, WellnessWarning } from '../types';
 import { getDismissed, dismiss as dismissRadar } from '../lib/radarDismissals';
 import { checkSleepWindow } from '../lib/sleepWindow';
-import { useNotifications } from '../store/notifications';
+import { useNotifications, buildMutationToast } from '../store/notifications';
 
 // ---- FullCalendar view name map ----
 const FC_VIEW: Record<string, string> = {
   Month: 'dayGridMonth', Week: 'timeGridWeek', Day: 'timeGridDay', Agenda: 'listWeek',
 };
+
+// Module-level cache of the deadline-chip threshold (days). Read once at module
+// load instead of on every EventPill render; refreshed when another window
+// changes the setting via the `storage` event (WS2 audit #18).
+let deadlineChipDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'loom_deadline_chip_days' || e.key === null) {
+      deadlineChipDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+    }
+  });
+}
 
 // ---- EventPill rendered inside FullCalendar ----
 function EventPill({ info, timelines }: { info: EventContentArg; timelines: Calendar[] }) {
@@ -70,7 +87,7 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
 
   const now = new Date();
   const start = info.event.start;
-  const thresholdDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
+  const thresholdDays = deadlineChipDays;
   let chipLabel = '';
   let isUrgent = false;
   if (!isPrepBlock && start && start > now) {
@@ -84,12 +101,17 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
     }
   }
 
+  // Contrast recipe (anatomy unchanged): tint the timeline hue over the themed
+  // panel surface so the wash follows light/dark mode, and derive the inherited
+  // text tone by mixing the hue toward the theme's text color (guarantees
+  // legibility while preserving the hue as the cue). All-day spans keep the
+  // solid fill + white text. See WS2 §7 / contrast test.
   return (
     <div
       className={`${styles.pill}${isPrepBlock ? ` ${styles.prepPill}` : ''}`}
       style={{
-        background: isSpan ? color : `${color}${isPrepBlock ? '11' : '22'}`,
-        color: isSpan ? 'white' : color,
+        background: isSpan ? color : tint(color, isPrepBlock ? 8 : 14, 'var(--bg-panel)'),
+        color: isSpan ? 'white' : `color-mix(in srgb, ${color} 55%, var(--text-main))`,
         borderLeft: isSpan ? 'none' : `2px solid ${color}`,
       }}
       draggable={!isPrepBlock}
@@ -121,20 +143,20 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
   );
 }
 
-// Module-scoped flag for the "Missed → Reschedule" recovery flow. Survives
-// the CalendarPage remount that fires on every event save (App mounts the
-// page with key={reloadKey}, so component-local refs would be reset). Set
-// when the user clicks Reschedule in MissedEventsModal; consumed when the
-// editor closes (either path: save → page remounts and the mount effect
-// reads it; cancel → modal-name transition watcher reads it).
+// Module-scoped flag for the "Missed → Reschedule" recovery flow. Set when the
+// user clicks Reschedule in MissedEventsModal; consumed when the editor closes
+// (either path — save or cancel) by the modal-name transition watcher, which
+// refetches the missed list and re-opens the modal. Module-scoped so it is
+// independent of component-instance lifetime.
 let pendingMissedRecovery = false;
 
 export function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
   const pendingDateRef = useRef<Date | null>(null);
+  const location = useLocation();
   const nav = useCalendarNav();
-  const { push: pushUndo } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, modal } = useModal();
+  const { push: pushUndo, undo: undoLast } = useUndo();
+  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, modal } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
@@ -145,6 +167,9 @@ export function CalendarPage() {
   const [hiddenTimelineIds, setHiddenTimelineIds] = useState<Set<number>>(new Set());
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
+  // WS4 #10 — mini-calendar anchor + the main view's visible range (band).
+  const [miniAnchor, setMiniAnchor] = useState<Date>(() => new Date());
+  const [miniRange, setMiniRange] = useState<{ start: Date; end: Date } | null>(null);
   const [wellness, setWellness] = useState<{ date: string; message: string } | null>(null);
   // The detector emits at most one disjoint cluster today; the array shape on
   // /schedule/* allows more, so we render the first non-dismissed one.
@@ -152,7 +177,7 @@ export function CalendarPage() {
   const [radar, setRadar] = useState<ProcrastinationWarning[]>([]);
   const [radarDismissed, setRadarDismissed] = useState<Record<number, string>>(() => getDismissed());
 
-  // Missed events (loaded on mount; refreshed implicitly via reloadKey remount)
+  // Missed events (loaded on mount; refreshed via the nav.reload() handoff)
   const [missedItems, setMissedItems] = useState<Event[]>([]);
   const [missedTruncated, setMissedTruncated] = useState(false);
   const prevModalNameRef = useRef<typeof modal.name>(modal.name);
@@ -167,13 +192,42 @@ export function CalendarPage() {
   // Drag-to-select tint (Phase v3.0 §8 ride-along #2)
   const [selectRange, setSelectRange] = useState<SelectRange | null>(null);
   const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
+  // WS3 #10 — plain-scroll period paging is opt-out. Read once (route remounts).
+  const wheelNavEnabled = localStorage.getItem('loom_wheel_nav') !== 'false';
+  // WS3 #5 — element dimmed as the drag "ghost at origin"; cleared on drag stop.
+  const dragSourceElRef = useRef<HTMLElement | null>(null);
 
-  // QuickPeek state
-  const [peek, setPeek] = useState<{ event: Event; x: number; y: number } | null>(null);
+  // WS3 #1 — quick-create popover anchored to the drag/click selection.
+  const [quickCreate, setQuickCreate] = useState<
+    { start: Date; end: Date; allDay: boolean; anchor: QuickCreateAnchor } | null
+  >(null);
+
+  // WS2: past-event dimming (opt-out). Read once on mount so a Settings toggle
+  // takes effect the next time the calendar is navigated to (this route
+  // remounts), without a localStorage read per pill.
+  const dimPast = useMemo(() => localStorage.getItem('loom_dim_past') !== 'false', []);
+
+  // Empty-grid overlay (one-time, dismissible, month view only).
+  const [emptyDismissed, setEmptyDismissed] = useState(false);
+
+  // WS2: weekend-wash toggle → body class the grid CSS keys off. Applied on
+  // mount so it survives a boot where Settings was never opened.
+  useEffect(() => {
+    const washOn = localStorage.getItem('loom_weekend_wash') !== 'false';
+    document.body.classList.toggle('loom-no-weekend-wash', !washOn);
+  }, []);
+
+  // QuickPeek state. A hover peek is passive; a single click pins an interactive
+  // one (WS5 #1). `anchorEl` is the originating pill — focus returns to it on Esc.
+  const [peek, setPeek] = useState<
+    { event: Event; x: number; y: number; pinned: boolean; keyboard: boolean; anchorEl: HTMLElement | null } | null
+  >(null);
   const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peekHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Double-click detection
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Double-click detection (timestamp-based — no 200ms selection delay: a single
+  // click selects immediately, a second within the window opens the editor).
+  const lastClickTimeRef = useRef<number>(0);
   const lastClickedIdRef = useRef<string | null>(null);
 
   // Sidebar collapse
@@ -233,6 +287,29 @@ export function CalendarPage() {
   }, []);
 
   useEffect(() => { loadAll(true); }, [loadAll]);
+
+  // WS3 #8 — refresh the "missed" list state (sidebar count) without reopening
+  // any modal. Used by the reload handoff and the initial mount fetch.
+  const refreshMissedState = useCallback(async () => {
+    try {
+      const { items, truncated } = await getMissedEvents();
+      setMissedItems(items);
+      setMissedTruncated(truncated);
+    } catch { /* silently ignore — sidebar shows empty state */ }
+  }, []);
+
+  // WS3 #8 — register the imperative refetch. Save/voice paths call nav.reload()
+  // instead of remounting the whole page (which discarded scroll/view/selection).
+  // Previously-rendered events stay on screen until the fetch resolves.
+  useEffect(() => {
+    nav.registerReload(async () => {
+      await loadAll();
+      await refreshMissedState();
+    });
+    // Clear on unmount so a modal saving from another page can't fire this
+    // instance's (now stale) loader.
+    return () => { nav.registerReload(() => {}); };
+  }, [nav, loadAll, refreshMissedState]);
 
   // Mutation-triggered exam-cluster detection. Skips the very first non-empty
   // events render (analyzeSchedule already seeds the banner on initial load).
@@ -370,15 +447,14 @@ export function CalendarPage() {
     pendingDateRef.current = null;
   }, [nav.view]);
 
-  // Cross-page navigation bridge: Home heatmap writes loom_pending_date.
-  // Picked up once on mount; switches to the requested view + date.
+  // Cross-page navigation bridge (WS4 #12): Home hands off via route state
+  // `{ date, view }` instead of an invisible sessionStorage side channel.
+  // Consumed once on mount.
   useEffect(() => {
-    const dateISO = sessionStorage.getItem('loom_pending_date');
-    const viewReq = sessionStorage.getItem('loom_pending_view');
-    if (!dateISO) return;
-    sessionStorage.removeItem('loom_pending_date');
-    sessionStorage.removeItem('loom_pending_view');
-    pendingDateRef.current = new Date(dateISO);
+    const st = location.state as { date?: string; view?: string } | null;
+    if (!st?.date) return;
+    pendingDateRef.current = new Date(st.date);
+    const viewReq = st.view;
     if (viewReq === 'Day' || viewReq === 'Week' || viewReq === 'Month' || viewReq === 'Agenda') {
       nav.setView(viewReq);
     } else {
@@ -401,6 +477,27 @@ export function CalendarPage() {
   const handleYearMonthClick = useCallback((date: Date) => {
     pendingDateRef.current = date;
     nav.setView('Month');
+  }, [nav]);
+
+  // WS4 #10 — mini-calendar: single click moves the anchor date without
+  // changing the view type; double-click drops into Day view.
+  const handleMiniPick = useCallback((date: Date) => {
+    if (nav.view === 'Year') {
+      pendingDateRef.current = date;
+      nav.setView('Month');
+      return;
+    }
+    const api = calRef.current?.getApi();
+    if (api) {
+      api.gotoDate(date);
+      nav.setDateLabel(api.view.title);
+      setMiniAnchor(api.view.currentStart);
+    }
+  }, [nav]);
+
+  const handleMiniPickDay = useCallback((date: Date) => {
+    pendingDateRef.current = date;
+    nav.setView('Day');
   }, [nav]);
 
   const handleFindFreeSlots = useCallback(async (durationMins: number): Promise<FreeSlot[]> => {
@@ -428,7 +525,7 @@ export function CalendarPage() {
     openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
   }, [openMissedEvents, missedItems, missedTruncated, handleRecoverReschedule]);
 
-  // Initial load + after-save reload (page remounts on reloadKey).
+  // Initial mount fetch of the missed list (drives the sidebar count).
   useEffect(() => {
     let cancelled = false;
     getMissedEvents()
@@ -436,34 +533,32 @@ export function CalendarPage() {
         if (cancelled) return;
         setMissedItems(items);
         setMissedTruncated(truncated);
-        // Save-during-recovery path: page just remounted after editor save.
-        // Re-open the modal with the refreshed list (the saved event is gone
-        // from the list because the editor's auto-clear-on-save sent
-        // missed_at=null, so the GET filter excludes it now).
-        if (pendingMissedRecovery) {
-          pendingMissedRecovery = false;
-          if (items.length > 0) {
-            openMissedEvents(items, truncated, handleRecoverReschedule);
-          }
-        }
       })
       .catch(() => { /* silently ignore — sidebar shows empty state */ });
     return () => { cancelled = true; };
-  }, [openMissedEvents, handleRecoverReschedule]);
+  }, []);
 
-  // Cancel-during-recovery path: editor closes without save, so the page does
-  // NOT remount. Detect the modal-name transition and re-open the modal with
-  // the current (unchanged) list.
+  // Missed-recovery re-open. The page no longer remounts on save (WS3 #8), so
+  // both the save and cancel paths converge here: when the editor closes with a
+  // recovery in flight, fetch the *fresh* missed list (the saved event's
+  // missed_at was auto-cleared, so it drops out) and re-open the modal. The
+  // pendingMissedRecovery flag's set/consume semantics are unchanged.
   useEffect(() => {
     const prev = prevModalNameRef.current;
     prevModalNameRef.current = modal.name;
     if (prev === 'event-editor' && modal.name === null && pendingMissedRecovery) {
       pendingMissedRecovery = false;
-      if (missedItems.length > 0) {
-        openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
-      }
+      getMissedEvents()
+        .then(({ items, truncated }) => {
+          setMissedItems(items);
+          setMissedTruncated(truncated);
+          if (items.length > 0) {
+            openMissedEvents(items, truncated, handleRecoverReschedule);
+          }
+        })
+        .catch(() => { /* silently ignore */ });
     }
-  }, [modal.name, missedItems, missedTruncated, openMissedEvents, handleRecoverReschedule]);
+  }, [modal.name, openMissedEvents, handleRecoverReschedule]);
 
   // Wire TopBar sync status
   useEffect(() => {
@@ -499,7 +594,7 @@ export function CalendarPage() {
           api.changeView(ZOOM_VIEWS[nextIdx]);
           nav.setDateLabel(api.view.title);
         }
-      } else if (!TIME_GRID.has(viewType)) {
+      } else if (!TIME_GRID.has(viewType) && wheelNavEnabled) {
         // Plain scroll on month/agenda/list: navigate prev/next period
         e.preventDefault();
         if (e.deltaY > 0) {
@@ -509,11 +604,12 @@ export function CalendarPage() {
         }
         nav.setDateLabel(api.view.title);
       } else {
-        // Time-grid views: let the browser handle native hour scrolling
+        // Time-grid views (native hour scrolling) or wheel-nav disabled.
         return;
       }
 
-      wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 150);
+      // WS3 #10 — one period per gesture; 250ms lockout beats 150ms's overshoot.
+      wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 250);
     };
 
     el.addEventListener('wheel', handler, { passive: false });
@@ -521,13 +617,32 @@ export function CalendarPage() {
       el.removeEventListener('wheel', handler);
       if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
     };
-  }, [nav]);
+  }, [nav, wheelNavEnabled]);
+
+  // Clear any pending peek show/hide timers on unmount.
+  useEffect(() => () => {
+    if (peekTimerRef.current) clearTimeout(peekTimerRef.current);
+    if (peekHideTimerRef.current) clearTimeout(peekHideTimerRef.current);
+  }, []);
 
   // ---- Computed FC events ----
   const fcEvents = useMemo(
     () => buildFCEvents(events, timelines, hiddenTimelineIds, activeFilters),
     [events, timelines, hiddenTimelineIds, activeFilters],
   );
+
+  // WS6 §3/§4 — keyboard event navigation + move-mode. Roving focus over the
+  // mounted occurrences (fed by eventDidMount/eventWillUnmount below); selecting
+  // syncs the highlight, Enter opens the pinned keyboard peek (WS5).
+  const { registerEl, unregisterEl } = useEventKeyNav({
+    active: nav.view !== 'Year',
+    calRef,
+    onSelect: (id) => setSelectedEventIds(id == null ? new Set() : new Set([id])),
+    onOpenPeek: (ev, el) => {
+      const r = el.getBoundingClientRect();
+      setPeek({ event: ev, x: r.right, y: r.top, pinned: true, keyboard: true, anchorEl: el });
+    },
+  });
 
   // ---- Filter counts ----
   const filterCounts = useMemo(() => {
@@ -583,17 +698,38 @@ export function CalendarPage() {
     const newStart  = arg.event.start!;
     const newEnd    = arg.event.end ?? new Date(newStart.getTime() + (prevEnd.getTime() - prevStart.getTime()));
 
+    // WS3 #6 — ⌥/Alt-drag duplicates: leave the original in place and create a
+    // copy at the drop time (macOS muscle memory).
+    if ((arg.jsEvent as MouseEvent | undefined)?.altKey) {
+      arg.revert();
+      const { id: _oldId, ...base } = ev;
+      const copyPayload = { ...base, start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
+      try {
+        const { event: created } = await createEvent(copyPayload);
+        pushUndo({
+          label: `Duplicate "${ev.title}"`,
+          undo: async () => { await deleteEvent(created.id); await loadAll(); },
+          redo: async () => { /* re-create not directly reversible */ },
+        });
+        await loadAll();
+      } catch {
+        addNotification({ type: 'error', title: 'Duplicate failed', message: 'Could not copy event.' });
+      }
+      return;
+    }
+
     const payload = { ...ev, start_time: newStart.toISOString(), end_time: newEnd.toISOString() };
     const revert  = { ...ev, start_time: prevStart.toISOString(), end_time: prevEnd.toISOString() };
 
-    pushUndo({
-      label: `Move "${ev.title}"`,
-      undo: async () => { await updateEvent(ev.id, revert); await loadAll(); },
-      redo: async () => { await updateEvent(ev.id, payload); await loadAll(); },
-    });
-
     try {
+      // Optimistic: FC already moved the pill. Persist, then record undo — a
+      // failed PUT reverts and pushes no undo entry (WS3 #9).
       await updateEvent(ev.id, payload);
+      pushUndo({
+        label: `Move "${ev.title}"`,
+        undo: async () => { await updateEvent(ev.id, revert); await loadAll(); },
+        redo: async () => { await updateEvent(ev.id, payload); await loadAll(); },
+      });
       await loadAll();
       const sw = checkSleepWindow(payload.start_time, payload.end_time, !!ev.is_all_day);
       if (sw) {
@@ -613,14 +749,19 @@ export function CalendarPage() {
 
   // ---- Drag shader callbacks (Phase 2) ----
   const handleEventDragStart = useCallback((arg: EventDragStartArg) => {
+    // WS3 #5 — dim the source occurrence so it reads as a "ghost at origin".
+    const el = arg.el as HTMLElement | undefined;
+    if (el) { el.classList.add('loom-drag-source'); dragSourceElRef.current = el; }
     if (!dragShaderEnabled) return;
     const ev = arg.event.extendedProps.event as Event;
     const start = arg.event.start ?? new Date();
     const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
-    setDragging({ id: ev.id, start, end });
+    setDragging({ id: ev.id, fcId: arg.event.id, start, end });
   }, [dragShaderEnabled]);
 
   const handleEventDragStop = useCallback((_arg: EventDragStartArg) => {
+    dragSourceElRef.current?.classList.remove('loom-drag-source');
+    dragSourceElRef.current = null;
     setDragging(null);
   }, []);
 
@@ -636,7 +777,7 @@ export function CalendarPage() {
     const ev = arg.event.extendedProps.event as Event;
     const start = arg.event.start ?? new Date();
     const end   = arg.event.end   ?? new Date(start.getTime() + 3_600_000);
-    setDragging({ id: ev.id, start, end });
+    setDragging({ id: ev.id, fcId: arg.event.id, start, end });
   }, [dragShaderEnabled]);
 
   const handleResizeStop = useCallback((_arg: EventResizeStartArg) => {
@@ -649,14 +790,13 @@ export function CalendarPage() {
     const prevEnd  = arg.oldEvent.end!;
     const newEnd   = arg.event.end!;
 
-    pushUndo({
-      label: `Resize "${ev.title}"`,
-      undo: async () => { await updateEvent(ev.id, { ...ev, end_time: prevEnd.toISOString() }); await loadAll(); },
-      redo: async () => { await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });  await loadAll(); },
-    });
-
     try {
       await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });
+      pushUndo({
+        label: `Resize "${ev.title}"`,
+        undo: async () => { await updateEvent(ev.id, { ...ev, end_time: prevEnd.toISOString() }); await loadAll(); },
+        redo: async () => { await updateEvent(ev.id, { ...ev, end_time: newEnd.toISOString() });  await loadAll(); },
+      });
       await loadAll();
       const sw = checkSleepWindow(ev.start_time, newEnd.toISOString(), !!ev.is_all_day);
       if (sw) {
@@ -674,59 +814,240 @@ export function CalendarPage() {
     }
   }, [pushUndo, loadAll, addNotification]);
 
+  // Hover-grace helpers (WS5 #1): don't drop a passive peek the instant the
+  // cursor leaves the pill — give ~500ms so the user can move onto the card.
+  const cancelPeekHide = useCallback(() => {
+    if (peekHideTimerRef.current) { clearTimeout(peekHideTimerRef.current); peekHideTimerRef.current = null; }
+  }, []);
+  const schedulePeekHide = useCallback(() => {
+    cancelPeekHide();
+    peekHideTimerRef.current = setTimeout(() => {
+      setPeek(prev => (prev && prev.pinned ? prev : null));
+    }, 500);
+  }, [cancelPeekHide]);
+
+  const closePeek = useCallback(() => {
+    cancelPeekHide();
+    if (peekTimerRef.current) { clearTimeout(peekTimerRef.current); peekTimerRef.current = null; }
+    setPeek(prev => {
+      // Return focus to the originating pill on an explicit close (Esc / Close).
+      const el = prev?.anchorEl;
+      if (el && document.contains(el)) { el.setAttribute('tabindex', '-1'); el.focus(); }
+      return null;
+    });
+  }, [cancelPeekHide]);
+
   const handleEventClick = useCallback((arg: EventClickArg) => {
     const fcId = arg.event.id;
-    if (lastClickedIdRef.current === fcId && clickTimerRef.current !== null) {
-      // Double-click
-      clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
+    const ev: Event = arg.event.extendedProps.event;
+    const now = Date.now();
+    const el = arg.el as HTMLElement;
+    const rect = el.getBoundingClientRect();
+
+    // Double-click (same occurrence within 350ms) opens the editor. Single click
+    // selects immediately — no artificial delay (WS3 #2).
+    if (lastClickedIdRef.current === fcId && now - lastClickTimeRef.current < 350) {
       lastClickedIdRef.current = null;
-      const ev: Event = arg.event.extendedProps.event;
+      lastClickTimeRef.current = 0;
+      cancelPeekHide();
+      setPeek(null);
       const instanceDate: string | undefined = arg.event.extendedProps.instanceDate;
       openEventEditor(ev, undefined, instanceDate);
       return;
     }
-    // Single click — 200 ms timer before treating as selection
+
     lastClickedIdRef.current = fcId;
-    clickTimerRef.current = setTimeout(() => {
-      clickTimerRef.current = null;
-      lastClickedIdRef.current = null;
-      const ev: Event = arg.event.extendedProps.event;
-      setSelectedEventIds(prev => {
-        const next = new Set(prev);
-        if (arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey) {
-          if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id);
-        } else {
-          if (next.has(ev.id) && next.size === 1) next.clear(); else { next.clear(); next.add(ev.id); }
-        }
-        return next;
-      });
-    }, 200);
-  }, [openEventEditor]);
+    lastClickTimeRef.current = now;
+    setQuickCreate(null);
+    const isModifier = arg.jsEvent.shiftKey || arg.jsEvent.metaKey || arg.jsEvent.ctrlKey;
+    setSelectedEventIds(prev => {
+      const next = new Set(prev);
+      if (isModifier) {
+        if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id);
+      } else {
+        if (next.has(ev.id) && next.size === 1) next.clear(); else { next.clear(); next.add(ev.id); }
+      }
+      return next;
+    });
+
+    // WS5 #1 — a plain single click pins an interactive peek to the clicked
+    // event; clicking the same pinned event again (a de-select) closes it.
+    // Modifier clicks are multi-select and carry no single-event peek.
+    cancelPeekHide();
+    if (isModifier) {
+      setPeek(null);
+    } else {
+      setPeek(prev =>
+        prev && prev.pinned && prev.event.id === ev.id
+          ? null
+          : { event: ev, x: rect.right, y: rect.top, pinned: true, keyboard: false, anchorEl: el });
+    }
+  }, [openEventEditor, cancelPeekHide]);
 
   const handleMouseEnter = useCallback((arg: EventHoveringArg) => {
     if (window.matchMedia('(hover: none)').matches) return;
+    cancelPeekHide();
+    // A pinned peek is a deliberate focus — don't let a stray hover replace it.
+    let pinnedOpen = false;
+    setPeek(prev => { pinnedOpen = !!(prev && prev.pinned); return prev; });
+    if (pinnedOpen) return;
     if (peekTimerRef.current) clearTimeout(peekTimerRef.current);
     peekTimerRef.current = setTimeout(() => {
       const ev: Event = arg.event.extendedProps.event;
       const rect = (arg.el as HTMLElement).getBoundingClientRect();
-      setPeek({ event: ev, x: rect.right, y: rect.top });
-    }, 150);
-  }, []);
+      setPeek(prev => (prev && prev.pinned)
+        ? prev
+        : { event: ev, x: rect.right, y: rect.top, pinned: false, keyboard: false, anchorEl: arg.el as HTMLElement });
+    }, 300);
+  }, [cancelPeekHide]);
 
   const handleMouseLeave = useCallback(() => {
     if (peekTimerRef.current) { clearTimeout(peekTimerRef.current); peekTimerRef.current = null; }
+    schedulePeekHide();
+  }, [schedulePeekHide]);
+
+  // ---- Pinned-peek actions (WS5 #1) ----
+  const handlePeekEdit = useCallback((ev: Event) => {
+    closePeek();
+    openEventEditor(ev);
+  }, [closePeek, openEventEditor]);
+
+  const handlePeekDuplicate = useCallback(async (ev: Event) => {
+    closePeek();
+    const { id: _oldId, ...base } = ev;
+    try {
+      const { event: created } = await createEvent(base);
+      pushUndo({
+        label: `Duplicate "${ev.title}"`,
+        undo: async () => { await deleteEvent(created.id); await loadAll(); },
+        redo: async () => { /* re-create not directly reversible */ },
+      });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Duplicate failed', message: 'Could not copy event.' });
+    }
+  }, [closePeek, pushUndo, loadAll, addNotification]);
+
+  const handlePeekDelete = useCallback(async (ev: Event) => {
+    closePeek();
+    const snapshot = { ...ev };
+    try {
+      await deleteEvent(ev.id);
+      pushUndo({
+        label: `Delete "${ev.title}"`,
+        undo: async () => { const { id: _id, ...p } = snapshot; await createEvent(p); await loadAll(); },
+        redo: async () => { await deleteEvent(ev.id); await loadAll(); },
+      });
+      // WS7 #6 — the toast is a pointer into the undo stack: its Undo button
+      // pops the top entry (the delete we just pushed) rather than telling the
+      // user to recover elsewhere.
+      addNotification(buildMutationToast({ verb: 'Deleted', object: ev.title, undo: undoLast }));
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed', message: 'Could not delete event.' });
+    }
+  }, [closePeek, pushUndo, undoLast, loadAll, addNotification]);
+
+  const handlePeekChecklistToggle = useCallback(async (ev: Event, index: number) => {
+    const items = parseChecklist(ev.checklist);
+    if (index < 0 || index >= items.length) return;
+    const next = items.map((it, i) => i === index ? { ...it, done: !it.done } : it);
+    const nextJson = JSON.stringify(next.map(({ text, done, isReading }) => isReading ? { text, done, isReading } : { text, done }));
+    const updated: Event = { ...ev, checklist: nextJson };
+    // Optimistically reflect the toggle in the open peek.
+    setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: updated } : prev));
+    try {
+      // The backend PUT binds to EventBase (title/start/end/calendar_id all
+      // required), so a partial `{ checklist }` body 422s. Send the full event.
+      await updateEvent(ev.id, updated);
+      await loadAll();
+    } catch {
+      setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: ev } : prev));
+      addNotification({ type: 'error', title: 'Update failed', message: 'Could not save the checklist.' });
+    }
+  }, [loadAll, addNotification]);
+
+  // WS3 #1 — a drag (or click) on the empty grid opens the quick-create popover
+  // anchored to the selection rect, rather than jumping straight to the full
+  // 560px editor. The DragShader selection tint clears here; the popover renders
+  // over the (persisted) selection mirror.
+  const handleSelect = useCallback((arg: DateSelectArg) => {
+    setSelectRange(null);
+
+    // Anchor to the union of the selection-highlight cells; fall back to the
+    // pointer position when the highlight isn't in the DOM.
+    let anchor: QuickCreateAnchor | null = null;
+    const els = document.querySelectorAll('.fc-highlight');
+    if (els.length) {
+      let top = Infinity, left = Infinity, bottom = -Infinity, right = -Infinity;
+      els.forEach(el => {
+        const r = el.getBoundingClientRect();
+        top = Math.min(top, r.top); left = Math.min(left, r.left);
+        bottom = Math.max(bottom, r.bottom); right = Math.max(right, r.right);
+      });
+      anchor = { top, left, bottom, right };
+    } else if (arg.jsEvent) {
+      const x = (arg.jsEvent as MouseEvent).clientX;
+      const y = (arg.jsEvent as MouseEvent).clientY;
+      anchor = { top: y, left: x, bottom: y, right: x };
+    }
+    if (!anchor) { calRef.current?.getApi().unselect(); return; }
+
+    setSelectedEventIds(new Set());
     setPeek(null);
+    setQuickCreate({ start: arg.start, end: arg.end, allDay: arg.allDay, anchor });
   }, []);
 
-  const handleSelect = useCallback((_arg: DateSelectArg) => {
-    // drag-to-select on calendar — handled by Click handler for multi-select;
-    // for new-event creation from dragging, open the editor
-    // openEventEditor(null, arg.startStr);
-    // calRef.current?.getApi().unselect();
-    // Clear the select-range tint once the drag ends.
-    setSelectRange(null);
+  const discardQuickCreate = useCallback(() => {
+    setQuickCreate(null);
+    calRef.current?.getApi().unselect();
   }, []);
+
+  const buildQuickPayload = useCallback((title: string, calendarId: number, start: Date, end: Date, allDay: boolean): EventCreate => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+    return {
+      title,
+      start_time: allDay ? `${dateStr}T00:00:00` : start.toISOString(),
+      end_time:   allDay ? `${dateStr}T23:59:00` : end.toISOString(),
+      calendar_id: calendarId,
+      is_recurring: false, recurrence_days: '', recurrence_end: '',
+      description: '', unique_description: '', reminder_minutes: 0,
+      external_uid: '', timezone: 'local', is_all_day: allDay,
+      skipped_dates: '', per_day_times: '', checklist: '',
+    };
+  }, []);
+
+  const handleQuickCreateSubmit = useCallback(async (title: string, calendarId: number, end: Date) => {
+    if (!quickCreate) return;
+    localStorage.setItem('loom_last_timeline', String(calendarId));
+    const payload = buildQuickPayload(title, calendarId, quickCreate.start, end, quickCreate.allDay);
+    try {
+      const { event: created } = await createEvent(payload);
+      pushUndo({
+        label: `Create "${title}"`,
+        undo: async () => { await deleteEvent(created.id); await loadAll(); },
+        redo: async () => { /* re-create not directly reversible */ },
+      });
+      setQuickCreate(null);
+      calRef.current?.getApi().unselect();
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Could not create event', message: title });
+    }
+  }, [quickCreate, buildQuickPayload, pushUndo, loadAll, addNotification]);
+
+  const handleQuickCreateMore = useCallback((title: string, calendarId: number, end: Date) => {
+    if (!quickCreate) return;
+    localStorage.setItem('loom_last_timeline', String(calendarId));
+    const start = quickCreate.start;
+    setQuickCreate(null);
+    calRef.current?.getApi().unselect();
+    openEventEditor(null, undefined, undefined, start.toISOString(), end.toISOString(), {
+      title: title || undefined,
+      calendarId,
+    });
+  }, [quickCreate, openEventEditor]);
 
   // FullCalendar fires selectAllow on every drag-tick; we use it to track the
   // current selection range so DragShader can tint conflicts in --warning.
@@ -879,17 +1200,11 @@ export function CalendarPage() {
   }, [events.length]);
 
   // ---- Timeline actions ----
-  const handleNewTimeline = useCallback(async () => {
-    const name = window.prompt('New timeline name:');
-    if (!name?.trim()) return;
-    const cal = await createCalendar({ name: name.trim(), description: '', color: '#6366F1' });
-    pushUndo({
-      label: `Create timeline "${cal.name}"`,
-      undo: async () => { await deleteCalendar(cal.id); await loadAll(); },
-      redo: async () => { /* re-create not possible without re-issuing POST, skip */ },
-    });
-    await loadAll();
-  }, [pushUndo, loadAll]);
+  // WS3 #11 — open the themed timeline editor in create mode instead of a raw
+  // window.prompt.
+  const handleNewTimeline = useCallback(() => {
+    openTimelineEditor();
+  }, [openTimelineEditor]);
 
   const handleRenameTimeline = useCallback(async (id: number, name: string) => {
     const prev = timelines.find(t => t.id === id)?.name ?? '';
@@ -915,8 +1230,19 @@ export function CalendarPage() {
     await loadAll();
   }, [timelines, pushUndo, loadAll]);
 
-  const handleApplyTemplate = useCallback((_t: EventTemplate) => {
-    openEventEditor(null, undefined, undefined);
+  // WS3 #3 — templates are quick-create accelerators: pre-fill the editor from
+  // the template (title, duration → now-rounded-to-next-15, recurrence, timeline)
+  // instead of discarding it.
+  const handleApplyTemplate = useCallback((t: EventTemplate) => {
+    const ms = 15 * 60_000;
+    const start = new Date(Math.ceil(Date.now() / ms) * ms);
+    const end = new Date(start.getTime() + (t.duration_minutes || 60) * 60_000);
+    openEventEditor(null, undefined, undefined, start.toISOString(), end.toISOString(), {
+      title: t.title,
+      calendarId: t.calendar_id || undefined,
+      isRecurring: t.is_recurring,
+      recurrenceDays: t.recurrence_days,
+    });
   }, [openEventEditor]);
 
   // ---- Time Block Template handlers ----
@@ -976,17 +1302,40 @@ export function CalendarPage() {
     await loadAll();
   }, [loadAll]);
 
-  // ---- Keyboard shortcuts ----
-  useShortcuts(useMemo(() => [
-    { key: 'n', handler: () => openEventEditor(null) },
-    { key: 't', handler: () => calRef.current?.getApi().today() },
-    { key: '[', handler: () => { calRef.current?.getApi().prev(); nav.setDateLabel(calRef.current?.getApi().view.title ?? ''); } },
-    { key: ']', handler: () => { calRef.current?.getApi().next(); nav.setDateLabel(calRef.current?.getApi().view.title ?? ''); } },
-    { key: 'Delete',    handler: () => bulkDelete() },
-    { key: 'Backspace', handler: () => bulkDelete() },
-    { key: 'Escape', handler: () => setSelectedEventIds(new Set()) },
-    { key: '/', handler: () => { document.querySelector<HTMLInputElement>('.loom-search')?.focus(); } },
-  ], [openEventEditor, bulkDelete, nav]));
+  // ---- Keyboard shortcuts (WS4 #2) ----
+  // The calendar's keys now live in the single central registry (App/Shell +
+  // keybindConfig). New-event / today / prev / next / search dispatch through
+  // CalendarNavContext; delete arrives as a window event (like snooze) and
+  // Escape-to-clear-selection sits at the BOTTOM of the shared escape stack so
+  // it only fires once nothing more specific (modal, popover, palette) is open.
+  const selectedIdsRef = useRef(selectedEventIds);
+  useEffect(() => { selectedIdsRef.current = selectedEventIds; }, [selectedEventIds]);
+  useEffect(() => pushEscapeHandler(() => {
+    if (selectedIdsRef.current.size === 0) return false; // fall through
+    setSelectedEventIds(new Set());
+  }), []);
+
+  useEffect(() => {
+    const handler = () => void bulkDelete();
+    window.addEventListener('loom-delete-selected', handler);
+    return () => window.removeEventListener('loom-delete-selected', handler);
+  }, [bulkDelete]);
+
+  // WS4 #9 — jump-to-date from the TopBar overlay navigates the live calendar
+  // while preserving the current view.
+  useEffect(() => {
+    const handler = (e: globalThis.Event) => {
+      const detail = (e as CustomEvent<{ date: string }>).detail;
+      if (!detail?.date) return;
+      const d = new Date(detail.date);
+      if (isNaN(d.getTime())) return;
+      if (nav.view === 'Year') { pendingDateRef.current = d; nav.setView('Month'); return; }
+      const api = calRef.current?.getApi();
+      if (api) { api.gotoDate(d); nav.setDateLabel(api.view.title); setMiniAnchor(api.view.currentStart); }
+    };
+    window.addEventListener('loom-jump-date', handler as EventListener);
+    return () => window.removeEventListener('loom-jump-date', handler as EventListener);
+  }, [nav]);
 
   return (
     <div className={styles.page}>
@@ -1022,6 +1371,12 @@ export function CalendarPage() {
         onDeleteTimeBlockTemplate={handleDeleteTimeBlockTemplate}
         missedCount={missedItems.length}
         onOpenMissed={handleOpenMissed}
+        events={events}
+        miniAnchor={miniAnchor}
+        miniRangeStart={miniRange?.start ?? null}
+        miniRangeEnd={miniRange?.end ?? null}
+        onMiniPick={handleMiniPick}
+        onMiniPickDay={handleMiniPickDay}
       />
 
       <div ref={mainRef} className={styles.main}>
@@ -1058,7 +1413,54 @@ export function CalendarPage() {
           eventStartEditable={true}
           selectable
           selectMirror
+          snapDuration="00:15:00"
+          eventDragMinDistance={5}
+          dragRevertDuration={200}
+          slotEventOverlap={false}
+          nowIndicator={true}
+          dayMaxEvents={true}
+          moreLinkClick="popover"
+          defaultTimedEventDuration="00:30:00"
           height="100%"
+          // WS6 §1 — descriptive a11y hints ($0 = FC's view-unit / button-text
+          // placeholder). closeHint labels the "+N more" popover's close button.
+          buttonHints={{ prev: 'Previous $0', next: 'Next $0', today: 'This $0' }}
+          viewHint="$0 view"
+          navLinkHint="Go to $0"
+          closeHint="Close"
+          // WS6 §2 — event + day-cell ARIA and roving-nav registration. ARIA goes
+          // on FC's outer element (info.el), never inside the sacred pill.
+          eventDidMount={(info) => {
+            if (info.event.display === 'background') return; // move-mode phantom
+            const ev: Event = info.event.extendedProps.event;
+            const isPrep = !!info.event.extendedProps.isPrepBlock;
+            const start = info.event.start;
+            const end = info.event.end;
+            const tlName = timelines.find(t => t.id === ev.calendar_id)?.name ?? '';
+            const startStr = start ? start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+            const endStr = end ? end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+            const recur = ev.is_recurring ? ', recurring' : '';
+            info.el.setAttribute(
+              'aria-label',
+              `${isPrep ? 'Prep, ' : ''}${ev.title}, ${startStr} to ${endStr}${tlName ? `, ${tlName}` : ''}${recur}`,
+            );
+            info.el.setAttribute('role', 'button');
+            info.el.setAttribute('tabindex', '-1');
+            // Decorative chips inside the pill are already covered by aria-label.
+            info.el
+              .querySelectorAll('[class*="pillTime"],[class*="travelChip"],[class*="pillChk"],[class*="clockDot"],[class*="deadlineChip"]')
+              .forEach(n => n.setAttribute('aria-hidden', 'true'));
+            if (!isPrep && start && end) {
+              registerEl(info.event.id, { el: info.el as HTMLElement, ev, instanceDate: info.event.extendedProps.instanceDate, start, end });
+            }
+          }}
+          eventWillUnmount={(info) => {
+            if (info.event.display === 'background') return;
+            unregisterEl(info.event.id);
+          }}
+          dayCellDidMount={(info) => {
+            info.el.setAttribute('aria-label', info.date.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+          }}
           eventDrop={handleEventDrop}
           eventResize={handleEventResize}
           eventClick={handleEventClick}
@@ -1071,22 +1473,90 @@ export function CalendarPage() {
           eventAllow={handleEventAllow}
           eventResizeStart={handleResizeStart}
           eventResizeStop={handleResizeStop}
-          datesSet={info => nav.setDateLabel(info.view.title)}
+          datesSet={info => {
+            nav.setDateLabel(info.view.title);
+            setQuickCreate(null);
+            setMiniAnchor(info.view.currentStart);
+            setMiniRange({ start: info.start, end: info.end });
+          }}
           eventClassNames={arg => {
             const ev: Event = arg.event.extendedProps.event;
-            return selectedEventIds.has(ev.id) ? ['loom-event-selected'] : [];
+            const classes: string[] = [];
+            if (selectedEventIds.has(ev.id)) classes.push('loom-event-selected');
+            // Dim occurrences whose end is in the past (per-occurrence — uses the
+            // FC event's own end, so a single recurring row dims only its
+            // elapsed instances).
+            if (dimPast && arg.event.end && arg.event.end.getTime() < Date.now()) {
+              classes.push('loom-event-past');
+            }
+            return classes;
           }}
         />
 
         {dragShaderEnabled && (
-          <DragShader dragging={dragging} selectRange={selectRange} events={events} />
+          <DragShader dragging={dragging} selectRange={selectRange} fcEvents={fcEvents} />
         )}
         <TodayLineFreshness view={nav.view} />
 
+        {nav.view === 'Month' && lastSync && events.length === 0 && !emptyDismissed && (
+          <div className={styles.emptyOverlay}>
+            <div className={styles.emptyCard}>
+              <p className={styles.emptyText}>
+                Drag on the grid or press <kbd className={styles.emptyKbd}>N</kbd> to create your first event.
+              </p>
+              <button className="loom-btn-ghost" onClick={() => setEmptyDismissed(true)}>
+                Got it
+              </button>
+            </div>
+          </div>
+        )}
+
         {peek && (
-          <QuickPeek event={peek.event} timelines={timelines} anchorX={peek.x} anchorY={peek.y} />
+          <QuickPeek
+            event={peek.event}
+            timelines={timelines}
+            anchorX={peek.x}
+            anchorY={peek.y}
+            pinned={peek.pinned}
+            keyboardOpen={peek.keyboard}
+            onClose={closePeek}
+            onEdit={handlePeekEdit}
+            onDuplicate={handlePeekDuplicate}
+            onDelete={handlePeekDelete}
+            onChecklistToggle={idx => void handlePeekChecklistToggle(peek.event, idx)}
+            onHoverEnter={cancelPeekHide}
+            onHoverLeave={schedulePeekHide}
+          />
+        )}
+
+        {quickCreate && timelines.length > 0 && (
+          <QuickCreatePopover
+            start={quickCreate.start}
+            end={quickCreate.end}
+            allDay={quickCreate.allDay}
+            anchor={quickCreate.anchor}
+            timelines={timelines}
+            templates={templates}
+            defaultTimelineId={
+              (() => {
+                const last = Number(localStorage.getItem('loom_last_timeline'));
+                return timelines.some(t => t.id === last) ? last : (timelines[0]?.id ?? 0);
+              })()
+            }
+            onSubmit={handleQuickCreateSubmit}
+            onMoreOptions={handleQuickCreateMore}
+            onDiscard={discardQuickCreate}
+          />
         )}
         </div>
+
+        <SelectionBar
+          count={selectedEventIds.size}
+          onDelete={() => void bulkDelete()}
+          onSnoozeDay={() => void snoozeSelected(1)}
+          onSnoozeWeek={() => void snoozeSelected(7)}
+          onClear={() => setSelectedEventIds(new Set())}
+        />
         <WarningStack>
           {examClusterWarning && !isClusterDismissed(getClusterEventIds(examClusterWarning)) && (
             <ExamClusterBanner

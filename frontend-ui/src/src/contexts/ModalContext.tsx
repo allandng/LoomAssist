@@ -24,11 +24,24 @@ type ModalName =
 interface ModalState {
   name: ModalName;
   props: Record<string, unknown>;
+  // WS5 #2 — the element focused when the modal was opened. ModalShell restores
+  // focus here on close (APG modal-dialog pattern). Captured synchronously at
+  // open() time, before React commits the modal and moves focus into it.
+  invoker: HTMLElement | null;
+}
+
+// WS3 #1/#3 — seed values for a NEW event opened in the full editor (quick-create
+// "More options" and template-apply). Ignored when an existing `event` is passed.
+export interface EventEditorPrefill {
+  title?: string;
+  calendarId?: number;
+  isRecurring?: boolean;
+  recurrenceDays?: string;
 }
 
 interface ModalContextValue {
   modal: ModalState;
-  openEventEditor: (event?: Event | null, date?: string, instanceDate?: string, startISO?: string, endISO?: string) => void;
+  openEventEditor: (event?: Event | null, date?: string, instanceDate?: string, startISO?: string, endISO?: string, prefill?: EventEditorPrefill) => void;
   openAvailability: () => void;
   openAvailabilityResponse: (token: string) => void;
   openICSImport: () => void;
@@ -51,17 +64,17 @@ interface ModalContextValue {
 const ModalContext = createContext<ModalContextValue | null>(null);
 
 export function ModalProvider({ children }: { children: ReactNode }) {
-  const [modal, setModal] = useState<ModalState>({ name: null, props: {} });
+  const [modal, setModal] = useState<ModalState>({ name: null, props: {}, invoker: null });
 
   const open = useCallback((name: ModalName, props: Record<string, unknown> = {}) => {
-    setModal({ name, props });
+    setModal({ name, props, invoker: (document.activeElement as HTMLElement | null) });
   }, []);
 
-  const close = useCallback(() => setModal({ name: null, props: {} }), []);
+  const close = useCallback(() => setModal(prev => ({ name: null, props: {}, invoker: prev.invoker })), []);
 
   const value = useMemo<ModalContextValue>(() => ({
     modal,
-    openEventEditor:          (event, date, instanceDate, startISO, endISO) => open('event-editor', { event, date, instanceDate, startISO, endISO }),
+    openEventEditor:          (event, date, instanceDate, startISO, endISO, prefill) => open('event-editor', { event, date, instanceDate, startISO, endISO, prefill }),
     openAvailability:         () => open('availability'),
     openAvailabilityResponse: (token) => open('availability-response', { token }),
     openICSImport:            () => open('ics-import'),
@@ -88,4 +101,13 @@ export function useModal(): ModalContextValue {
   const ctx = useContext(ModalContext);
   if (!ctx) throw new Error('useModal must be used inside ModalProvider');
   return ctx;
+}
+
+/**
+ * Non-throwing variant — returns null when no ModalProvider is above. Used by
+ * ModalShell so it can read the captured invoker element when available, but
+ * still render standalone (e.g. in a unit test rendered without the provider).
+ */
+export function useModalOptional(): ModalContextValue | null {
+  return useContext(ModalContext);
 }

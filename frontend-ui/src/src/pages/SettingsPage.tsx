@@ -21,8 +21,9 @@ import styles from './SettingsPage.module.css';
 
 const ACTION_ORDER: KeybindAction[] = [
   'new_event', 'today', 'sidebar_toggle', 'focus_mode',
-  'view_month', 'view_week', 'view_day', 'view_agenda',
-  'snooze_day', 'snooze_week', 'command_palette',
+  'view_month', 'view_week', 'view_day', 'view_year', 'view_agenda',
+  'prev_period', 'next_period', 'search', 'jump_date',
+  'delete_selected', 'snooze_day', 'snooze_week', 'shortcut_sheet', 'command_palette',
 ];
 
 export function SettingsPage() {
@@ -118,6 +119,38 @@ export function SettingsPage() {
     const val = e.target.checked;
     setDragShader(val);
     localStorage.setItem('loom_drag_shader_enabled', val ? 'true' : 'false');
+  }
+
+  // ---- Past-event dimming (WS2) ----
+  const [dimPast, setDimPast] = useState<boolean>(
+    () => localStorage.getItem('loom_dim_past') !== 'false',
+  );
+  function handleDimPastToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setDimPast(val);
+    localStorage.setItem('loom_dim_past', val ? 'true' : 'false');
+  }
+
+  // ---- Wheel navigation (WS3) ----
+  const [wheelNav, setWheelNav] = useState<boolean>(
+    () => localStorage.getItem('loom_wheel_nav') !== 'false',
+  );
+  function handleWheelNavToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setWheelNav(val);
+    localStorage.setItem('loom_wheel_nav', val ? 'true' : 'false');
+  }
+
+  // ---- Weekend wash (WS2) ----
+  const [weekendWash, setWeekendWash] = useState<boolean>(
+    () => localStorage.getItem('loom_weekend_wash') !== 'false',
+  );
+  function handleWeekendWashToggle(e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.checked;
+    setWeekendWash(val);
+    localStorage.setItem('loom_weekend_wash', val ? 'true' : 'false');
+    // Apply immediately so the grid reflects it on next visit / behind this page.
+    document.body.classList.toggle('loom-no-weekend-wash', !val);
   }
 
   // ---- Spoken briefing (Future-features 2C) ----
@@ -407,6 +440,11 @@ export function SettingsPage() {
           <input type="checkbox" checked={dyslexicFont} onChange={e => setDyslexicFont(e.target.checked)} />
           <span>Use dyslexia-friendly font (OpenDyslexic if installed)</span>
         </label>
+
+        <label className={styles.checkRow} style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={dimPast} onChange={handleDimPastToggle} />
+          <span>Reduce brightness of past events</span>
+        </label>
       </section>
 
       {/* Keyboard Shortcuts */}
@@ -465,6 +503,14 @@ export function SettingsPage() {
         <label className={styles.checkRow}>
           <input type="checkbox" checked={dragShader} onChange={handleDragShaderToggle} />
           <span>Show conflict preview while dragging events</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={wheelNav} onChange={handleWheelNavToggle} />
+          <span>Navigate months by scrolling the calendar</span>
+        </label>
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={weekendWash} onChange={handleWeekendWashToggle} />
+          <span>Highlight weekends in the calendar grid</span>
         </label>
         <label className={styles.checkRow}>
           <input type="checkbox" checked={speakBriefing} onChange={handleSpeakBriefingToggle} />

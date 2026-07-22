@@ -77,8 +77,8 @@
 }
 
 .removeBtn:hover {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
+  color: var(--error);
+  background: var(--error-soft);
 }
 
 .emptyMsg {

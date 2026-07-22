@@ -171,7 +171,7 @@
   padding: 12px;
   border-radius: 8px;
   background: var(--bg-elevated);
-  border: 1px solid rgba(99,102,241,0.4);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .settingsTitle {
