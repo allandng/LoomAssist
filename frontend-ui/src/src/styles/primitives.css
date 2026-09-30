@@ -1,12 +1,127 @@
-/* App-wide utility primitives.
-   Previously these lived inside components/modals/ModalShell.module.css even
-   though `loom-field` / `loom-btn-primary` / `loom-btn-ghost` are used across
-   the whole app. Moved here and normalized onto the WS1 token scales, with
-   keyboard focus rings on both buttons. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   App-wide utility primitives (global class names).
+   ---------------------------------------------------------------------------
+   These mirror the React primitives in components/ui/ pixel-for-pixel so a
+   file can pick whichever is more convenient. Prefer the React components for
+   new work; use these classes when you only need a styled native element.
 
+   Buttons:  .loom-btn-primary  .loom-btn-secondary  .loom-btn-ghost
+             .loom-btn-danger   .loom-btn-subtle     .loom-btn-icon
+             size modifiers:    .loom-btn-sm  .loom-btn-lg
+   Fields:   .loom-field  (input / select / textarea)  .loom-label  .loom-hint
+   Surfaces: .loom-card   .loom-card-pad
+   Layout:   .loom-page   .loom-page-narrow   .loom-page-header
+   Misc:     .loom-divider  .loom-row  .loom-stack  .loom-muted  .loom-dim
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.loom-btn-primary,
+.loom-btn-secondary,
+.loom-btn-ghost,
+.loom-btn-danger,
+.loom-btn-subtle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.loom-btn-primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15) inset, var(--shadow-sm);
+}
+.loom-btn-primary:hover { background: var(--accent-hover); }
+.loom-btn-primary:active { background: var(--accent-strong); }
+
+.loom-btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-main);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.loom-btn-secondary:hover { background: var(--bg-subtle); border-color: var(--text-dim); }
+
+.loom-btn-ghost {
+  background: transparent;
+  color: var(--text-main);
+  border-color: var(--border);
+}
+.loom-btn-ghost:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+
+.loom-btn-subtle {
+  background: transparent;
+  color: var(--text-muted);
+}
+.loom-btn-subtle:hover { background: var(--bg-hover); color: var(--text-main); }
+
+.loom-btn-danger {
+  background: transparent;
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
+}
+.loom-btn-danger:hover { background: var(--error-soft); border-color: var(--error); }
+
+.loom-btn-sm { height: 26px; padding: 0 var(--space-3); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+.loom-btn-lg { height: 40px; padding: 0 var(--space-5); font-size: var(--text-md); border-radius: var(--radius-lg); }
+
+.loom-btn-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.loom-btn-icon:hover { background: var(--bg-hover); color: var(--text-main); }
+.loom-btn-icon[aria-pressed="true"],
+.loom-btn-icon.is-active { background: var(--accent-soft); color: var(--accent-text); }
+
+.loom-btn-primary:disabled,
+.loom-btn-secondary:disabled,
+.loom-btn-ghost:disabled,
+.loom-btn-danger:disabled,
+.loom-btn-subtle:disabled,
+.loom-btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.loom-btn-primary:focus-visible,
+.loom-btn-secondary:focus-visible,
+.loom-btn-ghost:focus-visible,
+.loom-btn-danger:focus-visible,
+.loom-btn-subtle:focus-visible,
+.loom-btn-icon:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Fields ──────────────────────────────────────────────────────────────── */
 .loom-field {
   width: 100%;
-  padding: var(--space-3) 10px;
+  height: 32px;
+  padding: 0 10px;
   font-size: var(--text-base);
   font-family: inherit;
   color: var(--text-main);
@@ -14,63 +129,92 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   outline: none;
-  transition: border-color var(--motion-fast);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast);
 }
-
+textarea.loom-field {
+  height: auto;
+  min-height: 72px;
+  padding: var(--space-3) 10px;
+  line-height: var(--leading-body);
+  resize: vertical;
+}
+select.loom-field {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239DA3B5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.loom-field::placeholder { color: var(--text-dim); }
+.loom-field:hover { border-color: var(--border-strong); }
 .loom-field:focus {
   border-color: var(--accent);
-}
-
-.loom-field:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.loom-btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 7px var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--text-base);
-  font-weight: 600;
-  background: var(--accent);
-  color: white;
-  border: none;
-  cursor: pointer;
-  transition: background var(--motion-fast);
-}
-
-.loom-btn-primary:hover {
-  background: var(--accent-hover);
-}
-
-.loom-btn-primary:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.loom-btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 7px var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--text-base);
-  font-weight: 500;
-  background: transparent;
-  color: var(--text-main);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: background var(--motion-fast), border-color var(--motion-fast);
-}
-
-.loom-btn-ghost:hover {
+  box-shadow: 0 0 0 3px var(--accent-soft);
   background: var(--bg-elevated);
-  border-color: var(--border-strong);
+}
+.loom-field:disabled { opacity: 0.55; cursor: not-allowed; }
+.loom-field[aria-invalid="true"] { border-color: var(--error); }
+.loom-field[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px var(--error-soft); }
+
+.loom-label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+.loom-hint {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  margin-top: var(--space-2);
+}
+.loom-hint-error { color: var(--error); }
+
+/* ── Surfaces ────────────────────────────────────────────────────────────── */
+.loom-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.loom-card-pad { padding: var(--space-5) var(--space-6); }
+
+/* ── Page layout ─────────────────────────────────────────────────────────── */
+.loom-page {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-7) var(--space-8);
+}
+.loom-page-narrow {
+  max-width: 760px;
+  margin: 0 auto;
+}
+.loom-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.loom-page-title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: var(--leading-tight);
+  color: var(--text-main);
+  margin: 0;
+}
+.loom-page-desc {
+  font-size: var(--text-base);
+  color: var(--text-muted);
+  margin: var(--space-2) 0 0;
 }
 
-.loom-btn-ghost:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
+/* ── Misc ────────────────────────────────────────────────────────────────── */
+.loom-divider { height: 1px; background: var(--border); border: none; margin: var(--space-4) 0; }
+.loom-row   { display: flex; align-items: center; gap: var(--space-3); }
+.loom-stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.loom-muted { color: var(--text-muted); }
+.loom-dim   { color: var(--text-dim); }
+.loom-mono  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }

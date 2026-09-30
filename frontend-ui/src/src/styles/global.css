@@ -3,15 +3,42 @@
 @import './reset.css';
 @import './primitives.css';
 
+html {
+  background: var(--bg-app);
+}
+
 body {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 400;
+  line-height: var(--leading-body);
   color: var(--text-main);
   background: var(--bg-main);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv11', 'ss01', 'tnum' 0;
   overflow: hidden;
+}
+
+/* Times, counts and dates line up when they sit in columns. */
+.tabular,
+time,
+kbd {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Screen-reader-only utility. */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Global keyboard focus indicator (WCAG 2.4.13). Modules that set
@@ -21,10 +48,12 @@ body {
   outline-offset: 2px;
 }
 
-/* WS6 §3 — roving keyboard focus on an event chip. Applied to FullCalendar's
-   outer element (info.el), never inside the sacred pill. An explicit class ring
-   (not just :focus-visible) guarantees the indicator shows for programmatic
-   .focus() during j/k navigation, in both themes. */
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Roving keyboard focus on an event chip (calendar j/k navigation). Applied
+   to FullCalendar's outer element, never inside the pill itself. */
 .loom-event-kbfocus {
   outline: var(--focus-ring);
   outline-offset: 2px;
@@ -32,71 +61,34 @@ body {
   z-index: 6;
 }
 
-/* WS6 §4 — the translucent preview shown while keyboard move-mode is active.
-   FullCalendar puts `loom-move-phantom` on the background event's element. */
+/* Translucent preview shown while keyboard move-mode is active. */
 .fc .fc-bg-event.loom-move-phantom {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
   border: 1.5px dashed var(--accent);
   opacity: 1;
 }
 
-/* Thin dark scrollbar */
+/* Thin, theme-aware scrollbars. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-dim) 45%, transparent);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-dim);
+  background: color-mix(in srgb, var(--text-dim) 70%, transparent);
+  background-clip: padding-box;
 }
-
-/* Light mode overrides */
-body.light-mode {
-  --bg-main:     #F8FAFC;
-  --bg-panel:    #F1F5F9;
-  --bg-elevated: #FFFFFF;
-  --bg-subtle:   #E2E8F0;
-  --border:      #CBD5E1;
-  --border-strong: #94A3B8;
-  --text-main:   #0F172A;
-  --text-muted:  #475569;
-  /* Distinct from --border-strong (#94A3B8) — the two used to collide. */
-  --text-dim:    #64748B;
-
-  /* Second pass: the ambient tokens shipped dark-only before this. */
-  --accent-soft:   rgba(99, 102, 241, 0.12);
-  --overlay-scrim: rgba(15, 23, 42, 0.35);
-  --shadow-popover: 0 12px 32px rgba(15, 23, 42, 0.14);
-  --shadow-modal:   0 24px 64px rgba(15, 23, 42, 0.18);
-  --shadow-toast:   0 10px 24px rgba(15, 23, 42, 0.12);
-  --drag-free:     rgba(22, 163, 74, 0.14);
-  --drag-conflict: rgba(220, 38, 38, 0.14);
-}
-
-/* High-contrast mode — text/background contrast ≥ 7:1 */
-body.high-contrast {
-  --bg-main:       #000000;
-  --bg-panel:      #0A0A0A;
-  --bg-elevated:   #161616;
-  --bg-subtle:     #1F1F1F;
-  --border:        #4A4A4A;
-  --border-strong: #888888;
-  --text-main:     #FFFFFF;
-  --text-muted:    #E0E0E0;
-  --text-dim:      #B0B0B0;
-  --accent:        #C7B6FF;
-  --accent-soft:   rgba(199, 182, 255, 0.22);
-}
-
-/* Dyslexia-friendly font (OpenDyslexic). Bundled locally — see fonts.css. */
-body.font-dyslexic {
-  --font-sans: 'OpenDyslexic', 'Inter', -apple-system, sans-serif;
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-dim) 45%, transparent) transparent;
 }
 
 /* Reduced motion: respect the OS pref by suppressing decorative animations
@@ -112,27 +104,22 @@ body.font-dyslexic {
   }
 }
 
-/* Print: drop chrome and let the calendar surface fill the page. The Print
-   action shows whatever the calendar is currently displaying (Day, Week, etc).
-   Body class `print-mode-agenda` is set just before window.print() to force a
-   list-friendly layout. */
+/* Print: drop chrome and let the calendar surface fill the page. */
 @media print {
   body {
     background: white !important;
     color: black !important;
     overflow: visible !important;
   }
-  /* Hide app chrome */
   nav[aria-label="App navigation"],
   header[class*="bar"],
   aside[class*="sidebar"],
-  div[class*="ContextSidebar"],
+  aside[class*="panel"],
   div[class*="NotifPanel"],
   div[class*="InboxPanel"],
   div[class*="ModalRoot"] {
     display: none !important;
   }
-  /* Stretch the main content area */
   div[class*="main"],
   div[class*="content"] {
     width: 100% !important;
@@ -145,7 +132,6 @@ body.font-dyslexic {
     height: auto !important;
     overflow: visible !important;
   }
-  /* Reset event pill colors for legibility on paper */
   .loom-event {
     background: white !important;
     color: black !important;
