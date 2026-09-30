@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import styles from './MiniCalendar.module.css';
+import { IconButton, Icons } from '../ui';
 import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 import type { Event, Calendar } from '../../types';
 
@@ -14,6 +15,8 @@ interface MiniCalendarProps {
   timelines: Calendar[];
   /** The main view's current anchor date (drives which month is shown). */
   anchorDate: Date;
+  /** The main view's current date — rendered as the selected (filled) day. */
+  selectedDate?: Date | null;
   /** Inclusive-start / exclusive-end range currently visible in the main view. */
   rangeStart?: Date | null;
   rangeEnd?: Date | null;
@@ -37,19 +40,19 @@ function monthCells(year: number, month: number): (Date | null)[] {
 }
 
 /**
- * WS4 #10 — mini-calendar pinned at the top of the calendar sidebar. Clicking a
- * day moves the main view's anchor date WITHOUT switching the view type;
- * double-click drops into Day view. A translucent band marks the range the main
- * view currently shows, and a single density dot (dominant timeline color)
- * marks days that hold events.
+ * Mini-calendar pinned at the top of the calendar panel. Clicking a day moves
+ * the main view's anchor date WITHOUT switching the view type; double-click
+ * drops into Day view. Today wears a ring, the selected day a filled disc, the
+ * visible range a soft band, and days with events a density dot in the
+ * dominant timeline color.
  */
 export function MiniCalendar({
-  events, timelines, anchorDate, rangeStart, rangeEnd, onPick, onPickDay,
+  events, timelines, anchorDate, selectedDate, rangeStart, rangeEnd, onPick, onPickDay,
 }: MiniCalendarProps) {
   // The displayed month is a plain year*12+month key so it survives the
   // anchorDate identity churn (a fresh Date arrives each datesSet). It follows
   // the main view via a render-phase adjustment (no setState-in-effect) but the
-  // ‹ › steppers can page it independently.
+  // steppers can page it independently.
   const anchorKey = anchorDate.getFullYear() * 12 + anchorDate.getMonth();
   const [cursorKey, setCursorKey] = useState(anchorKey);
   const [prevAnchorKey, setPrevAnchorKey] = useState(anchorKey);
@@ -80,6 +83,7 @@ export function MiniCalendar({
   }, [timelines]);
 
   const todayStr = ymd(new Date());
+  const selectedStr = selectedDate ? ymd(selectedDate) : null;
   const cells = monthCells(cursor.getFullYear(), cursor.getMonth());
 
   const inRange = (d: Date): boolean => {
@@ -98,8 +102,8 @@ export function MiniCalendar({
           {MONTHS[cursor.getMonth()]} {cursor.getFullYear()}
         </span>
         <div className={styles.steppers}>
-          <button className={styles.stepBtn} onClick={() => step(-1)} aria-label="Previous month">‹</button>
-          <button className={styles.stepBtn} onClick={() => step(1)} aria-label="Next month">›</button>
+          <IconButton icon={Icons.chevronLeft} label="Previous month" size="sm" onClick={() => step(-1)} />
+          <IconButton icon={Icons.chevronRight} label="Next month" size="sm" onClick={() => step(1)} />
         </div>
       </div>
       <div className={styles.dow} aria-hidden="true">
@@ -110,14 +114,23 @@ export function MiniCalendar({
           if (!d) return <span key={i} className={styles.blank} />;
           const ds = ymd(d);
           const isToday = ds === todayStr;
+          const isSelected = ds === selectedStr;
           const banded = inRange(d);
           const byCal = density.get(ds);
           return (
             <button
               key={i}
-              className={`${styles.day} ${isToday ? styles.today : ''} ${banded ? styles.banded : ''}`}
+              type="button"
+              className={[
+                styles.day,
+                isToday ? styles.today : '',
+                isSelected ? styles.selected : '',
+                banded ? styles.banded : '',
+              ].join(' ')}
               onClick={() => onPick(d)}
               onDoubleClick={() => onPickDay(d)}
+              aria-current={isToday ? 'date' : undefined}
+              aria-pressed={isSelected}
               title={d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
             >
               <span className={styles.num}>{d.getDate()}</span>

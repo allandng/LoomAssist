@@ -1,15 +1,9 @@
 .bar {
-  position: fixed;
-  left: 50%;
-  bottom: 80px;
-  transform: translateX(-50%);
-  z-index: 250;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-5);
   background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-popover);
 }
@@ -21,73 +15,21 @@
 }
 
 @keyframes selectionBarIn {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(var(--space-3)); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .count {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-main);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .sep {
-  color: var(--text-dim);
-  font-size: var(--text-sm);
-}
-
-.action {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-}
-
-.action:hover {
-  color: var(--text-main);
-  background: var(--bg-subtle);
-}
-
-.action.destructive {
-  color: var(--error);
-}
-
-.action.destructive:hover {
-  color: #fff;
-  background: var(--error);
-}
-
-.clear {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  padding: var(--space-2);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.clear:hover {
-  color: var(--text-main);
-}
-
-.kbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  padding: 1px 4px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-}
-
-:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
+  width: 1px;
+  height: var(--space-5);
+  background: var(--border);
+  margin: 0 var(--space-1);
 }

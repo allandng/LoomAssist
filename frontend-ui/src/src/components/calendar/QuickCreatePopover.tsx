@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './QuickCreatePopover.module.css';
-import { TLDot } from '../shared/TLDot';
+import { Button, Kbd, Select, TLDot } from '../ui';
 import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
 import { pushEscapeHandler } from '../../lib/escapeStack';
+import { isMac } from '../../lib/platform';
 import type { Calendar, EventTemplate } from '../../types';
 
 export interface QuickCreateAnchor {
@@ -23,7 +24,7 @@ interface QuickCreatePopoverProps {
   defaultTimelineId: number;
   /** Create the event inline (Enter / Create button). */
   onSubmit: (title: string, calendarId: number, end: Date) => void | Promise<void>;
-  /** Escalate to the full EventEditor (More options / ⌘↵). */
+  /** Escalate to the full editor (More options / mod+Enter). */
   onMoreOptions: (title: string, calendarId: number, end: Date) => void;
   /** Discard + unselect (Esc / click-outside / Discard). */
   onDiscard: () => void;
@@ -36,10 +37,10 @@ function fmtTime(d: Date): string {
 }
 
 /**
- * WS3 #1 — the two-tier creation entry point. A drag (or click) on the empty
- * grid mounts this anchored inline card with a focused title input; Enter
- * creates immediately, "More options" escalates to the full editor. The
- * DragShader selection tint keeps running underneath.
+ * The two-tier creation entry point. A drag (or click) on the empty grid mounts
+ * this anchored inline card with a focused title input; Enter creates
+ * immediately, "More options" escalates to the full editor. The DragShader
+ * selection tint keeps running underneath.
  */
 export function QuickCreatePopover({
   start,
@@ -94,7 +95,7 @@ export function QuickCreatePopover({
     return () => window.removeEventListener('mousedown', onDown, true);
   }, [onDiscard]);
 
-  // WS4 #7 — Esc dismissal goes through the shared escapeStack so the popover
+  // Esc dismissal goes through the shared escapeStack so the popover
   // participates in single-owner Escape ordering (topmost layer only).
   useEffect(() => pushEscapeHandler(() => onDiscard()), [onDiscard]);
 
@@ -131,9 +132,10 @@ export function QuickCreatePopover({
     inputRef.current?.focus();
   };
 
-  const dateLabel = start.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const dateLabel = start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   const timeLabel = allDay ? 'All day' : `${fmtTime(start)} – ${fmtTime(endDate)}`;
   const templateChips = templates.slice(0, 4);
+  const activeColor = timelines.find(t => t.id === calendarId)?.color ?? DEFAULT_TIMELINE_COLOR;
 
   return createPortal(
     <div
@@ -149,61 +151,62 @@ export function QuickCreatePopover({
         className={styles.titleInput}
         type="text"
         placeholder="Add title"
+        aria-label="Event title"
         value={title}
         onChange={e => setTitle(e.target.value)}
       />
 
-      <div className={styles.timeLabel}>{dateLabel} · {timeLabel}</div>
+      <div className={styles.timeLabel}>
+        <span>{dateLabel}</span>
+        <span className={styles.timeMono}>{timeLabel}</span>
+      </div>
 
       <div className={styles.tlRow}>
-        <TLDot color={timelines.find(t => t.id === calendarId)?.color ?? DEFAULT_TIMELINE_COLOR} size={8} />
-        <select
-          className={styles.tlSelect}
-          value={calendarId}
-          onChange={e => setCalendarId(Number(e.target.value))}
-        >
-          {timelines.map(t => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
+        <TLDot color={activeColor} size={8} />
+        <div className={styles.tlSelect}>
+          <Select
+            size="sm"
+            value={calendarId}
+            onChange={e => setCalendarId(Number(e.target.value))}
+            aria-label="Timeline"
+          >
+            {timelines.map(t => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </Select>
+        </div>
       </div>
 
       {templateChips.length > 0 && (
         <div className={styles.templates}>
           {templateChips.map(t => (
-            <button
+            <Button
               key={t.id}
-              type="button"
+              size="sm"
+              variant="ghost"
               className={styles.templateChip}
               onClick={() => applyTemplate(t)}
               title={`Use template: ${t.name}`}
             >
               {t.name}
-            </button>
+            </Button>
           ))}
         </div>
       )}
 
       <div className={styles.footer}>
-        <button
-          type="button"
-          className={styles.moreBtn}
+        <Button
+          size="sm"
+          variant="subtle"
           onClick={() => onMoreOptions(title.trim(), calendarId, endDate)}
         >
-          More options <span className={styles.kbd}>⌘↵</span>
-        </button>
+          More options <Kbd small>{isMac ? '⌘↵' : 'Ctrl+↵'}</Kbd>
+        </Button>
         <div className={styles.footerRight}>
-          <button type="button" className={styles.discardBtn} onClick={onDiscard}>
-            Discard
-          </button>
-          <button
-            type="button"
-            className={styles.createBtn}
-            onClick={() => void create()}
-            disabled={!canCreate}
-          >
-            {busy ? 'Creating…' : 'Create'}
-          </button>
+          <Button size="sm" variant="ghost" onClick={onDiscard}>Discard</Button>
+          <Button size="sm" variant="primary" kbd="↵" loading={busy} disabled={!canCreate} onClick={() => void create()}>
+            Create
+          </Button>
         </div>
       </div>
     </div>,

@@ -1,0 +1,105 @@
+.stack {
+  position: fixed;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-3);
+  width: min(380px, calc(100vw - var(--space-7)));
+  pointer-events: none;
+}
+
+.toast {
+  --toast-tone: var(--info);
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-toast);
+  color: var(--text-main);
+  animation: toastIn var(--motion-base) var(--ease-decel);
+}
+
+.leaving {
+  animation: toastOut var(--motion-base) var(--ease-accel) forwards;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(var(--space-3)) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(var(--space-2)) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast, .leaving { animation: none; }
+}
+
+.tone_success  { --toast-tone: var(--success); }
+.tone_error    { --toast-tone: var(--error); }
+.tone_warning  { --toast-tone: var(--warning); }
+.tone_info     { --toast-tone: var(--info); }
+.tone_progress { --toast-tone: var(--accent); }
+
+.icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--toast-tone);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.message {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.actionError {
+  font-size: var(--text-xs);
+  color: var(--error);
+}
+
+.progressTrack {
+  height: var(--space-2);
+  margin-top: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+.progressFill {
+  height: 100%;
+  background: var(--toast-tone);
+  border-radius: var(--radius-full);
+  transition: width var(--motion-slow) var(--ease-standard);
+}
+
+.action { flex-shrink: 0; align-self: center; }
+.close { flex-shrink: 0; margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1) 0 0; }

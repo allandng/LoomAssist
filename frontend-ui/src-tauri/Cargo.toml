@@ -1,8 +1,8 @@
 [package]
 name = "frontend-ui"
 version = "2.4.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "LoomAssist — local-first desktop calendar"
+authors = ["LoomAssist"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -23,5 +23,13 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
-keyring = "3"
+# Real OS credential stores (without these features keyring 3 compiles to an
+# in-memory mock and tokens vanish on restart):
+#   windows-native      -> Windows Credential Locker
+#   apple-native        -> macOS Keychain
+#   sync-secret-service -> Linux Secret Service over D-Bus (needs libdbus-1-dev at build time)
+# Each is target-gated inside the crate, so this list builds on every OS.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+# Local-time parsing for the tray "next event" line (backend stores naive local ISO).
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 

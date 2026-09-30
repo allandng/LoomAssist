@@ -15,14 +15,20 @@ from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.deps import get_db
+from core.oauth_page import render_oauth_callback_page
 from database import models
 from services.sync import caldav, google, keychain_bridge, runner
 
 router = APIRouter(prefix="/connections")
+
+# Last successful Google OAuth completion (process-local) so the desktop
+# window can learn that the browser round-trip finished.
+_last_google_completion: dict = {"completed_at": None, "connection_id": None, "email": None}
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -89,11 +95,21 @@ class ConnectionCalendarRead(BaseModel):
     caldav_ctag: Optional[str]
     last_full_sync_at: Optional[str]
     created_at: str
+    remote_color: Optional[str] = None
+    enabled: bool = True
+    # Read-only aliases (same values under the names the Settings UI uses).
+    remote_id: Optional[str] = None
+    name: Optional[str] = None
+    color: Optional[str] = None
+    timeline_id: Optional[int] = None
+    calendar_id: Optional[int] = None
+    last_synced_at: Optional[str] = None
 
 
 class CCPatchRequest(BaseModel):
     sync_direction: Optional[str] = None
     local_calendar_id: Optional[int] = None
+    enabled: Optional[bool] = None
 
 
 class TimelineDecision(BaseModel):
@@ -119,6 +135,7 @@ def _connection_dict(c: models.Connection) -> dict:
 
 
 def _cc_dict(cc: models.ConnectionCalendar) -> dict:
+    enabled = True if cc.enabled is None else bool(cc.enabled)
     return {
         "id": cc.id, "connection_id": cc.connection_id,
         "local_calendar_id": cc.local_calendar_id,
@@ -127,6 +144,15 @@ def _cc_dict(cc: models.ConnectionCalendar) -> dict:
         "sync_direction": cc.sync_direction,
         "sync_token": cc.sync_token, "caldav_ctag": cc.caldav_ctag,
         "last_full_sync_at": cc.last_full_sync_at, "created_at": cc.created_at,
+        "remote_color": cc.remote_color,
+        "enabled": enabled,
+        # aliases
+        "remote_id": cc.remote_calendar_id,
+        "name": cc.remote_display_name,
+        "color": cc.remote_color,
+        "timeline_id": cc.local_calendar_id,
+        "calendar_id": cc.local_calendar_id,
+        "last_synced_at": cc.last_full_sync_at,
     }
 
 
@@ -182,7 +208,32 @@ async def connections_google_complete(payload: GoogleCompleteRequest, db: Sessio
     db.commit()
     db.refresh(conn)
     keychain_bridge.set_token(cid, refresh_token)
+    _last_google_completion.update({
+        "completed_at": datetime.utcnow().isoformat(),
+        "connection_id": cid,
+        "email": info.get("email", ""),
+    })
     return _connection_dict(conn)
+
+
+@router.get("/google/callback", response_class=HTMLResponse)
+def connections_google_callback():
+    """Google OAuth redirect target (default GOOGLE_OAUTH_REDIRECT).
+
+    Serves a self-contained page that lifts `code` (query or fragment) off
+    the URL, POSTs it to /connections/google/complete on this same origin,
+    and tells the user to return to LoomAssist. The desktop window can poll
+    GET /connections/google/status or simply re-fetch GET /connections."""
+    return HTMLResponse(render_oauth_callback_page(
+        kind="google", complete_path="/connections/google/complete", title="Connect Google Calendar",
+    ))
+
+
+@router.get("/google/status")
+def connections_google_status():
+    """{completed_at, connection_id, email} of the last successful Google
+    connect in this backend process (all null until one happens)."""
+    return dict(_last_google_completion)
 
 
 @router.post("/caldav/test")
@@ -224,11 +275,33 @@ def connections_push_token(connection_id: str, payload: TokenPushRequest, db: Se
     return {"ok": True}
 
 
-@router.get("/{connection_id}/calendars", response_model=List[RemoteCalendarRead])
-async def connections_remote_calendars(connection_id: str, db: Session = Depends(get_db)):
+@router.get("/{connection_id}/subscriptions", response_model=List[ConnectionCalendarRead])
+def connections_subscriptions(connection_id: str, db: Session = Depends(get_db)):
+    """ConnectionCalendar rows subscribed under this connection (the local
+    <-> remote pairs the runner syncs). Distinct from GET
+    /connections/{id}/calendars, which lists the *provider's* calendars.
+    Each row also carries alias keys (remote_id, name, color, timeline_id,
+    calendar_id, last_synced_at) for the Settings UI."""
+    if not db.query(models.Connection).filter(models.Connection.id == connection_id).first():
+        raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+    rows = (db.query(models.ConnectionCalendar)
+              .filter(models.ConnectionCalendar.connection_id == connection_id)
+              .order_by(models.ConnectionCalendar.created_at)
+              .all())
+    return [_cc_dict(cc) for cc in rows]
+
+
+@router.get("/{connection_id}/calendars", response_model=None)
+async def connections_remote_calendars(connection_id: str, subscribed: bool = False, db: Session = Depends(get_db)):
+    """Provider-side calendar list (RemoteCalendarRead[]). With
+    `?subscribed=true` returns the local ConnectionCalendar rows instead —
+    same payload as GET /connections/{id}/subscriptions."""
     conn = db.query(models.Connection).filter(models.Connection.id == connection_id).first()
     if not conn:
         raise HTTPException(status_code=404, detail={"error": {"code": "connection_not_found"}})
+
+    if subscribed:
+        return connections_subscriptions(connection_id, db)
 
     if conn.kind == "google":
         token_blob = await keychain_bridge.get_token(connection_id)
@@ -300,6 +373,8 @@ async def connections_subscribe(connection_id: str, payload: SubscribeRequest, d
         remote_display_name=payload.remote_display_name,
         sync_direction=payload.sync_direction,
         created_at=datetime.utcnow().isoformat(),
+        remote_color=payload.remote_color,
+        enabled=True,
     )
     db.add(cc)
     db.commit()
@@ -353,6 +428,8 @@ def connections_cc_patch(connection_id: str, cc_id: str, payload: CCPatchRequest
         cc.sync_direction = payload.sync_direction
     if payload.local_calendar_id is not None:
         cc.local_calendar_id = payload.local_calendar_id
+    if payload.enabled is not None:
+        cc.enabled = payload.enabled
     db.commit()
     db.refresh(cc)
     return _cc_dict(cc)

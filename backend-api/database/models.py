@@ -440,6 +440,11 @@ class Peer(SQLModel, table=True):
     cert_fingerprint: str          # SHA-256 hex fingerprint of the peer's TLS cert
     last_seen: Optional[str] = None  # ISO datetime
     created_at: str
+    # Network address the peer's backend listens on (captured at pairing time
+    # or learned from mDNS). Used by /sync/now and the auto-sync loop; the
+    # fingerprint is an identity, not a hostname.
+    host: Optional[str] = Field(default=None)
+    port: Optional[int] = Field(default=None)
 
 class PeerRead(SQLModel):
     id: int
@@ -447,6 +452,8 @@ class PeerRead(SQLModel):
     cert_fingerprint: str
     last_seen: Optional[str]
     created_at: str
+    host: Optional[str] = None
+    port: Optional[int] = None
 
 # --- DEVICE CONFIG (Phase 14c — single-row config) ---
 class DeviceConfig(SQLModel, table=True):
@@ -513,6 +520,8 @@ class ConnectionCalendar(SQLModel, table=True):
     caldav_ctag: Optional[str] = Field(default=None)        # CalDAV collection-level cursor
     last_full_sync_at: Optional[str] = Field(default=None)
     created_at: str
+    remote_color: Optional[str] = Field(default=None)       # provider colour hint (hex)
+    enabled: Optional[bool] = Field(default=True)           # False ⇒ runner skips this pair
 
 class ConnectionCalendarRead(SQLModel):
     id: str
@@ -525,6 +534,8 @@ class ConnectionCalendarRead(SQLModel):
     caldav_ctag: Optional[str]
     last_full_sync_at: Optional[str]
     created_at: str
+    remote_color: Optional[str] = None
+    enabled: Optional[bool] = True
 
 # --- SYNC REVIEW ITEM (queued surface state — every ambiguous match becomes a row) ---
 # The Sync Review page is `WHERE resolved_at IS NULL`. The only new table the

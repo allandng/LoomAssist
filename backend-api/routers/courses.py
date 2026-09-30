@@ -108,7 +108,14 @@ def update_assignment(assignment_id: int, body: AssignmentUpdate, db: Session = 
     a = db.query(models.Assignment).filter(models.Assignment.id == assignment_id).first()
     if not a:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
-    for k, v in body.model_dump(exclude_none=True).items():
+    # exclude_unset (not exclude_none): fields omitted from the body stay as
+    # they are, while an explicit `null` clears score / max_score /
+    # weight_category / event_id back to NULL.
+    data = body.model_dump(exclude_unset=True)
+    for required in ("title", "due_date"):
+        if required in data and (data[required] is None or not str(data[required]).strip()):
+            raise HTTPException(status_code=400, detail={"error": {"code": f"{required}_required"}})
+    for k, v in data.items():
         setattr(a, k, v)
     db.commit()
     db.refresh(a)

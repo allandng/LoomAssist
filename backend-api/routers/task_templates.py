@@ -41,6 +41,29 @@ def create_task_template(payload: TaskTemplateCreate, db: Session = Depends(get_
     return t
 
 
+class TaskTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    default_priority: Optional[str] = None
+    recurrence_days: Optional[str] = None
+    calendar_id: Optional[int] = None
+
+
+@router.put("/{tpl_id}", response_model=models.TaskTemplateRead)
+def update_task_template(tpl_id: int, payload: TaskTemplateUpdate, db: Session = Depends(get_db)):
+    t = db.query(models.TaskTemplate).filter(models.TaskTemplate.id == tpl_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail={"error": {"code": "template_not_found"}})
+    if payload.default_priority is not None and payload.default_priority not in ("high", "med", "low"):
+        raise HTTPException(status_code=400, detail={"error": {"code": "bad_priority"}})
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(t, field, value)
+    db.commit()
+    db.refresh(t)
+    return t
+
+
 @router.delete("/{tpl_id}")
 def delete_task_template(tpl_id: int, db: Session = Depends(get_db)):
     t = db.query(models.TaskTemplate).filter(models.TaskTemplate.id == tpl_id).first()

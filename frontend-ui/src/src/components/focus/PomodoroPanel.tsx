@@ -1,296 +1,363 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styles from './PomodoroPanel.module.css';
-import { Icon, Icons } from '../shared/Icon';
-import { TLDot } from '../shared/TLDot';
-import type { Task, Calendar } from '../../types';
-import { timelineColor } from '../../lib/eventUtils';
+import type { Task, Calendar, Event } from '../../types';
 import { recordPomodoroSession } from '../../api';
-import { useIsVisibleRef } from '../../hooks/usePageVisibility';
-
-function emitPomodoroState(state: string) {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    if (w.__TAURI_INTERNALS__?.invoke) {
-      w.__TAURI_INTERNALS__.emit('pomodoro-state-change', { state });
-    }
-  } catch { /* non-Tauri environment */ }
-}
+import { Button, IconButton, Segmented, Switch, ProgressRing, Section, TLDot, Icon, Icons } from '../ui';
+import { useShortcuts } from '../../hooks/useShortcuts';
+import { recordLocalSession } from './focusStore';
+import { taskColor, taskTitle } from '../tasks/taskUtils';
 
 type TimerMode = 'work' | 'short-break' | 'long-break';
+type TrayState = 'idle' | 'running' | 'break' | 'paused';
 
 interface PomodoroSettings {
-  work: number;         // minutes
+  work: number;        // minutes
   shortBreak: number;
   longBreak: number;
   rounds: number;
-  soundOnTick: boolean;
+  sound: boolean;
   desktopNotif: boolean;
 }
 
+const SETTINGS_KEY = 'loom:focus:pomodoro';
 const DEFAULT_SETTINGS: PomodoroSettings = {
-  work: 25, shortBreak: 5, longBreak: 15, rounds: 4,
-  soundOnTick: false, desktopNotif: true,
+  work: 25, shortBreak: 5, longBreak: 15, rounds: 4, sound: false, desktopNotif: true,
 };
+const HISTORY_CAP = 10;
+
+const MODE_LABEL: Record<TimerMode, string> = { work: 'Focus', 'short-break': 'Short break', 'long-break': 'Long break' };
+const MODE_KEY: Record<TimerMode, 'work' | 'shortBreak' | 'longBreak'> = { work: 'work', 'short-break': 'shortBreak', 'long-break': 'longBreak' };
+
+type StepKey = 'work' | 'shortBreak' | 'longBreak' | 'rounds';
+const STEPPERS: Array<{ key: StepKey; label: string; unit: string; min: number; max: number; step: number }> = [
+  { key: 'work',       label: 'Focus length',            unit: 'min', min: 5, max: 120, step: 5 },
+  { key: 'shortBreak', label: 'Short break',             unit: 'min', min: 1, max: 30,  step: 1 },
+  { key: 'longBreak',  label: 'Long break',              unit: 'min', min: 5, max: 60,  step: 5 },
+  { key: 'rounds',     label: 'Rounds before long break', unit: '',   min: 2, max: 12,  step: 1 },
+];
 
 interface SessionEntry { time: string; task: string }
 
-interface PomodoroPanelProps {
-  activeTaskId: number | null;
-  tasks: Task[];
-  timelines: Calendar[];
+function readSettings(): PomodoroSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<PomodoroSettings>;
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+/**
+ * Tell the tray menu (src-tauri/src/lib.rs listens for `pomodoro-state-change`).
+ * The dynamic import keeps browser dev working: outside Tauri the emit rejects
+ * and is swallowed.
+ */
+function emitPomodoroState(state: TrayState): void {
+  try {
+    import('@tauri-apps/api/event')
+      .then(m => m.emit('pomodoro-state-change', { state }))
+      .catch(() => { /* not running inside Tauri */ });
+  } catch {
+    /* dynamic import unavailable */
+  }
+}
+
+function chime(): void {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.value = 0.06;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+    osc.onended = () => { void ctx.close(); };
+  } catch {
+    /* no audio available */
+  }
+}
+
+function notifyDesktop(title: string, body: string): void {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body });
+  } catch {
+    /* notifications unavailable */
+  }
 }
 
 function pad(n: number): string { return String(Math.floor(n)).padStart(2, '0'); }
 function formatTime(secs: number): string { return `${pad(secs / 60)}:${pad(secs % 60)}`; }
+function secondsFor(mode: TimerMode, s: PomodoroSettings): number { return s[MODE_KEY[mode]] * 60; }
 
-export function PomodoroPanel({ activeTaskId, tasks, timelines }: PomodoroPanelProps) {
-  const [settings, setSettings] = useState<PomodoroSettings>(DEFAULT_SETTINGS);
-  const [editing, setEditing] = useState(false);
-  const [mode, setMode] = useState<TimerMode>('work');
-  const [round, setRound] = useState(1);
-  const [running, setRunning] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.work * 60);
+interface PomodoroPanelProps {
+  activeTaskId: number | null;
+  tasks: Task[];
+  events: Event[];
+  timelines: Calendar[];
+  onClearActive: () => void;
+}
+
+/** The Focus page hero: a 220px ring around mm:ss, mode switcher, controls, settings. */
+export function PomodoroPanel({ activeTaskId, tasks, events, timelines, onClearActive }: PomodoroPanelProps) {
+  const [settings, setSettings] = useState<PomodoroSettings>(readSettings);
+  const [editing, setEditing]   = useState(false);
+  const [mode, setMode]         = useState<TimerMode>('work');
+  const [round, setRound]       = useState(1);
+  const [running, setRunning]   = useState(false);
+  const [timeLeft, setTimeLeft] = useState(() => secondsFor('work', readSettings()));
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
-  const [clock, setClock] = useState(new Date());
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const totalSecs = (m: TimerMode) => {
-    if (m === 'work') return settings.work * 60;
-    if (m === 'short-break') return settings.shortBreak * 60;
-    return settings.longBreak * 60;
-  };
-
-  const progress = (totalSecs(mode) - timeLeft) / totalSecs(mode);
-  const SIZE = 180, STROKE = 10;
-  const R = (SIZE - STROKE) / 2;
-  const CIRC = 2 * Math.PI * R;
-
-  // Clock tick (cosmetic — countdown below stays unconditional so the timer
-  // keeps advancing while the tab is hidden).
-  const visibleRef = useIsVisibleRef();
+  // Latest values for the interval callback (which is created once per run).
+  const latest = useRef({ timeLeft, mode, round, settings, activeTaskId, tasks });
   useEffect(() => {
-    const id = setInterval(() => {
-      if (!visibleRef.current) return;
-      setClock(new Date());
-    }, 1000);
-    return () => clearInterval(id);
-  }, [visibleRef]);
+    latest.current = { timeLeft, mode, round, settings, activeTaskId, tasks };
+  });
 
-  // Countdown
   useEffect(() => {
-    if (!running) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      return;
-    }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          setRunning(false);
-          handleSessionComplete();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ }
+  }, [settings]);
 
-  function handleSessionComplete() {
-    if (mode === 'work') {
-      const activeTask = tasks.find(t => t.id === activeTaskId);
-      setSessions(prev => [{
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        task: activeTask?.note ?? 'Untitled task',
-      }, ...prev].slice(0, 10));
-
-      // Persist for the Energy Map widget — fire-and-forget; never block the UI.
+  const completeSession = useCallback(() => {
+    const { mode: m, round: r, settings: s, activeTaskId: taskId, tasks: list } = latest.current;
+    if (m === 'work') {
+      const task = list.find(t => t.id === taskId);
+      const completedAt = new Date();
+      setSessions(prev => [
+        { time: completedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), task: task ? taskTitle(task) : 'No task' },
+        ...prev,
+      ].slice(0, HISTORY_CAP));
+      // Backend (energy map) and local ledger (Home tile) — never block the UI on either.
       recordPomodoroSession({
-        completed_at: new Date().toISOString(),
-        duration_minutes: settings.work,
+        completed_at: completedAt.toISOString(),
+        duration_minutes: s.work,
         mode: 'work',
-        task_id: activeTaskId ?? null,
-        task_note: activeTask?.note ?? null,
-        round_num: round,
-      }).catch(err => console.warn('pomodoro persist failed', err));
-
-      if (settings.desktopNotif && Notification.permission === 'granted') {
-        new Notification('Pomodoro complete!', { body: 'Time for a break.' });
-      }
-
-      const newRound = round + 1;
-      if (newRound > settings.rounds) {
+        task_id: taskId ?? null,
+        task_note: task?.note ?? null,
+        round_num: r,
+      }).catch(() => { /* offline — the local ledger still has it */ });
+      recordLocalSession({ completed_at: completedAt.toISOString(), duration_minutes: s.work });
+      if (s.desktopNotif) notifyDesktop('Focus session complete', 'Time for a break.');
+      if (s.sound) chime();
+      const nextRound = r + 1;
+      if (nextRound > s.rounds) {
         setMode('long-break');
-        setTimeLeft(settings.longBreak * 60);
+        setTimeLeft(s.longBreak * 60);
         setRound(1);
       } else {
-        setRound(newRound);
+        setRound(nextRound);
         setMode('short-break');
-        setTimeLeft(settings.shortBreak * 60);
+        setTimeLeft(s.shortBreak * 60);
       }
     } else {
+      if (s.desktopNotif) notifyDesktop('Break over', 'Ready for the next round?');
+      if (s.sound) chime();
       setMode('work');
-      setTimeLeft(settings.work * 60);
+      setTimeLeft(s.work * 60);
     }
-  }
-
-  const handlePauseResume = useCallback(() => {
-    setRunning(r => {
-      const next = !r;
-      emitPomodoroState(next ? (mode === 'work' ? 'running' : 'break') : 'paused');
-      return next;
-    });
-  }, [mode]);
-
-  const handleReset = useCallback(() => {
-    setRunning(false);
-    setTimeLeft(totalSecs(mode));
     emitPomodoroState('idle');
-  }, [mode, settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
-  function updateSetting<K extends keyof PomodoroSettings>(key: K, delta: number) {
-    setSettings(prev => {
-      const s = { ...prev };
-      const v = (prev[key] as number) + delta;
-      (s as Record<string, number | boolean>)[key] = Math.max(key === 'rounds' ? 2 : 1, v);
-      return s;
-    });
+  // Countdown — deliberately NOT gated on tab visibility so it keeps advancing.
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => {
+      const next = latest.current.timeLeft - 1;
+      if (next <= 0) {
+        setTimeLeft(0);
+        setRunning(false);
+        completeSession();
+      } else {
+        setTimeLeft(next);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [running, completeSession]);
+
+  const toggleRunning = useCallback(() => {
+    const next = !running;
+    setRunning(next);
+    emitPomodoroState(next ? (mode === 'work' ? 'running' : 'break') : 'paused');
+  }, [running, mode]);
+
+  const reset = useCallback(() => {
+    setRunning(false);
+    setTimeLeft(secondsFor(mode, settings));
+    emitPomodoroState('idle');
+  }, [mode, settings]);
+
+  const changeMode = useCallback((m: TimerMode) => {
+    setMode(m);
+    setRunning(false);
+    setTimeLeft(secondsFor(m, settings));
+    emitPomodoroState('idle');
+  }, [settings]);
+
+  function step(key: StepKey, delta: number) {
+    const def = STEPPERS.find(s => s.key === key)!;
+    const value = Math.min(def.max, Math.max(def.min, settings[key] + delta));
+    setSettings({ ...settings, [key]: value });
+    if (!running && key !== 'rounds' && MODE_KEY[mode] === key) setTimeLeft(value * 60);
   }
 
-  const modeLabel = mode === 'work' ? 'WORK' : mode === 'short-break' ? 'SHORT BREAK' : 'LONG BREAK';
-  const activeTask = tasks.find(t => t.id === activeTaskId);
-  const activeTaskColor = activeTask ? timelineColor(timelines, activeTask.event_id) : 'var(--text-dim)';
+  function toggleDesktopNotif(next: boolean) {
+    setSettings(prev => ({ ...prev, desktopNotif: next }));
+    try {
+      if (next && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+    } catch { /* ignore */ }
+  }
+
+  // Space starts/pauses unless a control that already handles Space is focused.
+  useShortcuts(useMemo(() => [{
+    key: ' ',
+    handler: (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button')) return;
+      e.preventDefault();
+      toggleRunning();
+    },
+  }], [toggleRunning]));
+
+  const total = secondsFor(mode, settings);
+  const progress = total > 0 ? 1 - timeLeft / total : 0;
+  const ringColor = mode === 'work' ? 'var(--accent)' : 'var(--success)';
+  const activeTask = tasks.find(t => t.id === activeTaskId) ?? null;
+  const activeColor = activeTask ? taskColor(activeTask, events, timelines) : null;
+  const primaryLabel = running ? 'Pause' : timeLeft < total ? 'Resume' : 'Start';
 
   return (
-    <div className={styles.panel}>
-      {/* Clock */}
-      <div className={styles.clock}>
-        <div className={styles.clockDate}>
-          {clock.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}
-        </div>
-        <div className={styles.clockTime}>
-          {clock.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          <span className={styles.clockSecs}>:{pad(clock.getSeconds())}</span>
-        </div>
-      </div>
+    <aside className={styles.panel} aria-label="Pomodoro timer">
+      <Segmented
+        size="sm"
+        aria-label="Timer mode"
+        value={mode}
+        onChange={changeMode}
+        options={[
+          { value: 'work',        label: 'Focus' },
+          { value: 'short-break', label: 'Short break' },
+          { value: 'long-break',  label: 'Long break' },
+        ]}
+      />
 
-      <div className={styles.divider} />
-
-      {/* Ring */}
-      <div className={styles.ringWrap}>
-        <svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx={SIZE/2} cy={SIZE/2} r={R} stroke="var(--border)" strokeWidth={STROKE} fill="none" />
-          <circle
-            cx={SIZE/2} cy={SIZE/2} r={R}
-            stroke="var(--accent)" strokeWidth={STROKE} fill="none"
-            strokeLinecap="round"
-            strokeDasharray={CIRC}
-            strokeDashoffset={CIRC * (1 - progress)}
-            style={{ transition: 'stroke-dashoffset 1s linear' }}
-          />
-        </svg>
-        <div className={styles.ringCenter}>
-          <div className={styles.ringMode}>{modeLabel}</div>
-          <div className={styles.ringTime}>{formatTime(timeLeft)}</div>
-          <div className={styles.ringRound}>Round {round} of {settings.rounds}</div>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className={styles.controls}>
-        <button className={styles.pauseBtn} onClick={handlePauseResume}>
-          <Icon d={running ? Icons.pause : Icons.play} size={12} stroke="white" />
-          {running ? 'Pause' : 'Start'}
-        </button>
-        <button className={styles.iconCtrl} onClick={handleReset} title="Reset">
-          <Icon d={Icons.reset} size={13} />
-        </button>
-        <button
-          className={`${styles.iconCtrl} ${editing ? styles.iconCtrlActive : ''}`}
-          onClick={() => setEditing(v => !v)}
-          title="Settings"
+      <div className={styles.hero}>
+        <ProgressRing
+          value={progress}
+          size={220}
+          stroke={10}
+          color={ringColor}
+          trackColor="var(--bg-inset)"
+          aria-label={`${MODE_LABEL[mode]}: ${formatTime(timeLeft)} remaining`}
         >
-          <Icon d={Icons.settings} size={13} />
-        </button>
-      </div>
-
-      {/* Round dots */}
-      <div className={styles.roundDots}>
-        {Array.from({ length: settings.rounds }, (_, i) => (
-          <span
-            key={i}
-            className={styles.roundDot}
-            style={{
-              background: i < round - 1 ? 'var(--accent)' : i === round - 1 ? 'var(--accent-soft)' : 'var(--bg-subtle)',
-              border: i === round - 1 ? '1.5px solid var(--accent)' : '1px solid var(--border)',
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Active task */}
-      {activeTask && (
-        <div className={styles.activeTask}>
-          <div className={styles.activeLabel}>FOCUSING ON</div>
-          <div className={styles.activeTitle}>
-            <TLDot color={activeTaskColor} size={6} />
-            {activeTask.note || `Task #${activeTask.id}`}
+          <div className={styles.ringInner}>
+            <span className={styles.modeLabel}>{MODE_LABEL[mode]}</span>
+            <span className={styles.time}>{formatTime(timeLeft)}</span>
+            <span className={styles.roundLabel}>Round {round} of {settings.rounds}</span>
           </div>
+        </ProgressRing>
+        <div className={styles.dots} aria-hidden="true">
+          {Array.from({ length: settings.rounds }, (_, i) => (
+            <span
+              key={i}
+              className={[styles.dot, i < round - 1 ? styles.dotDone : i === round - 1 ? styles.dotCurrent : ''].join(' ')}
+            />
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* Inline settings */}
+      <div className={styles.controls}>
+        <Button
+          variant="primary"
+          size="lg"
+          icon={running ? Icons.pause : Icons.play}
+          kbd="Space"
+          className={styles.mainBtn}
+          aria-pressed={running}
+          onClick={toggleRunning}
+        >
+          {primaryLabel}
+        </Button>
+        <IconButton size="lg" variant="ghost" icon={Icons.reset} label="Reset timer" onClick={reset} />
+        <IconButton
+          size="lg"
+          variant="ghost"
+          icon={Icons.settings}
+          label="Timer settings"
+          active={editing}
+          aria-expanded={editing}
+          onClick={() => setEditing(v => !v)}
+        />
+      </div>
+
+      <div className={styles.task}>
+        <span className={styles.taskLabel}>Focusing on</span>
+        {activeTask ? (
+          <div className={styles.taskRow}>
+            <TLDot color={activeColor ?? 'var(--text-dim)'} size={8} />
+            <span className={styles.taskTitle} title={taskTitle(activeTask)}>{taskTitle(activeTask)}</span>
+            <IconButton size="sm" icon={Icons.x} label="Clear focus task" onClick={onClearActive} />
+          </div>
+        ) : (
+          <p className={styles.taskHint}>Pick a task on the board to attribute this session to it.</p>
+        )}
+      </div>
+
       {editing && (
-        <div className={styles.settingsBox}>
-          <div className={styles.settingsTitle}>TIMER SETTINGS</div>
-          {([
-            { label: 'Work',              key: 'work' as const,       unit: 'min' },
-            { label: 'Short break',       key: 'shortBreak' as const, unit: 'min' },
-            { label: 'Long break',        key: 'longBreak' as const,  unit: 'min' },
-            { label: 'Rounds before long',key: 'rounds' as const,     unit: '' },
-          ] as const).map(s => (
+        <div className={styles.settings} role="group" aria-label="Timer settings">
+          {STEPPERS.map(s => (
             <div key={s.key} className={styles.settingRow}>
               <span className={styles.settingLabel}>{s.label}</span>
               <div className={styles.stepper}>
-                <button onClick={() => updateSetting(s.key, -1)}>−</button>
-                <span>{settings[s.key]}</span>
-                <button onClick={() => updateSetting(s.key, 1)}>+</button>
+                <IconButton
+                  size="sm"
+                  icon={Icons.minus}
+                  label={`Decrease ${s.label.toLowerCase()}`}
+                  disabled={settings[s.key] <= s.min}
+                  onClick={() => step(s.key, -s.step)}
+                />
+                <span className={styles.stepValue}>{settings[s.key]}</span>
+                <IconButton
+                  size="sm"
+                  icon={Icons.plus}
+                  label={`Increase ${s.label.toLowerCase()}`}
+                  disabled={settings[s.key] >= s.max}
+                  onClick={() => step(s.key, s.step)}
+                />
               </div>
-              {s.unit && <span className={styles.settingUnit}>{s.unit}</span>}
+              <span className={styles.unit}>{s.unit}</span>
             </div>
           ))}
-          <div className={styles.divider} />
-          {([
-            { label: 'Sound on tick',        key: 'soundOnTick' as const },
-            { label: 'Desktop notification', key: 'desktopNotif' as const },
-          ] as const).map(s => (
-            <div key={s.key} className={styles.settingRow}>
-              <span className={styles.settingLabel}>{s.label}</span>
-              <button
-                className={`${styles.toggle} ${settings[s.key] ? styles.toggleOn : ''}`}
-                onClick={() => setSettings(prev => ({ ...prev, [s.key]: !prev[s.key] }))}
-              />
-            </div>
-          ))}
+          <Switch
+            size="sm"
+            label="Sound at session end"
+            checked={settings.sound}
+            onChange={v => setSettings(prev => ({ ...prev, sound: v }))}
+          />
+          <Switch
+            size="sm"
+            label="Desktop notification"
+            description="Notify when a session ends"
+            checked={settings.desktopNotif}
+            onChange={toggleDesktopNotif}
+          />
         </div>
       )}
 
-      {/* Session history */}
       {sessions.length > 0 && (
-        <div className={styles.history}>
-          <div className={styles.historyHeader}>
-            <Icon d={Icons.chevronDown} size={10} /> TODAY · {sessions.length} POMODORO{sessions.length !== 1 ? 'S' : ''}
-          </div>
-          {sessions.map((s, i) => (
-            <div key={i} className={styles.historyRow}>
-              <span className={styles.historyTime}>{s.time}</span>
-              <span className={styles.historyTask}>{s.task}</span>
-              <Icon d={Icons.check} size={10} stroke="var(--success)" strokeWidth={2.5} />
-            </div>
-          ))}
-        </div>
+        <Section small title={`Today · ${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'}`}>
+          <ul className={styles.history}>
+            {sessions.map((s, i) => (
+              <li key={`${s.time}-${i}`} className={styles.historyRow}>
+                <span className={styles.historyTime}>{s.time}</span>
+                <span className={styles.historyTask}>{s.task}</span>
+                <Icon d={Icons.check} size={12} className={styles.historyCheck} />
+              </li>
+            ))}
+          </ul>
+        </Section>
       )}
-    </div>
+    </aside>
   );
 }

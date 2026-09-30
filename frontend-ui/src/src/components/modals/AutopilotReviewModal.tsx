@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { ModalShell, ModalFooter } from './ModalShell';
+import { ModalShell, ModalFooter, ModalStack } from './ModalShell';
+import { Button, Checkbox, Badge, EmptyState, Icon, Icons } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
 import { useUndo } from '../../contexts/UndoContext';
 import { useNotifications } from '../../store/notifications';
 import { createEvent, deleteEvent } from '../../api';
 import type { AutopilotProposal, AutopilotOverflow, Calendar } from '../../types';
+import styles from './AutopilotReviewModal.module.css';
 
 interface Props {
   proposals: AutopilotProposal[];
@@ -69,7 +71,7 @@ export function AutopilotReviewModal({ proposals, overflow, timelines, onApplied
         redo: async () => {},
       });
 
-      addNotification({ type: 'success', title: `Applied ${createdIds.length} time block(s)`, autoRemoveMs: 4000 });
+      addNotification({ type: 'success', title: `Added ${createdIds.length} time block${createdIds.length !== 1 ? 's' : ''}`, autoRemoveMs: 4000 });
       onApplied();
       close();
     } catch {
@@ -79,63 +81,82 @@ export function AutopilotReviewModal({ proposals, overflow, timelines, onApplied
     }
   }
 
+  const skipped = proposals.length - accepted.size;
+
   return (
-    <ModalShell title="Draft week — review proposals" onClose={close}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 0' }}>
-        {proposals.length === 0 && (
-          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-            No tasks with estimated durations found. Add estimated time to tasks in the Task Board first.
-          </p>
-        )}
-
-        {proposals.map(p => {
-          const isAccepted = accepted.has(p.task_id);
-          return (
-            <div
-              key={p.task_id}
-              onClick={() => toggle(p.task_id)}
-              style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
-                padding: '10px 12px', borderRadius: 8,
-                background: isAccepted ? 'var(--accent-soft)' : 'var(--bg-elevated)',
-                border: `1px solid ${isAccepted ? 'var(--accent)' : 'var(--border)'}`,
-                transition: 'all 0.12s',
-              }}
-            >
-              <input type="checkbox" checked={isAccepted} onChange={() => toggle(p.task_id)} style={{ marginTop: 2 }} />
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>{p.task_title}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{formatRange(p.start, p.end)}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>{p.rationale}</div>
-              </div>
+    <ModalShell
+      title="Draft week"
+      subtitle={proposals.length > 0 ? `${proposals.length} proposal${proposals.length !== 1 ? 's' : ''} · accept the ones you want on the calendar` : undefined}
+      size="md"
+      onClose={close}
+      flush
+    >
+      {proposals.length === 0 ? (
+        <EmptyState
+          icon={Icons.zap}
+          title="Nothing to schedule"
+          description="Add an estimated duration to tasks on the task board and Autopilot will find time for them."
+        />
+      ) : (
+        <div className={styles.body}>
+          <ModalStack>
+            <div className={styles.toolbar}>
+              <span className={styles.summary}>
+                <Badge tone="success" size="sm" dot>{accepted.size} accepted</Badge>
+                {skipped > 0 && <Badge tone="neutral" size="sm" dot>{skipped} skipped</Badge>}
+              </span>
+              <span className={styles.toolbarActions}>
+                <Button variant="subtle" size="sm" onClick={() => setAccepted(new Set(proposals.map(p => p.task_id)))}>Accept all</Button>
+                <Button variant="subtle" size="sm" onClick={() => setAccepted(new Set())}>Skip all</Button>
+              </span>
             </div>
-          );
-        })}
 
-        {overflow.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-              Overflow — couldn't schedule
-            </div>
-            {overflow.map(o => (
-              <div key={o.task_id} style={{ fontSize: 12, color: 'var(--text-muted)', padding: '4px 0' }}>
-                <span style={{ fontWeight: 500, color: 'var(--text-main)' }}>{o.task_title}</span>
-                {' — '}{o.reason}
+            <ul className={styles.list} aria-label="Proposed time blocks">
+              {proposals.map(p => {
+                const isAccepted = accepted.has(p.task_id);
+                return (
+                  <li key={p.task_id} className={[styles.item, isAccepted ? styles.itemOn : styles.itemOff].join(' ')}>
+                    <Checkbox checked={isAccepted} onChange={() => toggle(p.task_id)} aria-label={`Accept ${p.task_title}`} />
+                    <div className={styles.itemText}>
+                      <div className={styles.itemTitle}>{p.task_title}</div>
+                      <div className={styles.itemWhen}><Icon d={Icons.clock} size={11} /> {formatRange(p.start, p.end)}</div>
+                      <div className={styles.itemWhy}>{p.rationale}</div>
+                    </div>
+                    <Button size="sm" variant={isAccepted ? 'subtle' : 'secondary'} onClick={() => toggle(p.task_id)}>
+                      {isAccepted ? 'Skip' : 'Accept'}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {overflow.length > 0 && (
+              <div className={styles.overflow}>
+                <div className={styles.overflowTitle}>
+                  <Icon d={Icons.warning} size={13} />
+                  Couldn’t fit {overflow.length} task{overflow.length !== 1 ? 's' : ''}
+                </div>
+                <ul className={styles.overflowList}>
+                  {overflow.map(o => (
+                    <li key={o.task_id} className={styles.overflowItem}>
+                      <span className={styles.overflowTask}>{o.task_title}</span>
+                      <span className={styles.overflowReason}>{o.reason}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            )}
+          </ModalStack>
+        </div>
+      )}
 
       <ModalFooter>
-        <button className="loom-btn-ghost" onClick={() => close()}>Cancel</button>
-        <button
-          className="loom-btn-primary"
-          onClick={handleApply}
-          disabled={applying || accepted.size === 0}
-        >
-          {applying ? 'Applying…' : `Apply ${accepted.size} accepted`}
-        </button>
+        <Button variant="ghost" onClick={close}>Cancel</Button>
+        {proposals.length > 0 && (
+          <Button variant="primary" icon={Icons.check} onClick={() => { void handleApply(); }} disabled={accepted.size === 0} loading={applying}>
+            Add {accepted.size} to calendar
+          </Button>
+        )}
       </ModalFooter>
     </ModalShell>
   );

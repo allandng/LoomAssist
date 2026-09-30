@@ -1,102 +1,101 @@
-import { useCallback } from 'react';
+import { useState } from 'react';
 import styles from './ListView.module.css';
-import { Icon, Icons } from '../shared/Icon';
-import { TLDot } from '../shared/TLDot';
-import type { Task, Calendar } from '../../types';
-import { updateTask } from '../../api';
-import { timelineColor } from '../../lib/eventUtils';
+import type { Task, Calendar, Event } from '../../types';
+import { Input, Button, Badge, EmptyState, IconButton, TLDot, Icons } from '../ui';
+import { TaskCard } from '../tasks/TaskCard';
+import { STATUS_LABEL, STATUS_COLOR, taskEvent, taskTimeline, taskTitle, type TaskStatus } from '../tasks/taskUtils';
+import { togglePinned } from './focusStore';
+import { useTaskActions } from './useTaskActions';
 
-type GroupKey = 'doing' | 'backlog' | 'done';
-
-const GROUPS: { key: GroupKey; title: string; color: string }[] = [
-  { key: 'doing',   title: 'In Progress', color: 'var(--accent)' },
-  { key: 'backlog', title: 'Backlog',     color: 'var(--text-dim)' },
-  { key: 'done',    title: 'Done',        color: 'var(--success)' },
-];
-
-const PRIORITY_COLOR: Record<string, string> = {
-  high: 'var(--error)', med: 'var(--warning)', low: 'var(--text-dim)',
-};
+const ORDER: TaskStatus[] = ['doing', 'backlog', 'done'];
 
 interface ListViewProps {
   tasks: Task[];
+  events: Event[];
   timelines: Calendar[];
   activeTaskId: number | null;
+  onActiveTask: (id: number | null) => void;
   onReload: () => void;
 }
 
-export function ListView({ tasks, timelines, activeTaskId, onReload }: ListViewProps) {
-  const today = new Date().toISOString().split('T')[0];
+/** Grouped rows with the same controls as the board; the add row is a real form. */
+export function ListView({ tasks, events, timelines, activeTaskId, onActiveTask, onReload }: ListViewProps) {
+  const actions = useTaskActions({ tasks, events, activeTaskId, onActiveTask, onReload });
+  const [newTitle, setNewTitle] = useState('');
 
-  const handleToggle = useCallback(async (task: Task) => {
-    await updateTask(task.id, { is_complete: !task.is_complete, status: task.is_complete ? 'backlog' : 'done' });
-    onReload();
-  }, [onReload]);
+  async function submitAdd() {
+    const title = newTitle.trim();
+    if (!title) return;
+    setNewTitle('');
+    await actions.add(title, 'backlog');
+  }
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.table}>
-        <div className={styles.addRow}>
-          <Icon d={Icons.plus} size={13} className={styles.addIcon} />
-          <span>Add task</span>
-        </div>
+      <div className={styles.inner}>
+        <form className={styles.addRow} onSubmit={e => { e.preventDefault(); void submitAdd(); }}>
+          <div className={styles.addInput}>
+            <Input
+              size="sm"
+              icon={Icons.plus}
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              placeholder="Add a task and press Enter"
+              aria-label="New task"
+            />
+          </div>
+          <Button size="sm" variant="secondary" type="submit" disabled={!newTitle.trim()}>Add</Button>
+        </form>
 
-        {GROUPS.map((g, gi) => {
-          const items = tasks.filter(t => t.status === g.key);
+        {tasks.length === 0 && (
+          <EmptyState
+            icon={Icons.tasks}
+            title="No tasks yet"
+            description="Add one above, or send a task to the board from any event."
+          />
+        )}
+
+        {ORDER.map(status => {
+          const items = tasks.filter(t => t.status === status);
           if (items.length === 0) return null;
+          const headId = `focus-list-${status}`;
           return (
-            <div key={g.key}>
-              <div className={`${styles.groupHeader} ${gi > 0 ? styles.groupHeaderBorder : ''}`}>
-                <Icon d={Icons.chevronDown} size={11} />
-                <TLDot color={g.color} size={6} />
-                <span>{g.title}</span>
-                <span className={styles.groupCount}>· {items.length}</span>
+            <section key={status} className={styles.group} aria-labelledby={headId}>
+              <header className={styles.groupHead}>
+                <TLDot color={STATUS_COLOR[status]} size={8} />
+                <h2 id={headId} className={styles.groupTitle}>{STATUS_LABEL[status]}</h2>
+                <Badge size="sm">{items.length}</Badge>
+              </header>
+              <div className={styles.rows}>
+                {items.map(task => {
+                  const isActive = task.id === activeTaskId;
+                  const isPinned = actions.pinned.has(task.id);
+                  return (
+                    <TaskCard
+                      key={task.id}
+                      variant="row"
+                      task={task}
+                      event={taskEvent(task, events)}
+                      timeline={taskTimeline(task, events, timelines)}
+                      focusing={isActive}
+                      onToggle={actions.toggleComplete}
+                      menuItems={actions.menuFor(task)}
+                      onActivate={() => actions.focusOn(task)}
+                      activateLabel={isActive ? 'Stop focusing' : 'Focus on this task'}
+                      extra={
+                        <IconButton
+                          size="sm"
+                          icon={Icons.pin}
+                          active={isPinned}
+                          label={isPinned ? `Unpin ${taskTitle(task)}` : `Pin ${taskTitle(task)}`}
+                          onClick={() => togglePinned(task.id)}
+                        />
+                      }
+                    />
+                  );
+                })}
               </div>
-
-              {items.map((task, i) => {
-                const isActive = task.id === activeTaskId;
-                const tlColor = timelineColor(timelines, task.event_id);
-                return (
-                  <div
-                    key={task.id}
-                    className={`${styles.row} ${isActive ? styles.rowActive : ''} ${task.is_complete ? styles.rowDone : ''} ${i < items.length - 1 ? styles.rowBorder : ''}`}
-                  >
-                    <button
-                      className={styles.checkbox}
-                      style={{
-                        borderColor: task.is_complete ? 'var(--success)' : 'var(--border-strong)',
-                        background: task.is_complete ? 'var(--success)' : 'transparent',
-                      }}
-                      onClick={() => handleToggle(task)}
-                    >
-                      {task.is_complete && <Icon d={Icons.check} size={10} stroke="#0B1120" strokeWidth={3} />}
-                    </button>
-
-                    {task.priority && !task.is_complete && (
-                      <span
-                        className={styles.priorityDot}
-                        style={{ background: PRIORITY_COLOR[task.priority] ?? 'var(--text-dim)' }}
-                      />
-                    )}
-
-                    <span className={styles.rowTitle}>{task.note || `Task #${task.id}`}</span>
-
-                    <span className={styles.tlBadge} style={{ color: tlColor, background: `${tlColor}1e` }}>
-                      <TLDot color={tlColor} size={5} />
-                    </span>
-
-                    {task.due_date && (
-                      <span
-                        className={styles.dueDate}
-                        style={{ color: task.due_date === today ? 'var(--warning)' : 'var(--text-muted)' }}
-                      >
-                        {task.due_date === today ? 'Today' : task.due_date}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            </section>
           );
         })}
       </div>

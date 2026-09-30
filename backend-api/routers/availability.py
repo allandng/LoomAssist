@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -13,6 +13,30 @@ from core.deps import get_db
 from database import models
 
 router = APIRouter(prefix="/availability")
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"}
+
+
+def _public_base_url(request: Request) -> str:
+    """Base URL a *recipient on another device* can reach.
+
+    Uses the request's own scheme/host/port (so a reverse proxy or a custom
+    port is honoured). When the app itself called us over loopback, swap the
+    host for this machine's LAN IP (from services.lan.discovery) so the
+    share link works from a phone on the same Wi-Fi. The port is preserved.
+    """
+    base = str(request.base_url).rstrip("/")   # e.g. http://127.0.0.1:8000
+    host = request.url.hostname or ""
+    if host in _LOOPBACK_HOSTS:
+        try:
+            from services.lan.discovery import get_lan_ip
+            lan_ip = get_lan_ip()
+        except Exception:
+            lan_ip = None
+        if lan_ip and lan_ip not in _LOOPBACK_HOSTS:
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            base = f"{request.url.scheme}://{lan_ip}:{port}"
+    return base
 
 
 class CreateAvailabilityRequest(BaseModel):
@@ -82,7 +106,7 @@ def _create_meeting_event(db: Session, slot: dict, contact: dict | None = None) 
 
 
 @router.post("")
-def create_availability(body: CreateAvailabilityRequest, db: Session = Depends(get_db)):
+def create_availability(body: CreateAvailabilityRequest, request: Request, db: Session = Depends(get_db)):
     token = str(uuid.uuid4())
     now = datetime.utcnow()
     req = models.AvailabilityRequest(
@@ -97,7 +121,7 @@ def create_availability(body: CreateAvailabilityRequest, db: Session = Depends(g
     db.add(req)
     db.commit()
     db.refresh(req)
-    share_url = f"http://localhost:8000/availability/{token}/view"
+    share_url = f"{_public_base_url(request)}/availability/{token}/view"
     return {"id": req.id, "token": token, "share_url": share_url, "view_url": share_url}
 
 

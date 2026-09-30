@@ -1,55 +1,34 @@
 .heatmap {
-  padding: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .heatmapHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  gap: var(--space-2);
 }
 
 .heatmapMonth {
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.heatmapNav {
-  width: 18px;
-  height: 18px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 4px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-}
-
-.heatmapNav:hover {
-  background: var(--bg-elevated);
   color: var(--text-muted);
 }
 
 .heatmapGrid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-1);
 }
 
 .heatmapDow {
-  font-size: 8.5px;
+  font-size: var(--text-2xs);
   color: var(--text-dim);
   text-align: center;
-  padding-bottom: 2px;
+  padding-bottom: var(--space-1);
   font-weight: 600;
-  letter-spacing: 0.03em;
 }
 
 .heatmapEmpty {
@@ -58,69 +37,69 @@
 
 .heatmapCell {
   aspect-ratio: 1;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: var(--text-2xs);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
   border: none;
   padding: 0;
-  transition: transform 80ms;
+  transition: transform var(--motion-fast) var(--ease-standard);
 }
 
-.heatmapCell:hover {
-  transform: scale(1.2);
-}
+.heatmapCell:hover { transform: scale(1.15); }
+.heatmapCell:focus-visible,
+.tw12Cell:focus-visible { outline: var(--focus-ring); outline-offset: 1px; z-index: 1; }
 
 .heatmapToday {
-  outline: 1.5px solid var(--accent);
+  outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
 
-.hmL0 { background: var(--bg-elevated);                                        color: var(--text-dim); }
-.hmL1 { background: color-mix(in srgb, var(--accent) 18%, transparent);        color: var(--text-main); }
-.hmL2 { background: color-mix(in srgb, var(--accent) 38%, transparent);        color: var(--text-main); }
-.hmL3 { background: color-mix(in srgb, var(--accent) 62%, transparent);        color: #fff; /* literal: readable text on strong accent fill */ }
-.hmL4 { background: var(--accent);                                              color: #fff; /* literal: readable text on accent fill */ font-weight: 700; }
+/* Intensity scale — shared with the Energy map widget. */
+.hmL0 { background: var(--bg-subtle); color: var(--text-dim); }
+.hmL1 { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text-main); }
+.hmL2 { background: color-mix(in srgb, var(--accent) 42%, transparent); color: var(--text-main); }
+.hmL3 { background: color-mix(in srgb, var(--accent) 66%, transparent); color: var(--text-on-accent); }
+.hmL4 { background: var(--accent); color: var(--text-on-accent); font-weight: 700; }
 
 /* Legend bar */
 .legend {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .legendLabel {
-  font-size: 9px;
+  font-size: var(--text-2xs);
   color: var(--text-dim);
   white-space: nowrap;
 }
 
 .legendSwatches {
   display: flex;
-  gap: 2px;
+  gap: var(--space-1);
   flex: 1;
 }
 
 .legendSwatch {
   flex: 1;
-  height: 10px;
-  border-radius: 2px;
+  height: var(--space-3);
+  border-radius: var(--radius-xs);
 }
 
 /* Trailing 12 weeks variant */
 .tw12MonthRow {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  font-size: 9px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  font-size: var(--text-2xs);
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   font-weight: 600;
-  height: 12px;
+  height: var(--space-4);
 }
 
 .tw12MonthLabel {
@@ -130,22 +109,21 @@
 
 .tw12Grid {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  grid-template-rows: repeat(7, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: repeat(7, minmax(0, 1fr));
   grid-auto-flow: column;
-  gap: 3px;
-  margin-top: 4px;
+  gap: var(--space-1);
 }
 
 .tw12Cell {
   aspect-ratio: 1;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   border: none;
   padding: 0;
   cursor: pointer;
-  transition: transform 80ms;
+  transition: transform var(--motion-fast) var(--ease-standard);
 }
 
-.tw12Cell:hover {
-  transform: scale(1.3);
-}
+.tw12Cell:hover { transform: scale(1.25); }
+
+.cellFuture { opacity: 0.35; }

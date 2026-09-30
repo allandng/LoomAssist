@@ -1,11 +1,13 @@
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
   font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 20px;
-  color: var(--accent);
+  line-height: var(--leading-tight);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--accent-text);
   background: var(--accent-soft);
+  white-space: nowrap;
 }

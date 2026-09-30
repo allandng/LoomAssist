@@ -30,6 +30,29 @@ def list_templates(db: Session = Depends(get_db)):
     return db.query(models.EventTemplate).all()
 
 
+class EventTemplateUpdate(BaseModel):
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    duration_minutes: int | None = None
+    is_recurring: bool | None = None
+    recurrence_days: str | None = None
+    calendar_id: int | None = None
+
+
+@router.put("/{template_id}", response_model=models.EventTemplateRead)
+def update_template(template_id: int, payload: EventTemplateUpdate, db: Session = Depends(get_db)):
+    db_template = db.query(models.EventTemplate).filter(models.EventTemplate.id == template_id).first()
+    if not db_template:
+        raise HTTPException(status_code=404,
+            detail={"error": {"code": "template_not_found", "detail": f"Template {template_id} does not exist."}})
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(db_template, field, value)
+    db.commit()
+    db.refresh(db_template)
+    return db_template
+
+
 @router.delete("/{template_id}")
 def delete_template(template_id: int, db: Session = Depends(get_db)):
     db_template = db.query(models.EventTemplate).filter(models.EventTemplate.id == template_id).first()

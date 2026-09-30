@@ -1,175 +1,215 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Icon, Icons } from '../shared/Icon';
+import { useNavigate } from 'react-router-dom';
+import styles from './InboxPanel.module.css';
+import { Badge, Button, EmptyState, IconButton, Icons, Input, Skeleton } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
-import {
-  listInbox, createInboxItem, proposeInboxItem,
-  scheduleInboxItem, deleteInboxItem,
-} from '../../api';
-import type { InboxItem } from '../../types';
+import { useNotifications } from '../../store/notifications';
+import { pushEscapeHandler } from '../../lib/escapeStack';
+import type { Calendar, InboxItem } from '../../types';
+import { InboxItemRow } from './InboxItemRow';
+import { effectiveProposal, findScheduledEvent, useInbox } from './useInbox';
 
 interface Props {
   onClose: () => void;
-  timelines: import('../../types').Calendar[];
+  timelines: Calendar[];
 }
 
-function formatProposed(start: string | null, duration: number | null): string {
-  if (!start) return '';
-  const s = new Date(start);
-  const e = new Date(s.getTime() + (duration ?? 60) * 60_000);
-  return `${s.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} – ${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-}
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/**
+ * Quick-capture panel (the "I" overlay). A real dialog: labelled, modal,
+ * Escape via the shared escape stack, a first/last focus trap, and focus
+ * restored to the invoker on close. Anchored to the right edge under the top bar.
+ */
 export function InboxPanel({ onClose, timelines }: Props) {
+  const navigate = useNavigate();
   const { openEventEditor } = useModal();
-  const [items, setItems] = useState<InboxItem[]>([]);
-  const [inputText, setInputText] = useState('');
-  const [proposing, setProposing] = useState<number | null>(null);
-  const [proposals, setProposals] = useState<Record<number, { proposed_start: string | null; proposed_duration: number | null; rationale: string }>>({});
+  const { addNotification } = useNotifications();
+  const inbox = useInbox();
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const [invoker] = useState<HTMLElement | null>(() => document.activeElement as HTMLElement | null);
 
-  const load = useCallback(() => {
-    listInbox().then(setItems).catch(() => {});
+  // Escape closes; focus lands on the input; focus returns to the invoker.
+  useEffect(() => {
+    const pop = pushEscapeHandler(onClose);
+    const t = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => {
+      pop();
+      window.clearTimeout(t);
+      if (invoker && document.contains(invoker)) invoker.focus();
+    };
+  }, [onClose, invoker]);
+
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return;
+    const nodes = panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
+    if (!nodes || nodes.length === 0) return;
+    const first = nodes[0]!;
+    const last = nodes[nodes.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
-  async function handleAdd() {
-    const text = inputText.trim();
-    if (!text) return;
-    await createInboxItem(text);
-    setInputText('');
-    load();
-  }
-
-  async function handlePropose(id: number) {
-    setProposing(id);
+  async function handleCapture() {
+    if (!text.trim() || saving) return;
+    setSaving(true);
     try {
-      const res = await proposeInboxItem(id);
-      setProposals(prev => ({ ...prev, [id]: res }));
-      load();
+      await inbox.capture(text);
+      setText('');
+      inputRef.current?.focus();
+    } catch {
+      addNotification({ type: 'error', title: 'Could not capture', message: 'The inbox did not accept the item. Try again.', autoRemoveMs: 6000 });
     } finally {
-      setProposing(null);
+      setSaving(false);
     }
   }
 
-  async function handleAccept(item: InboxItem) {
-    const proposal = proposals[item.id];
-    const start = proposal?.proposed_start ?? item.proposed_start;
-    const dur   = proposal?.proposed_duration ?? item.proposed_duration ?? 60;
-    if (!start) return;
-    const end = new Date(new Date(start).getTime() + dur * 60_000).toISOString();
-    // Open editor pre-filled with the proposed time; user can adjust title before saving
-    openEventEditor(null, undefined, undefined, start, end);
+  async function handlePropose(item: InboxItem) {
+    try {
+      const res = await inbox.propose(item.id);
+      if (res && !res.proposed_start) {
+        addNotification({ type: 'warning', title: 'No slot found', message: res.rationale || 'Nothing free in the next 7 days.', autoRemoveMs: 6000 });
+      }
+    } catch {
+      addNotification({ type: 'error', title: 'Could not propose a time', message: 'The local AI did not respond.', autoRemoveMs: 6000 });
+    }
   }
 
   async function handleSchedule(item: InboxItem) {
-    const proposal = proposals[item.id];
-    const start = proposal?.proposed_start ?? item.proposed_start;
-    const dur   = proposal?.proposed_duration ?? item.proposed_duration ?? 60;
-    if (!start) return handleAccept(item);
-    const end   = new Date(new Date(start).getTime() + dur * 60_000).toISOString();
-    const calId = timelines[0]?.id ?? 1;
-    await scheduleInboxItem(item.id, start, end, calId);
-    load();
+    const calId = timelines[0]?.id;
+    if (calId == null) {
+      addNotification({ type: 'warning', title: 'No timeline yet', message: 'Create a timeline before scheduling inbox items.', autoRemoveMs: 6000 });
+      return;
+    }
+    try {
+      await inbox.schedule(item, calId);
+      addNotification({ type: 'success', title: 'Scheduled', message: item.text, autoRemoveMs: 4000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not schedule', message: 'The event was not created.', autoRemoveMs: 6000 });
+    }
   }
 
-  async function handleDelete(id: number) {
-    await deleteInboxItem(id);
-    load();
+  function handleEdit(item: InboxItem) {
+    const p = effectiveProposal(item, inbox.proposals[item.id]);
+    if (!p.start) return;
+    const end = new Date(new Date(p.start).getTime() + p.duration * 60_000).toISOString();
+    onClose();
+    openEventEditor(null, undefined, undefined, p.start, end, { title: item.text });
   }
+
+  async function handleOpenEvent(item: InboxItem) {
+    const ev = await findScheduledEvent(item).catch(() => null);
+    if (!ev) {
+      addNotification({ type: 'warning', title: 'Event not found', message: 'It may have been deleted.', autoRemoveMs: 5000 });
+      return;
+    }
+    onClose();
+    openEventEditor(ev);
+  }
+
+  async function handleArchive(item: InboxItem) {
+    try {
+      await inbox.archive(item.id);
+    } catch {
+      addNotification({ type: 'error', title: 'Could not archive', autoRemoveMs: 5000 });
+    }
+  }
+
+  const openItems = inbox.items.filter(i => !i.archived);
 
   const panel = (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 900,
-        display: 'flex', justifyContent: 'flex-end',
-      }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div style={{
-        width: 340, height: '100%',
-        background: 'var(--bg-panel)',
-        borderLeft: '1px solid var(--border)',
-        display: 'flex', flexDirection: 'column',
-        boxShadow: '-4px 0 24px rgba(0,0,0,0.4)',
-      }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 16px 12px', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-main)' }}>Inbox</span>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}>
-            <Icon d={Icons.x} size={16} />
-          </button>
-        </div>
+    <div className={styles.scrim} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div
+        ref={panelRef}
+        className={styles.panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={onKeyDown}
+      >
+        <header className={styles.header}>
+          <div className={styles.titleRow}>
+            <h2 id={titleId} className={styles.title}>Inbox</h2>
+            {openItems.length > 0 && <Badge tone="accent" size="sm">{openItems.length}</Badge>}
+          </div>
+          <IconButton icon={Icons.x} label="Close" size="sm" onClick={onClose} />
+        </header>
 
-        {/* Input */}
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8 }}>
-          <input
-            className="loom-field"
-            style={{ flex: 1, fontSize: 13 }}
-            placeholder="Capture a thought or task…"
-            value={inputText}
-            onChange={e => setInputText(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
-            autoFocus
+        <form
+          className={styles.capture}
+          onSubmit={e => { e.preventDefault(); handleCapture(); }}
+        >
+          <Input
+            ref={inputRef}
+            icon={Icons.plus}
+            placeholder="Capture a thought or task"
+            aria-label="Capture a thought or task"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            disabled={saving}
           />
-          <button className="loom-btn-primary" style={{ padding: '0 12px', fontSize: 13 }} onClick={handleAdd}>
-            Add
-          </button>
-        </div>
+          <Button type="submit" variant="primary" loading={saving} disabled={!text.trim()}>Capture</Button>
+        </form>
 
-        {/* Items */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-          {items.length === 0 && (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              Inbox is empty. Press <kbd style={{ background: 'var(--bg-elevated)', borderRadius: 4, padding: '1px 5px' }}>I</kbd> to open.
+        <div className={styles.list}>
+          {inbox.loading && (
+            <div className={styles.skeletons} aria-busy="true">
+              {[0, 1, 2].map(i => (
+                <div key={i} className={styles.skeletonRow}>
+                  <Skeleton width="80%" height={13} />
+                  <Skeleton width="40%" height={11} />
+                </div>
+              ))}
             </div>
           )}
-          {items.map(item => {
-            const proposal = proposals[item.id];
-            const proposedStart = proposal?.proposed_start ?? item.proposed_start;
-            const proposedDur   = proposal?.proposed_duration ?? item.proposed_duration;
-            return (
-              <div key={item.id} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: 13, color: 'var(--text-main)', flex: 1 }}>{item.text}</span>
-                  <button onClick={() => handleDelete(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2, flexShrink: 0 }}>
-                    <Icon d={Icons.x} size={13} />
-                  </button>
-                </div>
 
-                {proposedStart ? (
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {formatProposed(proposedStart, proposedDur)}
-                    {proposal?.rationale && <span style={{ marginLeft: 4, color: 'var(--text-dim)' }}>— {proposal.rationale}</span>}
-                  </div>
-                ) : null}
+          {!inbox.loading && inbox.error && (
+            <div className={styles.errorRow}>
+              <Badge tone="error" dot>{inbox.error}</Badge>
+              <Button size="sm" variant="subtle" onClick={() => inbox.reload()}>Retry</Button>
+            </div>
+          )}
 
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {!proposedStart && (
-                    <button
-                      className="loom-btn-ghost"
-                      style={{ fontSize: 11, padding: '3px 8px' }}
-                      onClick={() => handlePropose(item.id)}
-                      disabled={proposing === item.id}
-                    >
-                      {proposing === item.id ? 'Proposing…' : 'Propose time'}
-                    </button>
-                  )}
-                  {proposedStart && (
-                    <>
-                      <button className="loom-btn-primary" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => handleSchedule(item)}>
-                        Accept
-                      </button>
-                      <button className="loom-btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => handleAccept(item)}>
-                        Edit
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {!inbox.loading && !inbox.error && openItems.length === 0 && (
+            <EmptyState
+              compact
+              icon={Icons.inbox}
+              title="Nothing captured yet"
+              description="Type something and press Enter."
+            />
+          )}
+
+          {openItems.length > 0 && (
+            <ul className={styles.items}>
+              {openItems.map(item => (
+                <InboxItemRow
+                  key={item.id}
+                  item={item}
+                  compact
+                  proposal={inbox.proposals[item.id]}
+                  proposing={inbox.proposingId === item.id}
+                  busy={inbox.busyId === item.id}
+                  onPropose={handlePropose}
+                  onSchedule={handleSchedule}
+                  onEdit={handleEdit}
+                  onOpenEvent={handleOpenEvent}
+                  onArchive={handleArchive}
+                />
+              ))}
+            </ul>
+          )}
         </div>
+
+        <footer className={styles.footer}>
+          <Button variant="subtle" size="sm" iconRight={Icons.arrowRight} onClick={() => { onClose(); navigate('/inbox'); }}>
+            Open inbox page
+          </Button>
+        </footer>
       </div>
     </div>
   );

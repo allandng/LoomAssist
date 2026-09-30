@@ -1,19 +1,37 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './ModalShell.module.css';
-import { Icon, Icons } from '../shared/Icon';
+import { Button, IconButton, Icons } from '../ui';
 import { pushEscapeHandler } from '../../lib/escapeStack';
 import { useModalOptional } from '../../contexts/ModalContext';
 
-interface ModalShellProps {
-  title: string;
+export type ModalVariant = 'dialog' | 'sheet';
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl';
+
+const SIZE_PX: Record<ModalSize, number> = { sm: 400, md: 520, lg: 680, xl: 880 };
+
+export interface ModalShellProps {
+  title: ReactNode;
+  /** Secondary line under the title (context, e.g. the connection name). */
+  subtitle?: ReactNode;
+  /** Slot between the title block and the close button (badges, small actions). */
+  headerActions?: ReactNode;
+  /** `dialog` (centered, default) or `sheet` (right-side panel; the page stays readable). */
+  variant?: ModalVariant;
+  /** Width preset for dialogs: sm 400 · md 520 · lg 680 · xl 880. */
+  size?: ModalSize;
+  /** Explicit width in px — overrides `size` (and `--sheet-w` for sheets). */
   width?: number;
+  /** Remove the body padding (edge-to-edge tables / lists). */
+  flush?: boolean;
+  /** Accessible name when `title` is not a plain string. */
+  'aria-label'?: string;
   children: ReactNode;
   onClose: () => void;
   /**
-   * WS5 #2 — when true, a backdrop click / Escape does not close immediately;
-   * it surfaces an inline "Discard changes?" bar so a half-filled form isn't
-   * lost to a stray click. EventEditor sets this whenever a field is dirty.
+   * When true, a scrim click / Escape does not close immediately; it surfaces
+   * an inline "Discard changes?" bar so a half-filled form isn't lost to a
+   * stray click. EventEditor sets this whenever a field is dirty.
    */
   confirmOnClose?: boolean;
 }
@@ -33,7 +51,19 @@ function isTextEntry(el: Element | null): boolean {
   return (el as HTMLElement).isContentEditable;
 }
 
-export function ModalShell({ title, width = 520, children, onClose, confirmOnClose = false }: ModalShellProps) {
+export function ModalShell({
+  title,
+  subtitle,
+  headerActions,
+  variant = 'dialog',
+  size = 'md',
+  width,
+  flush = false,
+  'aria-label': ariaLabel,
+  children,
+  onClose,
+  confirmOnClose = false,
+}: ModalShellProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const modalCtx = useModalOptional();
   const [showDiscard, setShowDiscard] = useState(false);
@@ -107,43 +137,90 @@ export function ModalShell({ title, width = 520, children, onClose, confirmOnClo
     };
   }, [invoker]);
 
-  return createPortal(
-    <div className={styles.backdrop} onClick={e => { if (e.target === e.currentTarget) requestClose(); }}>
-      <div
-        ref={panelRef}
-        className={styles.panel}
-        style={{ width }}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-      >
-        <div className={styles.header}>
-          <span className={styles.title}>{title}</span>
-          <button className={styles.closeBtn} onClick={requestClose} aria-label="Close">
-            <Icon d={Icons.x} size={14} />
-          </button>
+  const isSheet = variant === 'sheet';
+  const px = width ?? (isSheet ? undefined : SIZE_PX[size]);
+  const panelStyle = px != null ? ({ '--modal-w': `${px}px` } as CSSProperties) : undefined;
+  const label = ariaLabel ?? (typeof title === 'string' ? title : undefined);
+
+  const panel = (
+    <div
+      ref={panelRef}
+      className={[styles.panel, isSheet ? styles.sheet : styles.dialog].join(' ')}
+      style={panelStyle}
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      tabIndex={-1}
+    >
+      <div className={styles.header}>
+        <div className={styles.headerText}>
+          <h2 className={styles.title}>{title}</h2>
+          {subtitle && <div className={styles.subtitle}>{subtitle}</div>}
         </div>
-        <div className={styles.body}>{children}</div>
-        {showDiscard && (
-          <div className={styles.discardBar} role="alertdialog" aria-label="Discard changes?">
-            <span className={styles.discardText}>Discard changes?</span>
-            <div className={styles.discardActions}>
-              <button className="loom-btn-ghost" onClick={() => setShowDiscard(false)}>Keep editing</button>
-              <button className={styles.discardConfirm} onClick={onClose}>Discard</button>
-            </div>
-          </div>
-        )}
+        {headerActions && <div className={styles.headerActions}>{headerActions}</div>}
+        <IconButton icon={Icons.x} label="Close" size="sm" onClick={requestClose} />
       </div>
-    </div>,
+      <div className={[styles.body, flush ? styles.flush : ''].join(' ')}>{children}</div>
+      {showDiscard && (
+        <div className={styles.discardBar} role="alertdialog" aria-label="Discard changes?">
+          <span className={styles.discardText}>Discard changes?</span>
+          <div className={styles.discardActions}>
+            <Button variant="ghost" size="sm" onClick={() => setShowDiscard(false)}>Keep editing</Button>
+            <Button variant="danger" size="sm" onClick={onClose}>Discard</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return createPortal(
+    isSheet ? (
+      <div className={styles.sheetRoot}>
+        <div className={styles.sheetScrim} onClick={requestClose} aria-hidden="true" />
+        {panel}
+      </div>
+    ) : (
+      <div className={styles.backdrop} onClick={e => { if (e.target === e.currentTarget) requestClose(); }}>
+        {panel}
+      </div>
+    ),
     document.body,
   );
 }
 
-export function ModalFooter({ children }: { children: ReactNode }) {
-  return <div className={styles.footer}>{children}</div>;
+/* ── Footer: right-aligned actions, optional `left` slot for destructive / secondary ── */
+export function ModalFooter({ children, left, className }: { children?: ReactNode; left?: ReactNode; className?: string }) {
+  return (
+    <div className={[styles.footer, className ?? ''].join(' ')}>
+      {left && <div className={styles.footerLeft}>{left}</div>}
+      <div className={styles.footerRight}>{children}</div>
+    </div>
+  );
 }
 
-export function FieldLabel({ children }: { children: ReactNode }) {
-  return <div className={styles.fieldLabel}>{children}</div>;
+/* ── FieldLabel: thin label matching the Field primitive's look ─────────── */
+export function FieldLabel({ children, htmlFor, right }: { children: ReactNode; htmlFor?: string; right?: ReactNode }) {
+  return (
+    <div className={styles.fieldLabelRow}>
+      <label className={styles.fieldLabel} htmlFor={htmlFor}>{children}</label>
+      {right}
+    </div>
+  );
+}
+
+/* ── Shared building blocks for modal bodies ────────────────────────────── */
+
+/** Vertical stack of fields with the standard gap. */
+export function ModalStack({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={[styles.stack, className ?? ''].join(' ')}>{children}</div>;
+}
+
+/** Inline notice (warning / error / info) inside a modal body. */
+export function ModalNotice({ tone = 'info', icon, children }: { tone?: 'info' | 'warning' | 'error' | 'success'; icon?: ReactNode; children: ReactNode }) {
+  return (
+    <div className={[styles.notice, styles[`notice_${tone}`]].join(' ')} role={tone === 'error' ? 'alert' : 'status'}>
+      {icon}
+      <div className={styles.noticeText}>{children}</div>
+    </div>
+  );
 }

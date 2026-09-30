@@ -1,29 +1,38 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useCallback } from 'react';
 import styles from './NotifPanel.module.css';
 import { Icon, Icons } from './shared/Icon';
-import { pushEscapeHandler } from '../lib/escapeStack';
+import { Button, EmptyState, IconButton, Popover } from './ui';
+import { relativeTime } from '../lib/time';
 import { useNotifications, type Notification } from '../store/notifications';
 
 interface NotifPanelProps {
+  open: boolean;
   onClose: () => void;
+  /** The bell button; the panel anchors under it (right-aligned). */
+  anchor: HTMLElement | null;
 }
 
-const ACTION_COLORS: Record<Notification['type'], string> = {
-  success: 'var(--success)', warning: 'var(--warning)',
-  error: 'var(--error)', info: 'var(--info)', progress: 'var(--accent)',
+const PANEL_WIDTH = 360;
+
+const SEVERITY_ICON: Record<Notification['type'], React.ReactNode> = {
+  success:  Icons.checkCircle,
+  error:    Icons.alertCircle,
+  warning:  Icons.warning,
+  info:     Icons.info,
+  progress: Icons.loader,
 };
 
-const BORDER_CLASSES: Record<Notification['type'], string> = {
-  success: styles.borderSuccess,
-  warning: styles.borderWarning,
-  error:   styles.borderError,
-  info:    styles.borderInfo,
-  progress: styles.borderProgress,
-};
+/** Bucket a timestamp for the grouped list. */
+function bucket(ts: Date, now: Date): string {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const delta = Math.round((day(now) - day(ts)) / 86_400_000);
+  if (delta <= 0) return 'Today';
+  if (delta === 1) return 'Yesterday';
+  if (delta < 7) return 'This week';
+  return 'Earlier';
+}
 
-/** A single actionable notification button that awaits its promise before the
- *  row dismisses. On rejection the row stays with an error note + Retry. */
+/** Runs the notification's action, keeping the row up (with Retry) on failure. */
 function ActionButton({ notif, onResolve }: { notif: Notification; onResolve: () => void }) {
   const [state, setState] = useState<'idle' | 'running' | 'error'>('idle');
 
@@ -39,38 +48,27 @@ function ActionButton({ notif, onResolve }: { notif: Notification; onResolve: ()
 
   return (
     <div className={styles.actionRow}>
-      <button
-        className={styles.cardAction}
-        style={{ color: ACTION_COLORS[notif.type] }}
-        onClick={run}
-        disabled={state === 'running'}
-      >
-        {state === 'running'
-          ? 'Working…'
-          : state === 'error'
-            ? `Retry ${notif.actionLabel}`
-            : `${notif.actionLabel} →`}
-      </button>
-      {state === 'error' && (
-        <span className={styles.actionError}>Action failed</span>
-      )}
+      <Button size="sm" variant="ghost" loading={state === 'running'} onClick={run}>
+        {state === 'error' ? `Retry ${notif.actionLabel}` : notif.actionLabel}
+      </Button>
+      {state === 'error' && <span className={styles.actionError}>Action failed</span>}
     </div>
   );
 }
 
-function NotifCard({
-  notif, onDismiss, onGroupChildDismiss, isChild, groupId,
+function NotifRow({
+  notif, onDismiss, onGroupChildDismiss, isChild, groupId, now,
 }: {
   notif: Notification;
   onDismiss: (id: string) => void;
   onGroupChildDismiss: (summaryId: string, childId: string) => void;
   isChild?: boolean;
   groupId?: string;
+  now: Date;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isSummary = !!(notif.collapsedChildren && notif.collapsedChildren.length);
 
-  const ts = notif.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   // A child dismiss removes just that child from its group; a top-level dismiss
   // (summary or plain) removes the whole row in a single step.
   const dismiss = isChild && groupId
@@ -78,128 +76,119 @@ function NotifCard({
     : () => onDismiss(notif.id);
 
   return (
-    <div className={`${styles.card} ${BORDER_CLASSES[notif.type]} ${isChild ? styles.childCard : ''}`}>
-      <div className={styles.cardTop}>
-        <span className={styles.cardTitle}>{notif.title}</span>
-        {notif.dismissible && (
-          <button className={styles.cardDismiss} onClick={dismiss} aria-label="Dismiss">
-            <Icon d={Icons.x} size={12} />
+    <li className={[styles.row, styles[`tone_${notif.type}`], isChild ? styles.rowChild : '', notif.read ? '' : styles.rowUnread].join(' ')}>
+      <span className={styles.rowIcon} aria-hidden="true">
+        <Icon d={SEVERITY_ICON[notif.type]} size={15} />
+      </span>
+      <div className={styles.rowBody}>
+        <div className={styles.rowTop}>
+          <span className={styles.rowTitle}>
+            {!notif.read && <span className={styles.unreadDot} aria-label="Unread" />}
+            {notif.title}
+          </span>
+          <time className={styles.rowTime} dateTime={notif.timestamp.toISOString()} title={notif.timestamp.toLocaleString()}>
+            {relativeTime(notif.timestamp, now)}
+          </time>
+        </div>
+        {notif.message && <div className={styles.rowMsg}>{notif.message}</div>}
+
+        {notif.progress !== undefined && (
+          <div className={styles.progressTrack} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(notif.progress)}>
+            <div className={styles.progressFill} style={{ width: `${Math.max(0, Math.min(100, notif.progress))}%` }} />
+          </div>
+        )}
+
+        {isSummary && (
+          <button type="button" className={styles.expandBtn} onClick={() => setExpanded(e => !e)} aria-expanded={expanded}>
+            <Icon d={expanded ? Icons.chevronUp : Icons.chevronDown} size={12} />
+            {expanded ? 'Hide' : `Show all ${notif.collapsedCount}`}
           </button>
         )}
+        {isSummary && expanded && (
+          <ul className={styles.childList}>
+            {notif.collapsedChildren!.map(child => (
+              <NotifRow
+                key={child.id}
+                notif={child}
+                onDismiss={onDismiss}
+                onGroupChildDismiss={onGroupChildDismiss}
+                isChild
+                groupId={notif.id}
+                now={now}
+              />
+            ))}
+          </ul>
+        )}
+
+        {notif.actionable && notif.actionLabel && notif.actionFn && (
+          <ActionButton notif={notif} onResolve={dismiss} />
+        )}
       </div>
-      {notif.message && <div className={styles.cardMsg}>{notif.message}</div>}
-
-      {isSummary && (
-        <button
-          className={styles.expandBtn}
-          onClick={() => setExpanded(e => !e)}
-          aria-expanded={expanded}
-        >
-          {expanded ? 'Hide' : `Show all ${notif.collapsedCount}`}
-        </button>
+      {notif.dismissible !== false && (
+        <IconButton icon={Icons.x} label="Dismiss" size="sm" onClick={dismiss} className={styles.rowDismiss} />
       )}
-      {isSummary && expanded && (
-        <div className={styles.childList}>
-          {notif.collapsedChildren!.map(child => (
-            <NotifCard
-              key={child.id}
-              notif={child}
-              onDismiss={onDismiss}
-              onGroupChildDismiss={onGroupChildDismiss}
-              isChild
-              groupId={notif.id}
-            />
-          ))}
-        </div>
-      )}
-
-      {notif.progress !== undefined && (
-        <div className={styles.progressTrack}>
-          <div className={styles.progressFill} style={{ width: `${notif.progress}%` }} />
-          {notif.type === 'progress' && notif.progress < 100 && (
-            <div className={styles.progressShimmer} />
-          )}
-        </div>
-      )}
-
-      {notif.actionable && notif.actionLabel && notif.actionFn && (
-        <ActionButton notif={notif} onResolve={dismiss} />
-      )}
-
-      <div className={styles.cardTs}>{ts}</div>
-    </div>
+    </li>
   );
 }
 
-export function NotifPanel({ onClose }: NotifPanelProps) {
-  const { notifications, dismissNotification, dismissChild, clearAllNotifications, markAllRead } = useNotifications();
-  const panelRef = useRef<HTMLDivElement>(null);
+/**
+ * Notification history, anchored under the bell. Light-dismiss popover: no
+ * scrim, closes on Escape (shared escape stack) and outside click. Marking
+ * read is explicit ("Mark all read"), never a side effect of opening.
+ */
+export function NotifPanel({ open, onClose, anchor }: NotifPanelProps) {
+  const { notifications, unreadCount, dismissNotification, dismissChild, clearAllNotifications, markAllRead } = useNotifications();
+  const now = new Date();
 
-  // Light-dismiss popover (WS7 #5): no dimming backdrop, no aria-modal. Esc goes
-  // through the shared escape stack (WS4 #7) so it only closes the top layer;
-  // click-outside + a panel-scoped Tab trap stay local. Marking read is an
-  // explicit user action (the "Mark all read" button) — not a side effect of
-  // opening.
-  useEffect(() => {
-    const firstFocusable = panelRef.current?.querySelector<HTMLElement>('button, [href], input');
-    firstFocusable?.focus();
+  const groups: { label: string; items: Notification[] }[] = [];
+  for (const n of notifications) {
+    const label = bucket(n.timestamp, now);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(n);
+    else groups.push({ label, items: [n] });
+  }
 
-    const popEscape = pushEscapeHandler(() => onClose());
-
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Tab') {
-        const focusables = panelRef.current?.querySelectorAll<HTMLElement>('button, [href], input, [tabindex]:not([tabindex="-1"])') ?? [];
-        const arr = Array.from(focusables).filter(el => !(el as HTMLButtonElement).disabled);
-        if (arr.length === 0) return;
-        const first = arr[0], last = arr[arr.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
-    }
-
-    function onPointerDown(e: PointerEvent) {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      if (panelRef.current?.contains(target)) return;
-      // The bell toggles the panel itself — don't double-fire on it.
-      if (target.closest('[aria-label="Notifications"]')) return;
-      onClose();
-    }
-
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('pointerdown', onPointerDown, true);
-    return () => {
-      popEscape();
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('pointerdown', onPointerDown, true);
-    };
-  }, [onClose]);
-
-  return createPortal(
-    <div ref={panelRef} className={styles.panel} role="dialog" aria-label="Notifications">
-      <div className={styles.panelHeader}>
-        <span className={styles.panelTitle}>NOTIFICATIONS · {notifications.length}</span>
-        <div className={styles.panelActions}>
-          <button className={styles.markRead} onClick={markAllRead}>Mark all read</button>
+  return (
+    <Popover open={open} onClose={onClose} anchor={anchor} align="end" width={PANEL_WIDTH} label="Notifications" className={styles.panel}>
+      <div className={styles.header}>
+        <h2 className={styles.title}>Notifications</h2>
+        <div className={styles.headerActions}>
+          {unreadCount > 0 && (
+            <Button size="sm" variant="subtle" onClick={markAllRead}>Mark all read</Button>
+          )}
           {notifications.length > 0 && (
-            <button className={styles.markRead} onClick={clearAllNotifications}>Clear all</button>
+            <Button size="sm" variant="subtle" onClick={clearAllNotifications}>Clear</Button>
           )}
         </div>
       </div>
+
       <div className={styles.list}>
-        {notifications.length === 0 && (
-          <div className={styles.empty}>No notifications</div>
-        )}
-        {notifications.map(n => (
-          <NotifCard
-            key={n.id}
-            notif={n}
-            onDismiss={dismissNotification}
-            onGroupChildDismiss={dismissChild}
+        {notifications.length === 0 ? (
+          <EmptyState
+            compact
+            icon={Icons.bell}
+            title="You're all caught up"
+            description="Sync results, reminders and undo actions will show up here."
           />
-        ))}
+        ) : (
+          groups.map(g => (
+            <section key={g.label} className={styles.group} aria-label={g.label}>
+              <div className={styles.groupLabel}>{g.label}</div>
+              <ul className={styles.groupList}>
+                {g.items.map(n => (
+                  <NotifRow
+                    key={n.id}
+                    notif={n}
+                    onDismiss={dismissNotification}
+                    onGroupChildDismiss={dismissChild}
+                    now={now}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
       </div>
-    </div>,
-    document.body,
+    </Popover>
   );
 }

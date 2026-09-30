@@ -1,0 +1,139 @@
+/* ── Card (board columns) ────────────────────────────────────────────────── */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--motion-fast) var(--ease-standard);
+}
+
+.card:hover { border-color: var(--border-strong); }
+
+.focusing { border-color: var(--accent); }
+
+.done { opacity: 0.6; }
+
+.interactive { cursor: pointer; user-select: none; }
+.interactive:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+
+.guard { display: inline-flex; align-items: center; }
+
+.cardTop {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.cardText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+}
+
+.title {
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--text-main);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.done .title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.eventName {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-1)) 0 0;
+}
+
+.cardMeta,
+.rowMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Indent to line up with the title (checkbox width + gap). */
+.cardMeta {
+  padding-left: calc(var(--space-5) + var(--space-1) + var(--space-3));
+}
+
+.timeline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.timelineName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: calc(var(--space-8) * 2.5);
+}
+
+.estimate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Row (list view) ─────────────────────────────────────────────────────── */
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--bg-hover); }
+.row.focusing { background: var(--accent-softer); }
+
+.rowText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rowText .title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowMeta {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}

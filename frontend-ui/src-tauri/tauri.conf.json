@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "frontend-ui",
+  "productName": "LoomAssist",
   "version": "2.4.0",
   "identifier": "com.loom.app",
   "build": {
@@ -13,9 +13,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "frontend-ui",
-        "width": 800,
-        "height": 600
+        "title": "LoomAssist",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640
       }
     ],
     "security": {

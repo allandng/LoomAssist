@@ -8,14 +8,15 @@ import {
   useLocation,
 } from 'react-router-dom';
 import styles from './App.module.css';
-import { AppDrawer, type Destination } from './components/shared/AppDrawer';
-import { TopBar } from './components/shared/TopBar';
-import { ContextSidebar } from './components/sidebar/ContextSidebar';
+import { Sidebar, type Destination } from './components/shell/Sidebar';
+import { SidebarAccount } from './components/shell/SidebarAccount';
+import { Toaster } from './components/shell/Toaster';
+import { TopBar, type TopBarKind } from './components/shared/TopBar';
 import { CalendarPage } from './pages/CalendarPage';
 import { HomePage } from './pages/HomePage';
 import { TaskBoardPage } from './pages/TaskBoardPage';
 import { FocusPage } from './pages/FocusPage';
-import { SettingsPage, SettingsSidebarContent } from './pages/SettingsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { InboxPage } from './pages/InboxPage';
 import { CoursesPage } from './pages/CoursesPage';
 import { JournalPage } from './pages/JournalPage';
@@ -28,6 +29,7 @@ import { SyncReviewPage } from './pages/SyncReviewPage';
 import { AccountAvatar } from './components/topbar/AccountAvatar';
 import { SyncCenter } from './components/topbar/SyncCenter';
 import { LiveRegion } from './components/shared/LiveRegion';
+import { DialogHost } from './components/ui';
 import { AccountProvider } from './contexts/AccountContext';
 import { SyncProvider } from './contexts/SyncContext';
 import { InboxPanel } from './components/inbox/InboxPanel';
@@ -55,6 +57,10 @@ const PATH_TO_DEST: Record<string, Destination> = {
   '/home': 'home', '/calendar': 'calendar', '/tasks': 'tasks', '/focus': 'focus', '/inbox': 'inbox', '/courses': 'courses', '/journal': 'journal', '/settings': 'settings',
 };
 
+const SIDEBAR_KEY = 'loom:sidebar:collapsed';
+const LEGACY_SIDEBAR_KEY = 'loom-sidebar';
+const INBOX_POLL_MS = 60_000;
+
 // Apply saved theme + font before first render to avoid flash
 if (typeof document !== 'undefined') {
   const theme = localStorage.getItem('loom-theme');
@@ -63,9 +69,17 @@ if (typeof document !== 'undefined') {
   document.body.classList.toggle('font-dyslexic',  localStorage.getItem('loom_font_dyslexic') === 'true');
 }
 
+/** Reads the new key; falls back to (and migrates from) the legacy key. */
 function readSidebarCollapsed(): boolean {
-  const v = localStorage.getItem('loom:sidebar:collapsed') ?? localStorage.getItem('loom-sidebar');
-  return v === '1' || v === 'hidden';
+  const v = localStorage.getItem(SIDEBAR_KEY);
+  if (v != null) return v === '1';
+  const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
+  if (legacy != null) {
+    const collapsed = legacy === 'hidden' || legacy === '1';
+    localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0');
+    return collapsed;
+  }
+  return false;
 }
 
 function Shell() {
@@ -86,12 +100,17 @@ function Shell() {
   }, []);
 
   // Look up the destination from the path. /settings/* sub-routes still resolve to 'settings'.
-  const pathRoot = '/' + (location.pathname.split('/')[1] || '');
+  const segments = location.pathname.split('/').filter(Boolean);
+  const pathRoot = '/' + (segments[0] || '');
   const dest: Destination = PATH_TO_DEST[pathRoot] ?? 'home';
+  // Every route the Shell renders has a title in the TopBar map; only the
+  // calendar route shows date controls.
+  const topBarKind: TopBarKind = dest === 'calendar' && segments[1] === 'sync-review' ? 'sync-review' : dest;
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [keybinds, setKeybinds] = useState(loadKeybinds);
 
-  // Inbox panel state (Phase 4)
+  // Inbox quick-capture panel + badge count
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -99,14 +118,27 @@ function Shell() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [jumpOpen, setJumpOpen] = useState(false);
   const [appTimelines, setAppTimelines] = useState<import('./types').Calendar[]>([]);
+  // The bell button element — the notification popover anchors under it.
+  const [bellEl, setBellEl] = useState<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     listCalendars().then(setAppTimelines).catch(() => {});
   }, []);
 
+  // Inbox badge: on mount, whenever an inbox mutation announces itself
+  // (window 'loom-inbox-changed'), when the quick-capture panel closes, and
+  // every minute as a safety net.
+  const refreshInbox = useCallback(() => {
+    listInbox()
+      .then(items => setInboxCount(items.filter(i => !i.archived).length))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { refreshInbox(); }, [refreshInbox, inboxOpen]);
   useEffect(() => {
-    listInbox().then(items => setInboxCount(items.length)).catch(() => {});
-  }, [inboxOpen]);
+    window.addEventListener('loom-inbox-changed', refreshInbox);
+    const t = window.setInterval(refreshInbox, INBOX_POLL_MS);
+    return () => { window.removeEventListener('loom-inbox-changed', refreshInbox); window.clearInterval(t); };
+  }, [refreshInbox]);
 
   // Semantic search toggle (Phase 6). The results dropdown itself lives in the
   // TopBar's search input (WS4 #5) — no more results-as-notification path.
@@ -211,7 +243,7 @@ function Shell() {
       addNotification({
         type: 'error',
         title: 'LoomAssist crashed last session',
-        message: 'Click to export logs for debugging.',
+        message: 'Export the logs to help track down the cause.',
         severity: 'important',
         actionable: true,
         actionLabel: 'Export logs',
@@ -234,15 +266,22 @@ function Shell() {
     }
 
     return () => { delete window.__loomCrashHandler; };
-  }, [addNotification]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [addNotification]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
       const next = !prev;
-      localStorage.setItem('loom:sidebar:collapsed', next ? '1' : '0');
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0');
       return next;
     });
   }, []);
+
+  // B: collapse/expand the app sidebar everywhere, and tell the current page
+  // to toggle its own context panel (pages listen for 'loom-panel-toggle').
+  const toggleSidebarAndPanels = useCallback(() => {
+    toggleSidebar();
+    window.dispatchEvent(new CustomEvent('loom-panel-toggle', { detail: { dest } }));
+  }, [toggleSidebar, dest]);
 
   const goTo = useCallback((d: Destination) => {
     localStorage.setItem('loom:destination', d);
@@ -250,10 +289,26 @@ function Shell() {
   }, [navigate]);
 
   const { openEventEditor, openWeeklyReview } = useModal();
+  const newEvent = useCallback(() => openEventEditor(), [openEventEditor]);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const openSheet = useCallback(() => setSheetOpen(true), []);
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
+  const openJump = useCallback(() => setJumpOpen(true), []);
+  const closeJump = useCallback(() => setJumpOpen(false), []);
+  const openInbox = useCallback(() => setInboxOpen(true), []);
+  // Home's "Capture" (and anything else) can ask for the quick-capture panel
+  // with a cancelable `loom-open-inbox` event; we claim it so the sender
+  // doesn't fall back to navigating to /inbox.
+  useEffect(() => {
+    const onOpen = (e: globalThis.Event) => { e.preventDefault(); setInboxOpen(true); };
+    window.addEventListener('loom-open-inbox', onOpen);
+    return () => window.removeEventListener('loom-open-inbox', onOpen);
+  }, []);
 
   // Boot-time briefing: if the user opted in, fetch today's agenda from the
-  // backend and (a) speak it via the macOS `say` Tauri command, (b) post it
-  // as a notification so it's also visible. Once per session.
+  // backend and (a) speak it via the Tauri `speak_briefing` command, (b) post
+  // it as a notification so it's also visible. Once per session.
   useEffect(() => {
     if (localStorage.getItem('loom_speak_briefing') !== 'true') return;
     if (sessionStorage.getItem('loom_briefing_played') === '1') return;
@@ -308,11 +363,11 @@ function Shell() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
   // WS4 #2/#3 — one truthful keyboard registry. Every binding reads its
   // key + modifiers from keybindConfig (so Settings rebinds propagate) and the
   // Shell dispatches by the current destination. Calendar-scoped actions
-  // reach CalendarPage through CalendarNavContext or a window event; the
-  // duplicate per-page useShortcuts call is gone.
+  // reach CalendarPage through CalendarNavContext or a window event.
   useShortcuts(useMemo(() => {
     const b = (action: KeybindAction, handler: (e: KeyboardEvent) => void, force = false) => {
       const k = keybinds[action];
@@ -320,7 +375,7 @@ function Shell() {
     };
     const onCal = (fn: () => void) => () => { if (dest === 'calendar') fn(); };
     return [
-      b('sidebar_toggle',  () => toggleSidebar()),
+      b('sidebar_toggle',  () => toggleSidebarAndPanels()),
       b('focus_mode',      () => goTo('focus')),
       b('view_month',      () => dest === 'calendar' ? nav.setView('Month')  : goTo('calendar')),
       b('view_week',       onCal(() => nav.setView('Week'))),
@@ -347,22 +402,20 @@ function Shell() {
       b('shortcut_sheet',  () => setSheetOpen(o => !o)),
       b('command_palette', (e) => { e.preventDefault(); setPaletteOpen(o => !o); }, true),
     ];
-  }, [keybinds, toggleSidebar, goTo, dest, nav, openEventEditor, setInboxOpen]));
-
-  const topBarKind = (dest === 'home' ? 'home' : dest === 'tasks' ? 'tasks' : dest === 'focus' ? 'focus' : dest === 'settings' ? 'settings' : 'calendar') as Parameters<typeof TopBar>[0]['kind'];
-
-  // Only Settings has sidebar content. Calendar renders its own sidebar inside CalendarPage.
-  const showContextSidebar = dest === 'settings';
+  }, [keybinds, toggleSidebarAndPanels, goTo, dest, nav, openEventEditor]));
 
   return (
     <div className={styles.shell}>
-      <AppDrawer active={dest} onNavigate={goTo} inboxCount={inboxCount} />
-
-      {showContextSidebar && (
-        <ContextSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar}>
-          <SettingsSidebarContent />
-        </ContextSidebar>
-      )}
+      <Sidebar
+        active={dest}
+        onNavigate={goTo}
+        inboxCount={inboxCount}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onSearch={openPalette}
+        onNewEvent={newEvent}
+        footer={<SidebarAccount collapsed={sidebarCollapsed} />}
+      />
 
       <div className={styles.main}>
         <TopBar
@@ -373,9 +426,13 @@ function Shell() {
           onPrev={nav.goPrev}
           onToday={nav.goToday}
           onNext={nav.goNext}
+          onDateClick={openJump}
           unread={unreadCount}
           onBell={togglePanel}
+          bellRef={setBellEl}
+          notifOpen={panelOpen}
           onMic={handleMic}
+          micActive={micActive}
           semanticEnabled={semanticEnabled}
           onSemanticToggle={() => setSemanticEnabled(e => !e)}
           right={
@@ -385,7 +442,7 @@ function Shell() {
             </>
           }
         />
-        {panelOpen && <NotifPanel onClose={togglePanel} />}
+        <NotifPanel open={panelOpen} onClose={togglePanel} anchor={bellEl} />
         <ConfirmBar items={confirmItems} onResolve={resolveConfirm} />
         {inboxOpen && <InboxPanel onClose={() => setInboxOpen(false)} timelines={appTimelines} />}
         <div className={styles.content}>
@@ -405,9 +462,15 @@ function Shell() {
             <Route path="*"                            element={<Navigate to="/home" replace />} />
           </Routes>
           <ModalRoot onSaved={reloadCalendar} />
-          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setSheetOpen(true)} onJumpToDate={() => setJumpOpen(true)} />
-          {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
-          {jumpOpen && <JumpToDate onPick={handleJump} onClose={() => setJumpOpen(false)} />}
+          <CommandPalette
+            open={paletteOpen}
+            onClose={closePalette}
+            onOpenShortcuts={openSheet}
+            onJumpToDate={openJump}
+            onCaptureInbox={openInbox}
+          />
+          {sheetOpen && <ShortcutSheet onClose={closeSheet} />}
+          {jumpOpen && <JumpToDate onPick={handleJump} onClose={closeJump} />}
         </div>
       </div>
     </div>
@@ -426,7 +489,11 @@ export default function App() {
                   {/* WS6 §5 — the single SR live region, mounted before any
                       announcement so the node pre-exists in the DOM. */}
                   <LiveRegion />
-                  {/* Full-bleed routes bypass <Shell/> entirely (no app drawer / no top bar). */}
+                  {/* Shared confirm()/prompt() dialogs and live toasts sit
+                      above every route, including the full-bleed ones. */}
+                  <DialogHost />
+                  <Toaster />
+                  {/* Full-bleed routes bypass <Shell/> entirely (no sidebar / no top bar). */}
                   <Routes>
                     <Route path="/auth/sign-in" element={<SignInPage />} />
                     <Route path="/onboarding"   element={<OnboardingPage />} />

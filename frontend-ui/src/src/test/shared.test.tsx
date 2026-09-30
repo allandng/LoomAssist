@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { Icon, Icons, Kbd, Chip, TLDot, AppDrawer, TopBar, SectionLabel } from '../components/shared';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { Icon, Icons, Kbd, Chip, TLDot, Sidebar, TopBar, SectionLabel } from '../components/shared';
 
 describe('Icon', () => {
   it('renders an svg with a string path', () => {
@@ -47,20 +47,45 @@ describe('TLDot', () => {
   });
 });
 
-describe('AppDrawer', () => {
-  it('renders all four nav destinations', () => {
-    render(<AppDrawer active="calendar" onNavigate={() => {}} />);
-    expect(screen.getByTitle(/Calendar/)).toBeTruthy();
-    expect(screen.getByTitle(/Task Board/)).toBeTruthy();
-    expect(screen.getByTitle(/Focus Mode/)).toBeTruthy();
-    expect(screen.getByTitle(/Settings/)).toBeTruthy();
+describe('Sidebar', () => {
+  it('renders every destination with a label when expanded', () => {
+    render(<Sidebar active="calendar" onNavigate={() => {}} />);
+    for (const label of ['Home', 'Calendar', 'Tasks', 'Inbox', 'Focus', 'Courses', 'Journal', 'Settings']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${label}`) })).toBeTruthy();
+    }
+    expect(screen.getByRole('button', { name: /^Calendar/ })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('calls onNavigate when a button is clicked', () => {
+  it('calls onNavigate when a destination is clicked', () => {
     const spy = vi.fn();
-    render(<AppDrawer active="calendar" onNavigate={spy} />);
-    screen.getByTitle(/Task Board/).click();
+    render(<Sidebar active="calendar" onNavigate={spy} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Tasks/ }));
     expect(spy).toHaveBeenCalledWith('tasks');
+  });
+
+  it('shows the inbox count as a badge', () => {
+    render(<Sidebar active="home" onNavigate={() => {}} inboxCount={3} />);
+    expect(screen.getByText('3')).toBeTruthy();
+  });
+
+  it('collapses to icons with accessible names', () => {
+    const onToggle = vi.fn();
+    render(<Sidebar active="home" onNavigate={() => {}} collapsed onToggle={onToggle} inboxCount={2} />);
+    expect(screen.queryByText('Calendar')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Calendar/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Inbox, 2 items/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it('wires the search and New event buttons', () => {
+    const onSearch = vi.fn();
+    const onNewEvent = vi.fn();
+    render(<Sidebar active="home" onNavigate={() => {}} onSearch={onSearch} onNewEvent={onNewEvent} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Search/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^New event/ }));
+    expect(onSearch).toHaveBeenCalledOnce();
+    expect(onNewEvent).toHaveBeenCalledOnce();
   });
 });
 
@@ -71,11 +96,33 @@ describe('TopBar', () => {
     expect(screen.getByText('Week')).toBeTruthy();
     expect(screen.getByText('Day')).toBeTruthy();
     expect(screen.getByText('Agenda')).toBeTruthy();
+    expect(screen.getByText('Today')).toBeTruthy();
   });
 
+  it('renders the date title as a button that opens Jump to date', () => {
+    const onDateClick = vi.fn();
+    render(<TopBar kind="calendar" dateLabel="September 2026" onDateClick={onDateClick} />);
+    fireEvent.click(screen.getByRole('button', { name: /September 2026/ }));
+    expect(onDateClick).toHaveBeenCalledOnce();
+  });
+
+  // Title copy follows the sidebar ("Tasks", not "Task Board").
   it('renders page title for tasks kind', () => {
     render(<TopBar kind="tasks" />);
-    expect(screen.getByText('Task Board')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Tasks' })).toBeTruthy();
+    expect(screen.queryByText('Month')).toBeNull();
+  });
+
+  // Regression: these routes used to fall back to the calendar controls.
+  it.each([
+    ['inbox', 'Inbox'],
+    ['courses', 'Courses'],
+    ['journal', 'Journal'],
+    ['sync-review', 'Sync review'],
+  ] as const)('renders a page title for %s', (kind, title) => {
+    render(<TopBar kind={kind} />);
+    expect(screen.getByRole('heading', { name: title })).toBeTruthy();
+    expect(screen.queryByText('Today')).toBeNull();
   });
 
   it('renders unread badge', () => {

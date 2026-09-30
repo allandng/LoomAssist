@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ModalShell, ModalFooter } from './ModalShell';
+import { Button, EmptyState, Icon, Icons } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
 import { findFreeSlots } from '../../api';
 import type { Event, FreeSlot } from '../../types';
+import styles from './MissedEventsModal.module.css';
 
 interface Props {
   items: Event[];
@@ -58,67 +60,63 @@ export function MissedEventsModal({ items, truncated, onReschedule }: Props) {
   }, [items]);
 
   return (
-    <ModalShell title="Missed events" onClose={close}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 0' }}>
-        {items.length === 0 && (
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
-            Nothing marked as missed.
-          </p>
-        )}
-
-        {items.map(ev => {
-          // Loading iff the id has not been keyed into `suggestions` yet
-          // (items prop changed and the async fetch hasn't completed).
-          const loading = !(ev.id in suggestions);
-          const slot = suggestions[ev.id] ?? null;
-          return (
-            <div
-              key={ev.id}
-              style={{
-                display: 'flex', alignItems: 'flex-start', gap: 12,
-                padding: '10px 12px', borderRadius: 8,
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>{ev.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {formatStart(ev.start_time)}
+    <ModalShell
+      title="Missed events"
+      subtitle={items.length > 0 ? `${items.length}${truncated ? '+' : ''} event${items.length !== 1 ? 's' : ''} you didn’t start` : undefined}
+      size="md"
+      onClose={close}
+      flush
+    >
+      {items.length === 0 ? (
+        <EmptyState
+          icon={Icons.checkCircle}
+          title="Nothing marked as missed."
+          description="Events you skip show up here with a suggested new time."
+        />
+      ) : (
+        <ul className={styles.list} aria-label="Missed events">
+          {items.map(ev => {
+            // Loading iff the id has not been keyed into `suggestions` yet
+            // (items prop changed and the async fetch hasn't completed).
+            const loading = !(ev.id in suggestions);
+            const slot = suggestions[ev.id] ?? null;
+            return (
+              <li key={ev.id} className={styles.item}>
+                <div className={styles.itemText}>
+                  <div className={styles.itemTitle}>{ev.title}</div>
+                  <div className={styles.itemWhen}>
+                    <Icon d={Icons.clock} size={11} /> {formatStart(ev.start_time)}
+                  </div>
+                  <div className={styles.itemReason}>You didn’t start this.</div>
+                  <div className={[styles.itemHint, slot ? styles.itemHintSlot : ''].join(' ')}>
+                    {loading
+                      ? <><Icon d={Icons.loader} size={11} className={styles.spin} /> Looking for a free slot…</>
+                      : slot
+                        ? <>Suggested: <span className={styles.slot}>{formatRange(slot.start, slot.end)}</span></>
+                        : 'No free slot in next 7 days'}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
-                  You didn&rsquo;t start this.
-                </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>
-                  {loading
-                    ? 'Looking for a free slot…'
-                    : slot
-                      ? <>Suggested: <span style={{ color: 'var(--text-main)' }}>{formatRange(slot.start, slot.end)}</span></>
-                      : 'No free slot in next 7 days'}
-                </div>
-              </div>
-              <button
-                className="loom-btn-ghost"
-                onClick={() => onReschedule(ev, slot?.start ?? null, slot?.end ?? null)}
-                disabled={loading}
-                style={{ alignSelf: 'flex-start' }}
-              >
-                Reschedule
-              </button>
-            </div>
-          );
-        })}
-
-        {truncated && (
-          <p style={{ color: 'var(--text-dim)', fontSize: 11.5, margin: '4px 0 0', textAlign: 'center' }}>
-            …and more
-          </p>
-        )}
-      </div>
+                {/* Plain button on purpose: the global class keeps the label as the
+                    button's own text node (tests read `.disabled` off it). */}
+                <button
+                  type="button"
+                  className="loom-btn-secondary loom-btn-sm"
+                  onClick={() => onReschedule(ev, slot?.start ?? null, slot?.end ?? null)}
+                  disabled={loading}
+                >
+                  Reschedule
+                </button>
+              </li>
+            );
+          })}
+          {truncated && (
+            <li className={styles.more}>…and more</li>
+          )}
+        </ul>
+      )}
 
       <ModalFooter>
-        <div style={{ flex: 1 }} />
-        <button className="loom-btn-ghost" onClick={() => close()}>Close</button>
+        <Button variant="ghost" onClick={close}>Close</Button>
       </ModalFooter>
     </ModalShell>
   );

@@ -1,21 +1,27 @@
-// Phase v3.0: SubscribeDrawer — list of remote calendars with checkboxes,
-// per-row direction picker, and a target-timeline picker (default: auto-create).
-//
-// Per design doc §6 Flow B: a slide-over panel from the right (rendered as a
-// modal here for the v3 first cut — the visual treatment matches the mockup).
+// SubscribeDrawer — right-side sheet listing remote calendars with a
+// checkbox, a per-row direction picker and a subscribe action.
 
 import { useEffect, useState } from 'react';
 import { useModal } from '../../contexts/ModalContext';
 import { useSync } from '../../contexts/SyncContext';
 import { useNotifications } from '../../store/notifications';
-import { Icon, Icons } from '../shared/Icon';
+import { ModalShell, ModalFooter, ModalNotice } from '../modals/ModalShell';
+import { Button, Checkbox, Segmented, Skeleton, EmptyState, Icon, Icons } from '../ui';
 import { listRemoteCalendars, subscribeCalendar, type RemoteCalendar } from '../../api';
 import styles from './connections.module.css';
 
+type Direction = 'both' | 'pull' | 'push';
+
 interface RowState {
-  selected:    boolean;
-  direction:   'both' | 'pull' | 'push';
+  selected:  boolean;
+  direction: Direction;
 }
+
+const DIRECTIONS = [
+  { value: 'both' as Direction, label: 'Both' },
+  { value: 'pull' as Direction, label: 'Pull' },
+  { value: 'push' as Direction, label: 'Push' },
+];
 
 export function SubscribeDrawerModal({ connectionId }: { connectionId: string }) {
   const { close } = useModal();
@@ -51,7 +57,7 @@ export function SubscribeDrawerModal({ connectionId }: { connectionId: string })
     setRows(prev => ({ ...prev, [id]: { ...prev[id], selected: !prev[id].selected } }));
   }
 
-  function setDirection(id: string, direction: 'both' | 'pull' | 'push') {
+  function setDirection(id: string, direction: Direction) {
     setRows(prev => ({ ...prev, [id]: { ...prev[id], direction } }));
   }
 
@@ -82,71 +88,75 @@ export function SubscribeDrawerModal({ connectionId }: { connectionId: string })
   }
 
   const selectedCount = Object.values(rows).filter(r => r.selected).length;
+  const allSelected = remotes.length > 0 && selectedCount === remotes.length;
 
   return (
-    <div className={`${styles.shell} ${styles.shellWide}`} role="dialog" aria-modal="true" aria-label="Subscribe to calendars">
-      <div className={styles.header}>
-        <span className={styles.headerTitle}>Pick what to sync</span>
-        <button className={styles.closeBtn} onClick={() => close()}>
-          <Icon d={Icons.x} size={14} />
-        </button>
-      </div>
-
-      <div className={styles.body}>
-        {loading && <div style={{ color: 'var(--text-muted)', padding: 24, textAlign: 'center' }}>Fetching your calendars…</div>}
-        {err && <div className={styles.errorBox}>{err}</div>}
-
-        {!loading && !err && remotes.length === 0 && (
-          <div style={{ color: 'var(--text-muted)', padding: 24, textAlign: 'center' }}>
-            No calendars found on this connection.
+    <ModalShell
+      variant="sheet"
+      title="Pick what to sync"
+      subtitle="Each calendar becomes a timeline. Pull brings events in, push sends yours out."
+      onClose={close}
+      flush
+    >
+      <div className={styles.drawerBody}>
+        {loading && (
+          <div className={styles.skeletons}>
+            {[0, 1, 2].map(i => <Skeleton key={i} height={56} radius={8} />)}
           </div>
         )}
 
-        {remotes.map(r => {
-          const row = rows[r.id] ?? { selected: false, direction: 'both' as const };
-          return (
-            <div key={r.id} className={styles.calRow}>
-              <button
-                type="button"
-                className={`${styles.calCheckbox} ${row.selected ? styles.calCheckboxChecked : ''}`}
-                onClick={() => toggle(r.id)}
-                aria-pressed={row.selected}
+        {err && <ModalNotice tone="error" icon={<Icon d={Icons.alertCircle} size={13} />}>{err}</ModalNotice>}
+
+        {!loading && !err && remotes.length === 0 && (
+          <EmptyState
+            compact
+            icon={Icons.calendar}
+            title="No calendars found"
+            description="This account has no calendars we can read. Check the account in your provider and try again."
+          />
+        )}
+
+        {!loading && remotes.length > 0 && (
+          <>
+            <div className={styles.drawerToolbar}>
+              <span className={styles.drawerCount}>{selectedCount} of {remotes.length} selected</span>
+              <Button
+                variant="subtle"
+                size="sm"
+                onClick={() => setRows(prev => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, { ...v, selected: !allSelected }])))}
               >
-                {row.selected && <Icon d={Icons.check} size={10} stroke="white" strokeWidth={2.5} />}
-              </button>
-              {r.color && <span className={styles.calSwatch} style={{ background: r.color }} />}
-              <span className={styles.calName}>{r.display_name}</span>
-              <div className={styles.directionPicker}>
-                {(['both', 'pull', 'push'] as const).map(d => (
-                  <button
-                    key={d}
-                    className={`${styles.directionPill} ${row.direction === d ? styles.directionPillActive : ''}`}
-                    onClick={() => setDirection(r.id, d)}
-                    type="button"
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
+                {allSelected ? 'Clear' : 'Select all'}
+              </Button>
             </div>
-          );
-        })}
+            <ul className={styles.calList} aria-label="Remote calendars">
+              {remotes.map(r => {
+                const row = rows[r.id] ?? { selected: false, direction: 'both' as const };
+                return (
+                  <li key={r.id} className={[styles.calRow, row.selected ? '' : styles.calRowOff].join(' ')}>
+                    <Checkbox checked={row.selected} onChange={() => toggle(r.id)} color={r.color ?? undefined} aria-label={`Sync ${r.display_name}`} />
+                    {r.color && <span className={styles.calSwatch} style={{ background: r.color }} aria-hidden="true" />}
+                    <span className={styles.calName}>{r.display_name}</span>
+                    <Segmented
+                      size="sm"
+                      value={row.direction}
+                      options={DIRECTIONS}
+                      onChange={d => setDirection(r.id, d)}
+                      aria-label={`Sync direction for ${r.display_name}`}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
       </div>
 
-      <div className={styles.footer}>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          {selectedCount} selected
-        </span>
-        <span className={styles.spacer} />
-        <button className="loom-btn-ghost" onClick={() => close()} disabled={busy}>Cancel</button>
-        <button
-          className="loom-btn-primary"
-          onClick={handleSubscribe}
-          disabled={busy || selectedCount === 0}
-        >
-          Subscribe
-        </button>
-      </div>
-    </div>
+      <ModalFooter>
+        <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+        <Button variant="primary" icon={Icons.sync} onClick={() => { void handleSubscribe(); }} disabled={busy || selectedCount === 0} loading={busy}>
+          Subscribe{selectedCount > 0 ? ` (${selectedCount})` : ''}
+        </Button>
+      </ModalFooter>
+    </ModalShell>
   );
 }

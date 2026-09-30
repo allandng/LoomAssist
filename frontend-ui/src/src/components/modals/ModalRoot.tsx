@@ -1,6 +1,8 @@
 /**
  * Reads ModalContext and renders the appropriate modal.
- * Mount this once at the app root (inside all providers).
+ * Mount this once at the app root (inside all providers). Every modal renders
+ * through ModalShell, so all of them share the escape stack, focus trap,
+ * invoker focus restore and scrim tokens.
  */
 import { useState, useEffect } from 'react';
 import { useModal } from '../../contexts/ModalContext';
@@ -13,6 +15,7 @@ import { WeeklyReviewModal } from './WeeklyReviewModal';
 import { StudyBlockModal } from './StudyBlockModal';
 import { TimeBlockTemplateModal } from './TimeBlockTemplateModal';
 import { TimelineEditorModal } from './TimelineEditorModal';
+import { TemplateManagerModal } from './TemplateManagerModal';
 import { AutopilotReviewModal } from './AutopilotReviewModal';
 import { MissedEventsModal } from './MissedEventsModal';
 import { SyncMergeModal } from './SyncMergeModal';
@@ -26,9 +29,14 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
   const { modal } = useModal();
   const [timelines, setTimelines] = useState<Calendar[]>([]);
 
+  // Refresh the timeline list each time a modal opens so a timeline created a
+  // moment ago is available in the editor's picker.
   useEffect(() => {
-    listCalendars().then(setTimelines).catch(() => {});
-  }, []);
+    if (!modal.name) return;
+    let cancelled = false;
+    listCalendars().then(cals => { if (!cancelled) setTimelines(cals); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [modal.name]);
 
   if (!modal.name) return null;
 
@@ -76,6 +84,8 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
           onSaved={onSaved}
         />
       );
+    case 'template-manager':
+      return <TemplateManagerModal onSaved={onSaved} />;
     case 'time-block-template':
       return (
         <TimeBlockTemplateModal
@@ -102,59 +112,23 @@ export function ModalRoot({ onSaved }: { onSaved: () => void }) {
         />
       );
     case 'sync-merge':
-      return <SyncMergeModalShell itemId={modal.props.itemId as string} />;
+      return <SyncMergeModal itemId={modal.props.itemId as string} />;
     case 'provider-picker':
       return (
-        <BackdropShell>
-          <ProviderPickerModal
-            onPicked={modal.props.onPicked as ((kind: 'google' | 'caldav_icloud' | 'caldav_generic') => void) | undefined}
-          />
-        </BackdropShell>
+        <ProviderPickerModal
+          onPicked={modal.props.onPicked as ((kind: 'google' | 'caldav_icloud' | 'caldav_generic') => void) | undefined}
+        />
       );
     case 'caldav-credentials':
       return (
-        <BackdropShell>
-          <CalDAVCredentialsModal
-            kind={modal.props.kind as 'caldav_icloud' | 'caldav_generic'}
-            onCreated={modal.props.onCreated as ((connectionId: string) => void) | undefined}
-          />
-        </BackdropShell>
+        <CalDAVCredentialsModal
+          kind={modal.props.kind as 'caldav_icloud' | 'caldav_generic'}
+          onCreated={modal.props.onCreated as ((connectionId: string) => void) | undefined}
+        />
       );
     case 'subscribe-drawer':
-      return (
-        <BackdropShell>
-          <SubscribeDrawerModal connectionId={modal.props.connectionId as string} />
-        </BackdropShell>
-      );
+      return <SubscribeDrawerModal connectionId={modal.props.connectionId as string} />;
     default:
       return null;
   }
-}
-
-function SyncMergeModalShell({ itemId }: { itemId: string }) {
-  const { close } = useModal();
-  return (
-    <BackdropShell>
-      <SyncMergeModal itemId={itemId} onClose={close} />
-    </BackdropShell>
-  );
-}
-
-function BackdropShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(8,13,26,0.7)',
-        backdropFilter: 'blur(4px)',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 20,
-        zIndex: 100,
-      }}
-    >
-      {children}
-    </div>
-  );
 }

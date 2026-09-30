@@ -7,9 +7,8 @@ type ModalName =
   | 'availability-response'
   | 'ics-import'
   | 'syllabus'
-  | 'settings'
   | 'timeline-editor'
-  | 'template-editor'
+  | 'template-manager'
   | 'weekly-review'
   | 'study-block'
   | 'time-block-template'
@@ -37,6 +36,7 @@ export interface EventEditorPrefill {
   calendarId?: number;
   isRecurring?: boolean;
   recurrenceDays?: string;
+  description?: string;
 }
 
 interface ModalContextValue {
@@ -46,9 +46,9 @@ interface ModalContextValue {
   openAvailabilityResponse: (token: string) => void;
   openICSImport: () => void;
   openSyllabus: () => void;
-  openSettings: () => void;
   openTimelineEditor: (timelineId?: number) => void;
-  openTemplateEditor: (templateId?: number) => void;
+  /** "Manage templates" — list, apply and delete saved event templates. */
+  openTemplateManager: () => void;
   openWeeklyReview: (summary: string, weekStart: string) => void;
   openStudyBlock: (deadlineEvent: Event, subject: string) => void;
   openTimeBlockTemplate: (prefillBlocks?: TimeBlockDef[]) => void;
@@ -79,9 +79,8 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     openAvailabilityResponse: (token) => open('availability-response', { token }),
     openICSImport:            () => open('ics-import'),
     openSyllabus:             () => open('syllabus'),
-    openSettings:             () => open('settings'),
     openTimelineEditor:       (timelineId) => open('timeline-editor', { timelineId }),
-    openTemplateEditor:       (templateId) => open('template-editor', { templateId }),
+    openTemplateManager:      () => open('template-manager'),
     openWeeklyReview:         (summary, weekStart) => open('weekly-review', { summary, weekStart }),
     openStudyBlock:           (deadlineEvent, subject) => open('study-block', { deadlineEvent, subject }),
     openTimeBlockTemplate:    (prefillBlocks) => open('time-block-template', { prefillBlocks: prefillBlocks ?? [] }),

@@ -1,19 +1,29 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { listEvents } from '../../api';
 import type { Event } from '../../types';
+import { Textarea } from '../ui';
+import styles from './MentionTextarea.module.css';
 
 interface MentionTextareaProps {
   value: string;
   onChange: (v: string) => void;
   readOnly?: boolean;
   rows?: number;
+  id?: string;
+  placeholder?: string;
 }
 
-export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: MentionTextareaProps) {
+/**
+ * Textarea with `@` mentions of other events. Typing `@` opens a listbox
+ * (role="listbox" / "option", aria-activedescendant) filtered by title;
+ * Enter / Tab inserts `@[Title]`.
+ */
+export function MentionTextarea({ value, onChange, readOnly, rows = 3, id, placeholder }: MentionTextareaProps) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
   const [allEvents, setAllEvents] = useState<Event[]>([]);
-  const [query, setQuery] = useState<string | null>(null);   // non-null = dropdown open
+  const [query, setQuery] = useState<string | null>(null);   // non-null = listbox open
   const [atStart, setAtStart] = useState(0);                  // index of the '@' in value
   const [activeIdx, setActiveIdx] = useState(0);
 
@@ -24,6 +34,7 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
   const matches = query !== null
     ? allEvents.filter(e => e.title.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
     : [];
+  const open = query !== null && matches.length > 0;
 
   function detectMention(text: string, cursorPos: number) {
     // Walk back from cursor to find an '@' not preceded by word chars
@@ -44,22 +55,6 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
     detectMention(newVal, e.target.selectionStart ?? newVal.length);
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (query === null || matches.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActiveIdx(i => Math.min(i + 1, matches.length - 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActiveIdx(i => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      insertMention(matches[activeIdx]);
-    } else if (e.key === 'Escape') {
-      setQuery(null);
-    }
-  }
-
   const insertMention = useCallback((ev: Event) => {
     const ta = taRef.current;
     if (!ta) return;
@@ -76,9 +71,28 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
     });
   }, [value, atStart, onChange]);
 
-  // Close dropdown on outside click
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!open) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(i + 1, matches.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      insertMention(matches[activeIdx]);
+    } else if (e.key === 'Escape') {
+      // Consume so the surrounding modal's escape stack doesn't also fire.
+      e.preventDefault();
+      e.stopPropagation();
+      setQuery(null);
+    }
+  }
+
+  // Close the listbox on outside click
   useEffect(() => {
-    if (query === null) return;
+    if (!open) return;
     function onMouseDown(e: MouseEvent) {
       if (!dropRef.current?.contains(e.target as Node) && e.target !== taRef.current) {
         setQuery(null);
@@ -86,15 +100,18 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
     }
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [query]);
+  }, [open]);
+
+  const optionId = (i: number) => `${listId}-opt-${i}`;
 
   return (
-    <div style={{ position: 'relative' }}>
-      <textarea
+    <div className={styles.wrap}>
+      <Textarea
         ref={taRef}
-        className="loom-field"
+        id={id}
         rows={rows}
         value={value}
+        placeholder={placeholder}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         onSelect={e => {
@@ -102,38 +119,26 @@ export function MentionTextarea({ value, onChange, readOnly, rows = 3 }: Mention
           detectMention(ta.value, ta.selectionStart ?? ta.value.length);
         }}
         readOnly={readOnly}
-        style={{ resize: 'vertical' }}
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open ? optionId(activeIdx) : undefined}
       />
-      {query !== null && matches.length > 0 && (
-        <div
-          ref={dropRef}
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            zIndex: 1000,
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-strong)',
-            borderRadius: 8,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-            overflow: 'hidden',
-            marginTop: 2,
-          }}
-        >
+      {open && (
+        <div ref={dropRef} id={listId} role="listbox" aria-label="Mention an event" className={styles.listbox}>
           {matches.map((ev, i) => (
             <div
               key={ev.id}
+              id={optionId(i)}
+              role="option"
+              aria-selected={i === activeIdx}
+              className={[styles.option, i === activeIdx ? styles.optionActive : ''].join(' ')}
+              onMouseEnter={() => setActiveIdx(i)}
               onMouseDown={e => { e.preventDefault(); insertMention(ev); }}
-              style={{
-                padding: '7px 12px',
-                cursor: 'pointer',
-                fontSize: 13,
-                background: i === activeIdx ? 'var(--accent)' : 'transparent',
-                color: i === activeIdx ? '#fff' : 'var(--text-main)',
-              }}
             >
-              {ev.title}
+              <span className={styles.optionTitle}>{ev.title}</span>
+              <span className={styles.optionDate}>{ev.start_time.slice(0, 10)}</span>
             </div>
           ))}
         </div>

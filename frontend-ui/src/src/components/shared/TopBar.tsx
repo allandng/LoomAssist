@@ -1,23 +1,37 @@
-import type { ReactNode, ChangeEvent, KeyboardEvent } from 'react';
+import type { ReactNode, ChangeEvent, KeyboardEvent, Ref } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import styles from './TopBar.module.css';
 import { Icon, Icons } from './Icon';
 import { Kbd } from './Kbd';
+import { Button, IconButton, Segmented } from '../ui';
 import { SearchDropdown } from '../topbar/SearchDropdown';
+import type { Destination } from '../shell/Sidebar';
 
-type TopBarKind = 'home' | 'calendar' | 'tasks' | 'focus' | 'settings';
-type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
+export type TopBarKind = Destination | 'sync-review';
+export type CalendarView = 'Month' | 'Week' | 'Day' | 'Agenda' | 'Year';
 
-const VIEWS: CalendarView[] = ['Month', 'Week', 'Day', 'Year', 'Agenda'];
+const VIEW_OPTIONS: { value: CalendarView; label: string; kbd: string }[] = [
+  { value: 'Month',  label: 'Month',  kbd: '1' },
+  { value: 'Week',   label: 'Week',   kbd: '2' },
+  { value: 'Day',    label: 'Day',    kbd: '3' },
+  { value: 'Year',   label: 'Year',   kbd: '4' },
+  { value: 'Agenda', label: 'Agenda', kbd: '5' },
+];
+
+/** Complete: every route the Shell can render has a title here. */
 const PAGE_TITLES: Record<TopBarKind, string> = {
-  home:     'Home',
-  calendar: 'Calendar',
-  tasks:    'Task Board',
-  focus:    'Focus Mode',
-  settings: 'Settings',
+  home:          'Home',
+  calendar:      'Calendar',
+  tasks:         'Tasks',
+  focus:         'Focus',
+  inbox:         'Inbox',
+  courses:       'Courses',
+  journal:       'Journal',
+  settings:      'Settings',
+  'sync-review': 'Sync review',
 };
 
-interface TopBarProps {
+export interface TopBarProps {
   kind?: TopBarKind;
   dateLabel?: string;
   view?: CalendarView;
@@ -25,14 +39,27 @@ interface TopBarProps {
   onPrev?: () => void;
   onToday?: () => void;
   onNext?: () => void;
+  /** Clicking the big date title (calendar only) — opens Jump to date. */
+  onDateClick?: () => void;
   unread?: number;
   onBell?: () => void;
+  /** The bell button element, so the notification popover can anchor to it. */
+  bellRef?: Ref<HTMLButtonElement>;
+  notifOpen?: boolean;
   onMic?: () => void;
+  /** Voice capture in progress. */
+  micActive?: boolean;
   semanticEnabled?: boolean;
   onSemanticToggle?: () => void;
+  /** Rightmost cluster (SyncCenter, AccountAvatar). */
   right?: ReactNode;
 }
 
+/**
+ * App top bar (DESIGN.md §4). Calendar route: big date title + Today +
+ * chevrons + segmented view switcher. Every other route: page title. The
+ * right cluster is the same everywhere.
+ */
 export function TopBar({
   kind = 'calendar',
   dateLabel = '',
@@ -41,9 +68,13 @@ export function TopBar({
   onPrev,
   onToday,
   onNext,
+  onDateClick,
   unread = 0,
   onBell,
+  bellRef,
+  notifOpen = false,
   onMic,
+  micActive = false,
   semanticEnabled = false,
   onSemanticToggle,
   right,
@@ -61,41 +92,43 @@ export function TopBar({
 
   const closeSearch = useCallback(() => { setQuery(''); searchRef.current?.blur(); }, []);
 
+  const isCalendar = kind === 'calendar';
+
   return (
     <header className={styles.bar}>
-      {kind === 'calendar' ? (
-        <>
-          {/* View switcher */}
-          <div className={styles.viewSwitcher}>
-            {VIEWS.map((v, i) => (
-              <button
-                key={v}
-                className={`${styles.viewPill} ${v === view ? styles.viewPillActive : ''}`}
-                onClick={() => onView?.(v)}
-              >
-                {v}
-                <Kbd small>{i + 1}</Kbd>
-              </button>
-            ))}
+      {isCalendar ? (
+        <div className={styles.calendarNav}>
+          <button
+            type="button"
+            className={styles.dateTitle}
+            onClick={onDateClick}
+            aria-label={dateLabel ? `${dateLabel} — jump to date` : 'Jump to date'}
+            title="Jump to date (G)"
+          >
+            <h1 className={styles.dateText}>{dateLabel || 'Calendar'}</h1>
+            <Icon d={Icons.chevronDown} size={14} className={styles.dateChevron} />
+          </button>
+
+          <div className={styles.dateControls}>
+            <Button variant="ghost" size="sm" onClick={onToday} title="Go to today (T)">Today</Button>
+            <div className={styles.chevrons}>
+              <IconButton icon={Icons.chevronLeft} label="Previous period" size="sm" onClick={onPrev} />
+              <IconButton icon={Icons.chevronRight} label="Next period" size="sm" onClick={onNext} />
+            </div>
           </div>
 
-          {/* Date nav */}
-          <div className={styles.dateNav}>
-            <button className={styles.iconBtn} onClick={onPrev} title="Previous">
-              <Icon d={Icons.chevronLeft} size={16} />
-            </button>
-            <button className={`${styles.iconBtn} ${styles.todayBtn}`} onClick={onToday}>Today</button>
-            <button className={styles.iconBtn} onClick={onNext} title="Next">
-              <Icon d={Icons.chevronRight} size={16} />
-            </button>
-            <span className={styles.dateLabel}>
-              {dateLabel}
-              <Icon d={Icons.chevronDown} size={12} className={styles.dateLabelChevron} />
-            </span>
+          <div className={styles.viewSwitcher}>
+            <Segmented
+              value={view}
+              options={VIEW_OPTIONS}
+              onChange={v => onView?.(v)}
+              size="sm"
+              aria-label="Calendar view"
+            />
           </div>
-        </>
+        </div>
       ) : (
-        <span className={styles.pageTitle}>{PAGE_TITLES[kind]}</span>
+        <h1 className={styles.pageTitle}>{PAGE_TITLES[kind] ?? 'LoomAssist'}</h1>
       )}
 
       <div className={styles.spacer} />
@@ -105,45 +138,65 @@ export function TopBar({
         <Icon d={Icons.search} size={14} className={styles.searchIcon} />
         <input
           ref={searchRef}
+          type="search"
           className={`${styles.searchInput} loom-search`}
           placeholder={semanticEnabled ? 'Semantic search…' : 'Search events, timelines…'}
           value={query}
           onChange={handleSearchChange}
           onKeyDown={handleSearchKey}
           aria-label="Search"
+          autoComplete="off"
+          spellCheck={false}
         />
-        <Kbd small>/</Kbd>
+        {!query && <Kbd small>/</Kbd>}
         {query.trim().length >= 2 && (
           <SearchDropdown query={query} semantic={semanticEnabled} onClose={closeSearch} />
         )}
       </label>
+
       {onSemanticToggle && (
-        <button
-          className={styles.iconBtn}
+        <IconButton
+          icon={Icons.sparkles}
+          label={semanticEnabled ? 'Semantic search on' : 'Semantic search'}
+          active={semanticEnabled}
           onClick={onSemanticToggle}
-          title={semanticEnabled ? 'Semantic search ON — click to use text search' : 'Click to enable semantic search'}
-          aria-pressed={semanticEnabled}
-          style={{ color: semanticEnabled ? 'var(--accent)' : undefined }}
+        />
+      )}
+
+      {/* AI quick-add / voice */}
+      {onMic && (
+        <button
+          type="button"
+          className={[styles.aiBar, micActive ? styles.aiBarActive : ''].join(' ')}
+          onClick={onMic}
+          aria-pressed={micActive}
+          aria-label={micActive ? 'Stop listening' : 'Ask AI by voice'}
+          title={micActive ? 'Stop listening' : 'Ask AI by voice'}
         >
-          <Icon d={Icons.help} size={15} />
+          <span className={[styles.micBubble, micActive ? styles.micBubbleActive : ''].join(' ')} aria-hidden="true">
+            <Icon d={micActive ? Icons.stop : Icons.mic} size={12} />
+          </span>
+          <span className={styles.aiPrompt}>
+            {micActive ? (
+              <span className={styles.aiListening}>Listening…</span>
+            ) : (
+              <>Ask AI… <span className={styles.aiExample}>"lunch Friday at 1pm"</span></>
+            )}
+          </span>
         </button>
       )}
 
-      {/* AI Quick-Add */}
-      <button className={styles.aiBar} onClick={onMic} title="AI Quick-Add">
-        <span className={styles.micBubble}>
-          <Icon d={Icons.mic} size={12} />
-        </span>
-        <span className={styles.aiPrompt}>
-          Ask AI… <span className={styles.aiExample}>"lunch Friday at 1pm"</span>
-        </span>
-      </button>
-
       {/* Bell */}
       <div className={styles.bellWrap}>
-        <button className={styles.iconBtn} onClick={onBell} aria-label="Notifications">
-          <Icon d={Icons.bell} size={16} />
-        </button>
+        <IconButton
+          ref={bellRef}
+          icon={Icons.bell}
+          label="Notifications"
+          active={notifOpen}
+          onClick={onBell}
+          aria-haspopup="dialog"
+          aria-expanded={notifOpen}
+        />
         {unread > 0 && (
           <span className={styles.badge} aria-label={`${unread} unread`}>
             {unread > 9 ? '9+' : unread}
@@ -151,8 +204,7 @@ export function TopBar({
         )}
       </div>
 
-      {/* SyncCenter + AccountAvatar (avatar rightmost per CLAUDE.md contract) */}
-      {right}
+      {right && <div className={styles.right}>{right}</div>}
     </header>
   );
 }

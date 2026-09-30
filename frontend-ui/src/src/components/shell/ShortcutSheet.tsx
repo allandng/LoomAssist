@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import styles from './ShortcutSheet.module.css';
+import { Icon, Icons } from '../shared/Icon';
+import { Kbd } from '../shared/Kbd';
+import { Button, IconButton } from '../ui';
 import {
-  loadKeybinds, formatKeyLabel, KEYBIND_DEFAULTS,
+  loadKeybinds, formatKeyLabel, formatKeyParts, KEYBIND_DEFAULTS,
   type KeybindAction, type KeybindContext,
 } from '../../lib/keybindConfig';
+import { modKey } from '../../lib/platform';
 import { pushEscapeHandler } from '../../lib/escapeStack';
 
 interface ShortcutSheetProps {
@@ -13,15 +18,24 @@ interface ShortcutSheetProps {
 
 const CONTEXT_ORDER: KeybindContext[] = ['Global', 'Calendar'];
 
+/** Not rebindable, handled directly by their surfaces; listed for completeness. */
+const FIXED: { context: KeybindContext; description: string; parts: string[] }[] = [
+  { context: 'Global',   description: 'Undo / redo',              parts: [`${modKey}Z`, `${modKey}⇧Z`] },
+  { context: 'Global',   description: 'Close the top layer',      parts: ['Esc'] },
+  { context: 'Calendar', description: 'Delete selected (alias)',  parts: ['⌫'] },
+  { context: 'Calendar', description: 'Open the selected event',  parts: ['↵'] },
+  { context: 'Calendar', description: 'Move selected event',      parts: [`${modKey}←`, `${modKey}→`] },
+];
+
 /**
- * WS4 #8 — a `?`-triggered, searchable cheat sheet listing every keybind
- * grouped by context. Reads live overrides from loadKeybinds() so rebinds are
- * reflected immediately.
+ * `?` cheat sheet listing every keybind grouped by context. Reads live
+ * overrides from loadKeybinds() so rebinds are reflected immediately, and
+ * shows the platform modifier (Ctrl on Windows/Linux, ⌘ on Mac).
  */
 export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState('');
   const [binds, setBinds] = useState(loadKeybinds);
-  const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -39,55 +53,67 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const actions = Object.keys(KEYBIND_DEFAULTS) as KeybindAction[];
+    const matches = (desc: string, label: string) => !f || desc.toLowerCase().includes(f) || label.toLowerCase().includes(f);
     return CONTEXT_ORDER.map(ctx => ({
       ctx,
-      rows: actions
-        .filter(a => binds[a].context === ctx)
-        .map(a => ({ action: a, def: binds[a] }))
-        .filter(({ def }) =>
-          !f ||
-          def.description.toLowerCase().includes(f) ||
-          formatKeyLabel(def).toLowerCase().includes(f)),
+      rows: [
+        ...actions
+          .filter(a => binds[a].context === ctx)
+          .map(a => ({ key: a as string, description: binds[a].description, parts: formatKeyParts(binds[a]), label: formatKeyLabel(binds[a]) }))
+          .filter(r => matches(r.description, r.label)),
+        ...FIXED
+          .filter(x => x.context === ctx)
+          .map(x => ({ key: `fixed:${x.description}`, description: x.description, parts: x.parts, label: x.parts.join(' ') }))
+          .filter(r => matches(r.description, r.label)),
+      ],
     })).filter(g => g.rows.length > 0);
   }, [binds, filter]);
 
   return createPortal(
-    <div className={styles.backdrop} onClick={onClose}>
-      <div
-        ref={dialogRef}
-        className={styles.sheet}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Keyboard shortcuts"
-        onClick={e => e.stopPropagation()}
-      >
+    <div className={styles.backdrop} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={styles.sheet} role="dialog" aria-modal="true" aria-labelledby="loom-shortcuts-title">
         <div className={styles.header}>
-          <span className={styles.title}>Keyboard shortcuts</span>
-          <input
-            ref={inputRef}
-            className={styles.search}
-            placeholder="Filter…"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            aria-label="Filter shortcuts"
-          />
+          <h2 id="loom-shortcuts-title" className={styles.title}>Keyboard shortcuts</h2>
+          <div className={styles.search}>
+            <Icon d={Icons.search} size={14} className={styles.searchIcon} />
+            <input
+              ref={inputRef}
+              className={styles.searchInput}
+              placeholder="Filter shortcuts…"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              aria-label="Filter shortcuts"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <IconButton icon={Icons.x} label="Close" size="sm" onClick={onClose} />
         </div>
+
         <div className={styles.body}>
-          {groups.length === 0 && <div className={styles.empty}>No matching shortcuts.</div>}
+          {groups.length === 0 && <div className={styles.empty}>No shortcuts match “{filter}”.</div>}
           {groups.map(({ ctx, rows }) => (
-            <div key={ctx} className={styles.group}>
+            <section key={ctx} className={styles.group} aria-label={ctx}>
               <div className={styles.groupLabel}>{ctx}</div>
-              {rows.map(({ action, def }) => (
-                <div key={action} className={styles.row}>
-                  <span className={styles.rowDesc}>{def.description}</span>
-                  <kbd className={styles.key}>{formatKeyLabel(def)}</kbd>
-                </div>
-              ))}
-            </div>
+              <ul className={styles.rows}>
+                {rows.map(r => (
+                  <li key={r.key} className={styles.row}>
+                    <span className={styles.rowDesc}>{r.description}</span>
+                    <span className={styles.keys}>
+                      {r.parts.map((p, i) => <Kbd key={`${p}-${i}`}>{p}</Kbd>)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
         </div>
+
         <div className={styles.footer}>
-          <span>Press <kbd className={styles.key}>Esc</kbd> to close · rebind in Settings → Keybindings</span>
+          <span className={styles.footerHint}><Kbd small>esc</Kbd> close</span>
+          <Button variant="subtle" size="sm" iconRight={Icons.arrowRight} onClick={() => { onClose(); navigate('/settings#keybindings'); }}>
+            Rebind in Settings
+          </Button>
         </div>
       </div>
     </div>,

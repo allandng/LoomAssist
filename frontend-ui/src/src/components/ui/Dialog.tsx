@@ -1,68 +1,24 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './Dialog.module.css';
 import { Button } from './Button';
 import { Icon, Icons } from '../shared/Icon';
 import { pushEscapeHandler } from '../../lib/escapeStack';
+import { subscribeDialogs, getPendingDialog, getDialogQueueLength, popDialog, type PendingDialog } from './dialogStore';
 
 /**
- * Imperative confirm / prompt dialogs.
- *
- *   const ok = await confirm({ title: 'Delete "Physics"?', description: '…', destructive: true, confirmLabel: 'Delete' });
- *   const name = await prompt({ title: 'Rename timeline', defaultValue: tl.name });
- *
- * `<DialogHost />` is mounted once in App. These replace every `window.confirm`
- * and `window.prompt`: same await-style call, but themed, keyboard-correct
- * (Enter confirms, Esc cancels via the escape stack) and focus-restoring.
+ * Host for the imperative confirm()/prompt() dialogs (see dialogStore.ts).
+ * Mount once near the app root; it renders the head of the dialog queue.
  */
-
-export interface ConfirmOptions {
-  title: ReactNode;
-  description?: ReactNode;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  /** Red confirm button. */
-  destructive?: boolean;
-  icon?: ReactNode;
-}
-
-export interface PromptOptions extends Omit<ConfirmOptions, 'destructive'> {
-  defaultValue?: string;
-  placeholder?: string;
-  label?: ReactNode;
-  /** Multi-line input. */
-  multiline?: boolean;
-  /** Return a string to show as an error and keep the dialog open. */
-  validate?: (value: string) => string | null | undefined;
-}
-
-type Pending =
-  | { kind: 'confirm'; opts: ConfirmOptions; resolve: (ok: boolean) => void }
-  | { kind: 'prompt'; opts: PromptOptions; resolve: (value: string | null) => void };
-
-let queue: Pending[] = [];
-const listeners = new Set<() => void>();
-function emit() { listeners.forEach(l => l()); }
-function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
-function getSnapshot() { return queue[0] ?? null; }
-function pop() { queue = queue.slice(1); emit(); }
-
-export function confirm(opts: ConfirmOptions): Promise<boolean> {
-  return new Promise(resolve => { queue = [...queue, { kind: 'confirm', opts, resolve }]; emit(); });
-}
-
-export function prompt(opts: PromptOptions): Promise<string | null> {
-  return new Promise(resolve => { queue = [...queue, { kind: 'prompt', opts, resolve }]; emit(); });
-}
-
-/** Mount once near the app root. Renders the head of the dialog queue. */
 export function DialogHost() {
-  const pending = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const pending = useSyncExternalStore(subscribeDialogs, getPendingDialog, getPendingDialog);
   if (!pending) return null;
-  return <DialogFrame key={queue.length} pending={pending} />;
+  return <DialogFrame key={getDialogQueueLength()} pending={pending} />;
 }
 
-function DialogFrame({ pending }: { pending: Pending }) {
+const pop = popDialog;
+
+function DialogFrame({ pending }: { pending: PendingDialog }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const [value, setValue] = useState(pending.kind === 'prompt' ? (pending.opts.defaultValue ?? '') : '');

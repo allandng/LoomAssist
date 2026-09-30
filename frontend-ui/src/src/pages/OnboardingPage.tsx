@@ -1,235 +1,268 @@
-// Phase v3.0 OnboardingPage — first-launch wizard.
+// First-launch wizard — /onboarding.
 //
-// Per design doc §6 Flow A: 4 steps with Skip on every step. The wizard never
-// blocks the user from a fully functional local-mode app. Sets
-// localStorage.onboarded=true on completion or skip.
+// One question per step, a thin progress bar, Skip on every step. Nothing here
+// is required: local mode is the default outcome. Step 3 runs the real provider
+// flows through the shared modals; Step 4 opens the subscribe drawer for the
+// connection that was just created (or points to Settings → Connections).
 //
-// Phase 1 lands steps 1+2 as fully functional. Steps 3+4 (calendar provider
-// connection) are scaffolded as "coming next" surfaces — Phase 2 will wire them.
+// This route renders outside <Shell/>, so the modal host is mounted here too.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAccount } from '../contexts/AccountContext';
-import { Icon, Icons } from '../components/shared/Icon';
+import { useModal } from '../contexts/ModalContext';
+import { useSync } from '../contexts/SyncContext';
+import { ModalRoot } from '../components/modals/ModalRoot';
+import { Button, Badge, ProgressBar, Icon, Icons } from '../components/ui';
+import { ProviderGlyph, type ProviderId } from '../components/settings/ProviderGlyph';
+import { errMessage } from '../components/settings/util';
 import styles from './OnboardingPage.module.css';
 
-const STEPS = [
-  { n: 1, title: 'Welcome',            sub: 'Plain-language framing' },
-  { n: 2, title: 'Account',            sub: 'Optional — local mode is first-class' },
-  { n: 3, title: 'Connect a calendar', sub: 'Pick a provider' },
-  { n: 4, title: 'Pick what to sync',  sub: 'Calendars & direction' },
-];
+const TOTAL = 4;
+const STEP_KEY = 'loom:onboarding:step';
+const ONBOARDED_KEY = 'loom:onboarded';
+
+function readStep(): number {
+  const n = Number(sessionStorage.getItem(STEP_KEY));
+  return n >= 1 && n <= TOTAL ? n : 1;
+}
 
 export function OnboardingPage() {
   const navigate = useNavigate();
-  const { signInOAuth } = useAccount();
-  const [step, setStep] = useState(1);
+  const [step, setStepState] = useState<number>(readStep);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+
+  function setStep(n: number) {
+    setStepState(n);
+    sessionStorage.setItem(STEP_KEY, String(n));
+  }
 
   function finish() {
-    localStorage.setItem('loom:onboarded', 'true');
-    navigate('/calendar');
+    localStorage.setItem(ONBOARDED_KEY, 'true');
+    sessionStorage.removeItem(STEP_KEY);
+    navigate('/home');
   }
 
-  function next() {
-    if (step >= STEPS.length) finish();
-    else setStep(step + 1);
-  }
+  const next = () => (step >= TOTAL ? finish() : setStep(step + 1));
+  const back = () => setStep(Math.max(1, step - 1));
 
   return (
     <div className={styles.shell}>
-      <div className={styles.topBar}>
-        <div className={styles.brandMark}>L</div>
-        <span className={styles.brandTitle}>LoomAssist</span>
-        <div className={styles.spacer} />
-        <span className={styles.stepCount}>Step {step} of {STEPS.length}</span>
-      </div>
+      <main className={styles.card} aria-labelledby="onboarding-heading">
+        <header className={styles.top}>
+          <div className={styles.brand}>
+            <span className={styles.brandMark} aria-hidden="true">L</span>
+            <span className={styles.brandName}>LoomAssist</span>
+          </div>
+          <span className={styles.stepCount}>Step {step} of {TOTAL}</span>
+        </header>
+        <ProgressBar value={step / TOTAL} height={3} aria-label={`Setup progress: step ${step} of ${TOTAL}`} className={styles.progress} />
 
-      <div className={styles.stage}>
-        <div className={styles.rail}>
-          {STEPS.map((s, i) => {
-            const isDone = s.n < step;
-            const isActive = s.n === step;
-            const dotClass = isDone ? styles.stepDotDone : isActive ? styles.stepDotActive : styles.stepDot;
-            return (
-              <div key={s.n} className={styles.step}>
-                {i < STEPS.length - 1 && (
-                  <div className={`${styles.stepLine} ${isDone ? styles.stepLineDone : ''}`} />
-                )}
-                <div className={`${styles.stepDot} ${dotClass}`}>
-                  {isDone ? <Icon d={Icons.check} size={12} stroke="white" strokeWidth={2.4} /> : s.n}
-                </div>
-                <div className={`${styles.stepTitle} ${isActive ? styles.stepTitleActive : isDone ? styles.stepTitleDone : ''}`}>
-                  {s.title}
-                </div>
-                <div className={styles.stepSub}>{s.sub}</div>
-              </div>
-            );
-          })}
+        <div className={styles.body}>
+          {step === 1 && <StepWelcome />}
+          {step === 2 && <StepAccount />}
+          {step === 3 && <StepConnect onConnected={setConnectionId} connectionId={connectionId} />}
+          {step === 4 && <StepSubscribe connectionId={connectionId} />}
         </div>
 
-        <div className={styles.content}>
-          {step === 1 && <StepWelcome onContinue={next} onSkip={finish} />}
-          {step === 2 && <StepAccount onContinue={next} onSkip={finish} onSignIn={signInOAuth} />}
-          {step === 3 && <StepConnect onContinue={next} onSkip={finish} />}
-          {step === 4 && <StepSubscribe onFinish={finish} />}
-        </div>
-      </div>
+        <footer className={styles.footer}>
+          {step > 1 ? (
+            <Button variant="subtle" icon={Icons.arrowLeft} onClick={back}>Back</Button>
+          ) : <span />}
+          <div className={styles.footerRight}>
+            {step < TOTAL && <Button variant="subtle" onClick={finish}>Skip setup</Button>}
+            <Button variant="primary" iconRight={step < TOTAL ? Icons.arrowRight : undefined} onClick={next}>
+              {step < TOTAL ? 'Continue' : 'Open LoomAssist'}
+            </Button>
+          </div>
+        </footer>
+      </main>
+      <ModalRoot onSaved={() => { /* nothing to reload on this route */ }} />
     </div>
   );
 }
 
-function StepWelcome({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) {
+/* ── Step 1 ─────────────────────────────────────────────────────────────── */
+
+function StepWelcome() {
   return (
     <>
-      <h1 className={styles.heading}>Welcome to LoomAssist</h1>
+      <h1 id="onboarding-heading" className={styles.heading}>Welcome to LoomAssist</h1>
       <p className={styles.lede}>
-        LoomAssist works fully offline. The next steps are optional — add an account
-        if you want to sync your sign-in across devices later, and connect a calendar
-        if you want to mirror events to Google or iCloud.
+        A calm, local-first planner for your week. Everything you add stays on this device,
+        and the assistant runs here too. The next three steps are optional.
       </p>
-      <p className={styles.privacyLine}>
-        <Icon d={Icons.user} size={11} /> All event data stays in local SQLite. We never see your calendar.
-      </p>
-      <div className={styles.fillSpacer} />
-      <div className={styles.footer}>
-        <div style={{ flex: 1 }} />
-        <button className={styles.skipLink} onClick={onSkip}>Skip setup</button>
-        <button className="loom-btn-primary" onClick={onContinue}>
-          Continue <Icon d={Icons.chevronRight} size={12} />
-        </button>
-      </div>
+      <ul className={styles.points}>
+        <li><Icon d={Icons.lock} size={14} /> Events, tasks and notes live in a local database.</li>
+        <li><Icon d={Icons.cloud} size={14} /> Connect a calendar only if you want two-way sync.</li>
+        <li><Icon d={Icons.keyboard} size={14} /> Fast keyboard flows throughout; open the shortcuts sheet with <kbd className={styles.kbd}>?</kbd>.</li>
+      </ul>
     </>
   );
 }
 
-function StepAccount({
-  onContinue, onSkip, onSignIn,
-}: {
-  onContinue: () => void;
-  onSkip: () => void;
-  onSignIn: (p: 'google' | 'apple' | 'microsoft') => Promise<void>;
-}) {
+/* ── Step 2 ─────────────────────────────────────────────────────────────── */
+
+const OAUTH: Array<{ id: 'google' | 'apple' | 'microsoft'; label: string }> = [
+  { id: 'google',    label: 'Continue with Google' },
+  { id: 'apple',     label: 'Continue with Apple' },
+  { id: 'microsoft', label: 'Continue with Microsoft' },
+];
+
+function StepAccount() {
   const navigate = useNavigate();
+  const { account, status, signInOAuth } = useAccount();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+
+  async function oauth(provider: 'google' | 'apple' | 'microsoft') {
+    setBusy(provider); setNote(null);
+    try {
+      await signInOAuth(provider);
+      setNote({ tone: 'info', text: 'Finish signing in with your browser, then come back here.' });
+    } catch (e) {
+      setNote({ tone: 'error', text: errMessage(e, 'Could not start sign-in.') });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <>
-      <h1 className={styles.heading}>Sign in (optional)</h1>
+      <h1 id="onboarding-heading" className={styles.heading}>Do you want an account?</h1>
       <p className={styles.lede}>
-        Sign in to LoomAssist if you want your account preferences to follow you to
-        another device. Sync of actual calendar data is a separate step.
-      </p>
-      <p className={styles.privacyLine}>
-        <Icon d={Icons.user} size={11} /> We store your email, display name, and provider ID. Nothing else.
+        Optional. An account carries only your display name and preferences to other devices.
+        Your calendar never leaves this device either way.
       </p>
 
-      <div className={styles.providerBtnRow}>
-        <button className={styles.providerLine} onClick={() => onSignIn('google')}>
-          <Icon d={Icons.user} size={16} /> Continue with Google
-        </button>
-        <button className={styles.providerLine} onClick={() => onSignIn('apple')}>
-          <Icon d={Icons.user} size={16} /> Continue with Apple
-        </button>
-        <button className={styles.providerLine} onClick={() => onSignIn('microsoft')}>
-          <Icon d={Icons.user} size={16} /> Continue with Microsoft
-        </button>
-        <button className={styles.providerLine} onClick={() => navigate('/auth/sign-in')}>
-          <Icon d={Icons.mail} size={16} /> Email & password
-        </button>
-        <button className={styles.continueLink} onClick={onContinue}>
-          Continue without an account
-        </button>
-      </div>
-
-      <div className={styles.fillSpacer} />
-      <div className={styles.footer}>
-        <div style={{ flex: 1 }} />
-        <button className={styles.skipLink} onClick={onSkip}>Skip setup</button>
-        <button className="loom-btn-primary" onClick={onContinue}>
-          Continue <Icon d={Icons.chevronRight} size={12} />
-        </button>
-      </div>
-    </>
-  );
-}
-
-function StepConnect({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) {
-  return (
-    <>
-      <h1 className={styles.heading}>Connect a calendar</h1>
-      <p className={styles.lede}>
-        LoomAssist syncs <em>directly</em> from this device to your calendar provider —
-        no LoomAssist server in between. Pick a provider to continue, or skip and
-        add one later from Settings → Connections.
-      </p>
-      <p className={styles.privacyLine}>
-        <Icon d={Icons.user} size={11} /> Tokens are stored in your macOS Keychain. Calendar data stays in local SQLite.
-      </p>
-
-      <div className={styles.providerGrid}>
-        <ProviderCard icon={Icons.mail}    name="Google Calendar" sub="OAuth 2.0 · sync any of your Google calendars"  disabled />
-        <ProviderCard icon={Icons.upload}  name="iCloud"          sub="CalDAV · requires an app-specific password"     disabled />
-        <ProviderCard icon={Icons.doc}     name="Generic CalDAV"  sub="Fastmail, Nextcloud, Mailcow, anything CalDAV"  disabled />
-        <ProviderCard icon={Icons.help}    name="Microsoft Outlook" sub="Coming soon" badge="Soon" disabled />
-      </div>
-      <p className={styles.privacyLine}>
-        Provider connections ship in v3 Phase 2 — these cards will activate once that lands.
-      </p>
-
-      <div className={styles.fillSpacer} />
-      <div className={styles.footer}>
-        <div style={{ flex: 1 }} />
-        <button className={styles.skipLink} onClick={onSkip}>Skip — finish later</button>
-        <button className="loom-btn-primary" onClick={onContinue}>
-          Continue <Icon d={Icons.chevronRight} size={12} />
-        </button>
-      </div>
-    </>
-  );
-}
-
-function StepSubscribe({ onFinish }: { onFinish: () => void }) {
-  return (
-    <>
-      <h1 className={styles.heading}>You're all set</h1>
-      <p className={styles.lede}>
-        Calendar selection lands in v3 Phase 2 along with the connection providers
-        themselves. For now, you can use LoomAssist offline with the full v2.0
-        feature set — calendar, focus mode, task board, journal, and more.
-      </p>
-      <div className={styles.fillSpacer} />
-      <div className={styles.footer}>
-        <div style={{ flex: 1 }} />
-        <button className="loom-btn-primary" onClick={onFinish}>
-          Open LoomAssist <Icon d={Icons.chevronRight} size={12} />
-        </button>
-      </div>
-    </>
-  );
-}
-
-function ProviderCard({
-  icon, name, sub, badge, disabled,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  sub: string;
-  badge?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`${styles.providerCard} ${disabled ? styles.providerCardDisabled : ''}`}
-      disabled={disabled}
-      type="button"
-    >
-      <div className={styles.providerLogo}><Icon d={icon} size={20} /></div>
-      <div style={{ flex: 1 }}>
-        <div className={styles.providerName}>
-          {name}
-          {badge && <span className={styles.soonChip}>{badge}</span>}
+      {status === 'signedIn' && account ? (
+        <div className={styles.signedIn}>
+          <Badge tone="success" dot>Signed in</Badge>
+          <span>{account.display_name || account.email}</span>
         </div>
-        <div className={styles.providerSub}>{sub}</div>
-      </div>
-      {!disabled && <Icon d={Icons.chevronRight} size={14} />}
-    </button>
+      ) : (
+        <div className={styles.providers}>
+          {OAUTH.map(p => (
+            <Button key={p.id} variant="secondary" size="lg" block icon={<ProviderGlyph id={p.id} size={16} />} loading={busy === p.id} disabled={busy !== null} onClick={() => oauth(p.id)}>
+              {p.label}
+            </Button>
+          ))}
+          <Button variant="secondary" size="lg" block icon={<ProviderGlyph id="email" size={16} />} disabled={busy !== null} onClick={() => navigate('/auth/sign-in?next=/onboarding')}>
+            Use email and password
+          </Button>
+        </div>
+      )}
+
+      {note && (
+        <div className={`${styles.alert} ${note.tone === 'error' ? styles.alertError : styles.alertInfo}`} role={note.tone === 'error' ? 'alert' : 'status'}>
+          <Icon d={note.tone === 'error' ? Icons.alertCircle : Icons.info} size={14} />
+          <span>{note.text}</span>
+        </div>
+      )}
+      <p className={styles.fine}>Continue to keep using LoomAssist without an account.</p>
+    </>
+  );
+}
+
+/* ── Step 3 ─────────────────────────────────────────────────────────────── */
+
+const PROVIDERS: Array<{ id: ProviderId; name: string; sub: string; action: 'picker' | 'caldav_icloud' | 'caldav_generic' }> = [
+  { id: 'google', name: 'Google Calendar',     sub: 'Sign in with Google and pick which calendars to sync.',        action: 'picker' },
+  { id: 'icloud', name: 'iCloud',              sub: 'Uses an app-specific password from your Apple ID.',             action: 'caldav_icloud' },
+  { id: 'caldav', name: 'Other CalDAV server', sub: 'Fastmail, Nextcloud, Mailbox.org or anything that speaks CalDAV.', action: 'caldav_generic' },
+];
+
+function StepConnect({ connectionId, onConnected }: { connectionId: string | null; onConnected: (id: string) => void }) {
+  const { openProviderPicker, openCalDAVCredentials } = useModal();
+  const { connections, refreshConnections } = useSync();
+
+  // Any connection that appears while this step is open counts as "created here"
+  // (covers the Google flow, which finishes in the system browser). Snapshot the
+  // ids present at mount, then poll the list until something new shows up.
+  const [initialIds] = useState(() => new Set(connections.map(c => c.id)));
+  useEffect(() => {
+    if (connectionId) return;
+    const fresh = connections.find(c => !initialIds.has(c.id));
+    if (fresh) onConnected(fresh.id);
+  }, [connections, connectionId, initialIds, onConnected]);
+  useEffect(() => {
+    if (connectionId) return;
+    const timer = window.setInterval(() => { refreshConnections().catch(() => { /* backend may be restarting */ }); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [connectionId, refreshConnections]);
+
+  const connected = connections.find(c => c.id === connectionId);
+
+  function pick(p: typeof PROVIDERS[number]) {
+    if (p.action === 'picker') openProviderPicker();
+    else openCalDAVCredentials(p.action, id => onConnected(id));
+  }
+
+  return (
+    <>
+      <h1 id="onboarding-heading" className={styles.heading}>Connect a calendar</h1>
+      <p className={styles.lede}>
+        Sync runs directly between this device and your provider; there is no LoomAssist server in between.
+        Sign-in tokens are kept in your system keychain.
+      </p>
+
+      {connected ? (
+        <div className={styles.signedIn}>
+          <Badge tone="success" dot>Connected</Badge>
+          <span>{connected.display_name}</span>
+        </div>
+      ) : (
+        <div className={styles.providerGrid}>
+          {PROVIDERS.map(p => (
+            <button key={p.id} type="button" className={styles.providerCard} onClick={() => pick(p)}>
+              <span className={styles.providerLogo} aria-hidden="true"><ProviderGlyph id={p.id} size={20} /></span>
+              <span className={styles.providerText}>
+                <span className={styles.providerName}>{p.name}</span>
+                <span className={styles.providerSub}>{p.sub}</span>
+              </span>
+              <Icon d={Icons.chevronRight} size={14} className={styles.providerChevron} />
+            </button>
+          ))}
+        </div>
+      )}
+      <p className={styles.fine}>You can add or remove connections any time in Settings → Connections.</p>
+    </>
+  );
+}
+
+/* ── Step 4 ─────────────────────────────────────────────────────────────── */
+
+function StepSubscribe({ connectionId }: { connectionId: string | null }) {
+  const { openSubscribeDrawer } = useModal();
+  const { connections } = useSync();
+  const conn = connections.find(c => c.id === connectionId);
+
+  return (
+    <>
+      <h1 id="onboarding-heading" className={styles.heading}>Choose what to sync</h1>
+      {conn ? (
+        <>
+          <p className={styles.lede}>
+            Pick which of <strong>{conn.display_name}</strong>'s calendars to bring in. Each one becomes a timeline
+            here, and you can change its sync direction later.
+          </p>
+          <div className={styles.providers}>
+            <Button variant="secondary" size="lg" icon={Icons.calendar} onClick={() => openSubscribeDrawer(conn.id)}>
+              Choose calendars
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className={styles.lede}>
+            No calendar connected yet, and that is fine. LoomAssist is complete on its own.
+          </p>
+          <div className={styles.later}>
+            <Icon d={Icons.info} size={14} />
+            <span>You can do this later in Settings → Connections.</span>
+          </div>
+        </>
+      )}
+    </>
   );
 }

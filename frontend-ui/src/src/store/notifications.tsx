@@ -39,6 +39,9 @@ export interface Notification {
   // the panel can expand the group and act on / dismiss each child, rather than
   // silently discarding earlier items. Set automatically by the reducer.
   collapsedChildren?: Notification[];
+  // v3 — the live toast for this notification has been closed (timer, X, or
+  // action). The row stays in the bell history; only the Toaster reads this.
+  toastDismissed?: boolean;
 }
 
 type AddPayload = Omit<Notification, 'id' | 'timestamp' | 'read'>;
@@ -46,13 +49,34 @@ type UpdatePayload = Partial<Omit<Notification, 'id' | 'timestamp'>>;
 
 export type { AddPayload };
 
+/**
+ * v3 — which notifications also render as a transient toast (bottom-right).
+ * The bell panel keeps every notification regardless; this only decides
+ * whether it is *also* shown live where the user is looking.
+ */
+export function isToast(n: Pick<Notification, 'type' | 'autoRemoveMs' | 'actionable' | 'actionLabel' | 'severity'>): boolean {
+  if (n.autoRemoveMs) return true;
+  if (n.actionable && n.actionLabel === 'Undo') return true;
+  return n.type === 'success' || n.type === 'error';
+}
+
+/** Default on-screen lifetime for a toast that did not set `autoRemoveMs`. */
+export function toastTtl(n: Pick<Notification, 'type' | 'autoRemoveMs'>): number {
+  if (n.autoRemoveMs) return n.autoRemoveMs;
+  return n.type === 'error' ? 10_000 : 6_000;
+}
+
 type Action =
   | { type: 'add';         notif: Notification }
   | { type: 'update';      id: string; patch: UpdatePayload }
   | { type: 'dismiss';     id: string }
+  | { type: 'dismissToast'; id: string; markRead: boolean }
   | { type: 'dismissChild'; summaryId: string; childId: string }
   | { type: 'clear' }
   | { type: 'markAllRead' };
+
+// Bell history is bounded so long sessions don't grow without limit.
+const HISTORY_CAP = 100;
 
 // Phase v3.0 §8 #5: when 3 or more unresolved notifications share a
 // collapseKey, they fold into a single summary row. WS7 keeps the folded
@@ -97,9 +121,13 @@ function applyCollapse(state: Notification[], incoming: Notification): Notificat
 
 function reducer(state: Notification[], action: Action): Notification[] {
   switch (action.type) {
-    case 'add':       return applyCollapse(state, action.notif);
+    case 'add':       return applyCollapse(state, action.notif).slice(0, HISTORY_CAP);
     case 'update':    return state.map(n => n.id === action.id ? { ...n, ...action.patch } : n);
     case 'dismiss':   return state.filter(n => n.id !== action.id);
+    case 'dismissToast':
+      return state.map(n => n.id === action.id
+        ? { ...n, toastDismissed: true, read: action.markRead ? true : n.read }
+        : n);
     case 'dismissChild': {
       return state.flatMap(n => {
         if (n.id !== action.summaryId || !n.collapsedChildren) return [n];
@@ -146,6 +174,8 @@ function loadPersisted(): Notification[] {
       // actionFn cannot be serialized — a rehydrated important notification is
       // display-only (the row is retained; the action is not).
       actionable:  false,
+      // Already shown live last session — never re-toast on boot.
+      toastDismissed: true,
     }));
   } catch {
     return [];
@@ -198,6 +228,11 @@ interface NotificationsContextValue {
   addNotification: (n: AddPayload) => string;
   updateNotification: (id: string, patch: UpdatePayload) => void;
   dismissNotification: (id: string) => void;
+  /**
+   * Close the live toast but keep the row in the bell history. `markRead`
+   * (default true) also clears its unread state — the user saw it on screen.
+   */
+  dismissToast: (id: string, markRead?: boolean) => void;
   dismissChild: (summaryId: string, childId: string) => void;
   clearAllNotifications: () => void;
   markAllRead: () => void;
@@ -231,14 +266,19 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     };
     dispatch({ type: 'add', notif });
 
-    // Ambient notifications auto-remove even if the caller didn't set a TTL.
-    const ttl = notif.autoRemoveMs
-      ?? (notif.severity === 'ambient' ? AMBIENT_DEFAULT_TTL_MS : undefined);
-    if (ttl) {
-      setTimeout(() => dispatch({ type: 'dismiss', id }), ttl);
+    // Ambient notifications are noise: they leave the store entirely after
+    // their TTL. Everything else stays in the bell history — the Toaster owns
+    // the on-screen lifetime (see `isToast` / `dismissToast`), so a hovered
+    // toast can pause without the row vanishing underneath it.
+    if (notif.severity === 'ambient') {
+      setTimeout(() => dispatch({ type: 'dismiss', id }), notif.autoRemoveMs ?? AMBIENT_DEFAULT_TTL_MS);
     }
 
     return id;
+  }, []);
+
+  const dismissToast = useCallback((id: string, markRead = true) => {
+    dispatch({ type: 'dismissToast', id, markRead });
   }, []);
 
   const updateNotification = useCallback((id: string, patch: UpdatePayload) => {
@@ -269,11 +309,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     addNotification,
     updateNotification,
     dismissNotification,
+    dismissToast,
     dismissChild,
     clearAllNotifications,
     markAllRead,
     togglePanel,
-  }), [notifications, unreadCount, panelOpen, addNotification, updateNotification, dismissNotification, dismissChild, clearAllNotifications, markAllRead, togglePanel]);
+  }), [notifications, unreadCount, panelOpen, addNotification, updateNotification, dismissNotification, dismissToast, dismissChild, clearAllNotifications, markAllRead, togglePanel]);
 
   return <NotificationsContext value={value}>{children}</NotificationsContext>;
 }

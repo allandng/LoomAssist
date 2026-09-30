@@ -5,10 +5,13 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import listPlugin from '@fullcalendar/list';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { EventDropArg, EventClickArg, EventHoveringArg, DateSelectArg, EventContentArg, DateSpanApi } from '@fullcalendar/core';
+import type {
+  EventDropArg, EventClickArg, EventHoveringArg, DateSelectArg, EventContentArg, DateSpanApi, DayHeaderContentArg,
+} from '@fullcalendar/core';
 import type { EventResizeDoneArg, EventDragStartArg, EventResizeStartArg } from '@fullcalendar/interaction';
 import styles from './CalendarPage.module.css';
-import { CalendarSidebar, type ScanEventEdit } from '../components/calendar/CalendarSidebar';
+import { Page, Button, IconButton, EmptyState, Icons, confirm } from '../components/ui';
+import { CalendarSidebar } from '../components/calendar/CalendarSidebar';
 import { QuickPeek } from '../components/calendar/QuickPeek';
 import { WellnessToast } from '../components/calendar/WellnessToast';
 import {
@@ -33,24 +36,28 @@ import { useEventKeyNav } from '../hooks/useEventKeyNav';
 import { useEventEndPrompts, type EndedOccurrence } from '../hooks/useEventEndPrompts';
 import { useIsVisibleRef } from '../hooks/usePageVisibility';
 import { TakeawayToast } from '../components/calendar/TakeawayToast';
-import { buildFCEvents, parseChecklist, timelineColor, relativeTime } from '../lib/eventUtils';
-import { tint } from '../lib/colors';
+import { buildFCEvents, parseChecklist, timelineColor } from '../lib/eventUtils';
+import { relativeTime } from '../lib/time';
 import {
-  listEvents, createEvent, updateEvent, deleteEvent,
-  listCalendars, updateCalendar, deleteCalendar,
-  listTemplates,
+  listEvents, createEvent, updateEvent, deleteEvent, clockEvent,
+  listCalendars, createCalendar, updateCalendar, deleteCalendar,
+  listTemplates, createTemplate, deleteTemplate,
   analyzeSchedule,
   detectExamClusters,
   getProcrastinationRadar,
-  extractSyllabus,
   findFreeSlots,
   listTimeBlockTemplates,
+  createTimeBlockTemplate,
   deleteTimeBlockTemplate,
   applyTimeBlockTemplate,
   getMissedEvents,
+  exportTimelinesICS,
 } from '../api';
 import type { FreeSlot } from '../types';
-import type { Event, Calendar, EventTemplate, SyllabusEvent, EventCreate, TimeBlockTemplate, TimeBlockDef, ProcrastinationWarning, WellnessWarning } from '../types';
+import type {
+  Event, Calendar, CalendarCreate, EventTemplate, EventCreate, TimeBlockTemplate, TimeBlockDef,
+  ProcrastinationWarning, WellnessWarning,
+} from '../types';
 import { getDismissed, dismiss as dismissRadar } from '../lib/radarDismissals';
 import { checkSleepWindow } from '../lib/sleepWindow';
 import { useNotifications, buildMutationToast } from '../store/notifications';
@@ -60,9 +67,17 @@ const FC_VIEW: Record<string, string> = {
   Month: 'dayGridMonth', Week: 'timeGridWeek', Day: 'timeGridDay', Agenda: 'listWeek',
 };
 
+const PANEL_KEY = 'loom:panel:calendar';
+// Localized short weekday names indexed by day-of-week (0 = Sunday).
+// 2023-01-01 is a Sunday; local-midnight dates keep the label stable.
+const WEEKDAY_SHORT: string[] = Array.from({ length: 7 }, (_, i) =>
+  new Date(2023, 0, 1 + i).toLocaleDateString([], { weekday: 'short' }),
+);
+const EMPTY_DISMISS_KEY = 'loom_calendar_empty_dismissed';
+
 // Module-level cache of the deadline-chip threshold (days). Read once at module
 // load instead of on every EventPill render; refreshed when another window
-// changes the setting via the `storage` event (WS2 audit #18).
+// changes the setting via the `storage` event.
 let deadlineChipDays = Number(localStorage.getItem('loom_deadline_chip_days') ?? 3);
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
@@ -72,48 +87,56 @@ if (typeof window !== 'undefined') {
   });
 }
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const localYMD = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'timelines';
+
 // ---- EventPill rendered inside FullCalendar ----
+// Anatomy: [time] [title] [chips]. The grid template in CalendarPage.module.css
+// lays these out as one row (month / agenda / short events) or as title over
+// time + chips (taller time-grid events). `--tl` is the only inline value.
 function EventPill({ info, timelines }: { info: EventContentArg; timelines: Calendar[] }) {
   const ev: Event = info.event.extendedProps.event;
   const isPrepBlock = !!info.event.extendedProps.isPrepBlock;
   const color = timelineColor(timelines, ev.calendar_id);
-  const isSpan = ev.is_all_day;
   const checklist = parseChecklist(ev.checklist);
   const doneCount = checklist.filter(c => c.done).length;
   const isClockedIn = !!ev.actual_start && !ev.actual_end;
-  const startStr = info.event.start
+  const startStr = info.event.start && !info.event.allDay
     ? info.event.start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '';
 
   const now = new Date();
   const start = info.event.start;
-  const thresholdDays = deadlineChipDays;
   let chipLabel = '';
   let isUrgent = false;
   if (!isPrepBlock && start && start > now) {
     const diffMs = start.getTime() - now.getTime();
     const diffDays = diffMs / (1000 * 60 * 60 * 24);
-    if (diffDays <= thresholdDays) {
+    if (diffDays <= deadlineChipDays) {
       isUrgent = diffDays <= 1;
       chipLabel = diffDays < 1
-        ? `⚠ ${Math.ceil(diffMs / 3_600_000)}h`
-        : `⚠ ${Math.ceil(diffDays)}d`;
+        ? `${Math.ceil(diffMs / 3_600_000)}h`
+        : `${Math.ceil(diffDays)}d`;
     }
   }
 
-  // Contrast recipe (anatomy unchanged): tint the timeline hue over the themed
-  // panel surface so the wash follows light/dark mode, and derive the inherited
-  // text tone by mixing the hue toward the theme's text color (guarantees
-  // legibility while preserving the hue as the cue). All-day spans keep the
-  // solid fill + white text. See WS2 §7 / contrast test.
   return (
     <div
       className={`${styles.pill}${isPrepBlock ? ` ${styles.prepPill}` : ''}`}
-      style={{
-        background: isSpan ? color : tint(color, isPrepBlock ? 8 : 14, 'var(--bg-panel)'),
-        color: isSpan ? 'white' : `color-mix(in srgb, ${color} 55%, var(--text-main))`,
-        borderLeft: isSpan ? 'none' : `2px solid ${color}`,
-      }}
+      style={{ '--tl': color } as React.CSSProperties}
       draggable={!isPrepBlock}
       onDragStart={isPrepBlock ? undefined : (e => {
         e.dataTransfer.setData(
@@ -124,21 +147,23 @@ function EventPill({ info, timelines }: { info: EventContentArg; timelines: Cale
       })}
     >
       <span className={styles.pillTime}>{startStr}</span>
-      <span className={styles.pillTitle} style={{ color: isSpan ? 'white' : 'var(--text-main)' }}>
+      <span className={styles.pillTitle}>
         {isPrepBlock ? `Prep · ${ev.title}` : info.event.title}
       </span>
-      {!isPrepBlock && ev.travel_time_minutes && ev.travel_time_minutes > 0 ? (
-        <span className={styles.travelChip} title={`${ev.travel_time_minutes} min travel buffer`}>→ {ev.travel_time_minutes}m</span>
-      ) : null}
-      {!isPrepBlock && checklist.length > 0 && (
-        <span className={styles.pillChk}>{doneCount}/{checklist.length}</span>
-      )}
-      {!isPrepBlock && isClockedIn && <span className={styles.clockDot} aria-label="Tracking active" />}
-      {chipLabel && (
-        <span className={`${styles.deadlineChip}${isUrgent ? ` ${styles.deadlineChipUrgent}` : ''}`}>
-          {chipLabel}
-        </span>
-      )}
+      <span className={styles.pillChips}>
+        {!isPrepBlock && ev.travel_time_minutes && ev.travel_time_minutes > 0 ? (
+          <span className={styles.travelChip} title={`${ev.travel_time_minutes} min travel buffer`}>→ {ev.travel_time_minutes}m</span>
+        ) : null}
+        {!isPrepBlock && checklist.length > 0 && (
+          <span className={styles.pillChk}>{doneCount}/{checklist.length}</span>
+        )}
+        {!isPrepBlock && isClockedIn && <span className={styles.clockDot} aria-label="Tracking active" />}
+        {chipLabel && (
+          <span className={`${styles.deadlineChip}${isUrgent ? ` ${styles.deadlineChipUrgent}` : ''}`} title="Due soon">
+            {chipLabel}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -156,7 +181,9 @@ export function CalendarPage() {
   const location = useLocation();
   const nav = useCalendarNav();
   const { push: pushUndo, undo: undoLast } = useUndo();
-  const { openEventEditor, openAvailability, openICSImport, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, modal } = useModal();
+  const {
+    openEventEditor, openAvailability, openICSImport, openSyllabus, openTimeBlockTemplate, openMissedEvents, openTimelineEditor, openTemplateManager, modal,
+  } = useModal();
   const { addNotification } = useNotifications();
 
   // Data
@@ -167,8 +194,10 @@ export function CalendarPage() {
   const [hiddenTimelineIds, setHiddenTimelineIds] = useState<Set<number>>(new Set());
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
-  // WS4 #10 — mini-calendar anchor + the main view's visible range (band).
+  // Mini-calendar anchor (period start), selected date (FC's current date) and
+  // the main view's visible range (band).
   const [miniAnchor, setMiniAnchor] = useState<Date>(() => new Date());
+  const [miniSelected, setMiniSelected] = useState<Date | null>(() => new Date());
   const [miniRange, setMiniRange] = useState<{ start: Date; end: Date } | null>(null);
   const [wellness, setWellness] = useState<{ date: string; message: string } | null>(null);
   // The detector emits at most one disjoint cluster today; the array shape on
@@ -182,43 +211,55 @@ export function CalendarPage() {
   const [missedTruncated, setMissedTruncated] = useState(false);
   const prevModalNameRef = useRef<typeof modal.name>(modal.name);
 
-  // Sync state
+  // Sync state — the label is derived on render; `syncTick` re-renders it every 30s.
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [syncStatus, setSyncStatus] = useState<'ok' | 'error'>('ok');
-  const [syncLabel, setSyncLabel] = useState('Synced');
+  const [, setSyncTick] = useState(0);
+  const syncError = syncStatus === 'error';
+  const syncLabel = syncError ? 'Sync failed' : lastSync ? `Synced ${relativeTime(lastSync)}` : 'Syncing…';
 
-  // Drag shader (Phase 2)
+  // Year view cursor. Derived from FC's current date unless the user paged
+  // years with the TopBar chevrons / wheel (override), which any FC navigation
+  // clears again.
+  const [yearOverride, setYearOverride] = useState<number | null>(null);
+  const yearCursor = yearOverride ?? miniSelected?.getFullYear() ?? new Date().getFullYear();
+
+  // Drag shader
   const [dragging, setDragging] = useState<DragState | null>(null);
-  // Drag-to-select tint (Phase v3.0 §8 ride-along #2)
+  // Drag-to-select tint
   const [selectRange, setSelectRange] = useState<SelectRange | null>(null);
   const dragShaderEnabled = localStorage.getItem('loom_drag_shader_enabled') !== 'false';
-  // WS3 #10 — plain-scroll period paging is opt-out. Read once (route remounts).
+  // Plain-scroll period paging is opt-out. Read once (route remounts).
   const wheelNavEnabled = localStorage.getItem('loom_wheel_nav') !== 'false';
-  // WS3 #5 — element dimmed as the drag "ghost at origin"; cleared on drag stop.
+  // Element dimmed as the drag "ghost at origin"; cleared on drag stop.
   const dragSourceElRef = useRef<HTMLElement | null>(null);
 
-  // WS3 #1 — quick-create popover anchored to the drag/click selection.
+  // Quick-create popover anchored to the drag/click selection.
   const [quickCreate, setQuickCreate] = useState<
     { start: Date; end: Date; allDay: boolean; anchor: QuickCreateAnchor } | null
   >(null);
 
-  // WS2: past-event dimming (opt-out). Read once on mount so a Settings toggle
+  // Past-event dimming (opt-out). Read once on mount so a Settings toggle
   // takes effect the next time the calendar is navigated to (this route
   // remounts), without a localStorage read per pill.
   const dimPast = useMemo(() => localStorage.getItem('loom_dim_past') !== 'false', []);
 
-  // Empty-grid overlay (one-time, dismissible, month view only).
-  const [emptyDismissed, setEmptyDismissed] = useState(false);
+  // Empty-range overlay (dismissible for the session).
+  const [emptyDismissed, setEmptyDismissed] = useState(() => sessionStorage.getItem(EMPTY_DISMISS_KEY) === '1');
+  const dismissEmpty = useCallback(() => {
+    sessionStorage.setItem(EMPTY_DISMISS_KEY, '1');
+    setEmptyDismissed(true);
+  }, []);
 
-  // WS2: weekend-wash toggle → body class the grid CSS keys off. Applied on
-  // mount so it survives a boot where Settings was never opened.
+  // Weekend-wash toggle → body class the grid CSS keys off. Applied on mount
+  // so it survives a boot where Settings was never opened.
   useEffect(() => {
     const washOn = localStorage.getItem('loom_weekend_wash') !== 'false';
     document.body.classList.toggle('loom-no-weekend-wash', !washOn);
   }, []);
 
   // QuickPeek state. A hover peek is passive; a single click pins an interactive
-  // one (WS5 #1). `anchorEl` is the originating pill — focus returns to it on Esc.
+  // one. `anchorEl` is the originating pill — focus returns to it on Esc.
   const [peek, setPeek] = useState<
     { event: Event; x: number; y: number; pinned: boolean; keyboard: boolean; anchorEl: HTMLElement | null } | null
   >(null);
@@ -230,21 +271,25 @@ export function CalendarPage() {
   const lastClickTimeRef = useRef<number>(0);
   const lastClickedIdRef = useRef<string | null>(null);
 
-  // Sidebar collapse
-  const [sidebarOpen, setSidebarOpen] = useState<boolean>(
-    () => localStorage.getItem('loom_sidebar_open') !== 'false',
-  );
-  const toggleCalendarSidebar = useCallback(() => {
-    setSidebarOpen(prev => {
+  // Context panel collapse — persisted under loom:panel:calendar; the shell can
+  // toggle it through the `loom-panel-toggle` window event.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => localStorage.getItem(PANEL_KEY) !== 'closed');
+  const togglePanel = useCallback(() => {
+    setPanelOpen(prev => {
       const next = !prev;
-      localStorage.setItem('loom_sidebar_open', next ? 'true' : 'false');
+      localStorage.setItem(PANEL_KEY, next ? 'open' : 'closed');
       return next;
     });
   }, []);
-
-  // Scan state
-  const [scanResults, setScanResults] = useState<SyllabusEvent[] | null>(null);
-  const [scanLoading, setScanLoading] = useState(false);
+  useEffect(() => {
+    const handler = (e: globalThis.Event) => {
+      const page = (e as CustomEvent<{ page?: string }>).detail?.page;
+      if (page && page !== 'calendar') return;
+      togglePanel();
+    };
+    window.addEventListener('loom-panel-toggle', handler as EventListener);
+    return () => window.removeEventListener('loom-panel-toggle', handler as EventListener);
+  }, [togglePanel]);
 
   // Scroll-wheel zoom
   const mainRef = useRef<HTMLDivElement>(null);
@@ -261,10 +306,10 @@ export function CalendarPage() {
       setLastSync(new Date());
       setSyncStatus('ok');
 
-      // Wellness analysis (debounced — run after first load).
-      // Splits the response: cluster warnings → ExamClusterBanner; everything
-      // else → WellnessToast. Subsequent mutations re-detect via the cheap
-      // /schedule/detect-clusters endpoint (see effect below).
+      // Wellness analysis (run after first load). Splits the response: cluster
+      // warnings → ExamClusterBanner; everything else → WellnessToast.
+      // Subsequent mutations re-detect via the cheap /schedule/detect-clusters
+      // endpoint (see effect below).
       if (isFirst) {
         analyzeSchedule(evs.map(e => ({ id: e.id, title: e.title, start_time: e.start_time, end_time: e.end_time }))).then(result => {
           const llm = result.warnings.find(w => w.kind !== 'exam_cluster');
@@ -286,21 +331,19 @@ export function CalendarPage() {
     }
   }, []);
 
-  useEffect(() => { loadAll(true); }, [loadAll]);
+  useEffect(() => { void loadAll(true); }, [loadAll]);
 
-  // WS3 #8 — refresh the "missed" list state (sidebar count) without reopening
-  // any modal. Used by the reload handoff and the initial mount fetch.
+  // Refresh the "missed" list state (panel count) without reopening any modal.
   const refreshMissedState = useCallback(async () => {
     try {
       const { items, truncated } = await getMissedEvents();
       setMissedItems(items);
       setMissedTruncated(truncated);
-    } catch { /* silently ignore — sidebar shows empty state */ }
+    } catch { /* silently ignore — panel shows empty state */ }
   }, []);
 
-  // WS3 #8 — register the imperative refetch. Save/voice paths call nav.reload()
+  // Register the imperative refetch. Save/voice paths call nav.reload()
   // instead of remounting the whole page (which discarded scroll/view/selection).
-  // Previously-rendered events stay on screen until the fetch resolves.
   useEffect(() => {
     nav.registerReload(async () => {
       await loadAll();
@@ -334,97 +377,51 @@ export function CalendarPage() {
     return () => { if (detectTimeoutRef.current) clearTimeout(detectTimeoutRef.current); };
   }, [events]);
 
-  // ---- Scan handlers ----
-  const handleScanFile = useCallback(async (file: File) => {
-    setScanLoading(true);
-    setScanResults(null);
-    if (!sidebarOpen) {
-      setSidebarOpen(true);
-      localStorage.setItem('loom_sidebar_open', 'true');
-    }
-    try {
-      const evs = await extractSyllabus(file);
-      if (evs.length === 0) {
-        addNotification({ type: 'warning', title: 'No events found', message: 'No dates detected in the file.' });
-      } else {
-        setScanResults(evs);
-      }
-    } catch {
-      addNotification({ type: 'error', title: 'Scan failed', message: 'Could not read file.' });
-    } finally {
-      setScanLoading(false);
-    }
-  }, [sidebarOpen, addNotification]);
-
-  const handleApproveScan = useCallback(async (edit: ScanEventEdit, idx: number) => {
-    const isAllDay = !edit.startTime;
-    const start = isAllDay ? `${edit.date}T00:00:00` : `${edit.date}T${edit.startTime}:00`;
-    const end   = isAllDay
-      ? `${edit.date}T23:59:00`
-      : edit.endTime
-        ? `${edit.date}T${edit.endTime}:00`
-        : `${edit.date}T${edit.startTime.replace(/^(\d{2}):(\d{2})$/, (_, h, m) =>
-            `${String((Number(h) + 1) % 24).padStart(2, '0')}:${m}`
-          )}:00`;
-    const payload: EventCreate = {
-      title: edit.title, start_time: start, end_time: end, calendar_id: edit.calendarId,
-      is_recurring: false, recurrence_days: '', recurrence_end: '',
-      description: '', unique_description: '', reminder_minutes: 0,
-      external_uid: '', timezone: 'local', is_all_day: isAllDay,
-      skipped_dates: '', per_day_times: '', checklist: '',
-    };
-    try {
-      await createEvent(payload);
-      setScanResults(prev => {
-        if (!prev) return null;
-        const next = prev.filter((_, i) => i !== idx);
-        return next.length === 0 ? null : next;
-      });
-      await loadAll();
-    } catch {
-      addNotification({ type: 'error', title: 'Could not add event', message: edit.title });
-    }
-  }, [loadAll, addNotification]);
-
-  const handleDismissScan = useCallback((idx: number) => {
-    setScanResults(prev => {
-      if (!prev) return null;
-      const next = prev.filter((_, i) => i !== idx);
-      return next.length === 0 ? null : next;
-    });
-  }, []);
-
-  const handleClearScan = useCallback(() => {
-    setScanResults(null);
-    setScanLoading(false);
-  }, []);
-
-  // Sync label refresh every 30 seconds
+  // Sync label refresh every 30 seconds (only while the tab is visible), and
+  // mirror it to the shell so the TopBar can show the same status.
   const syncLabelVisibleRef = useIsVisibleRef();
   useEffect(() => {
     const id = setInterval(() => {
       if (!syncLabelVisibleRef.current) return;
-      if (lastSync) setSyncLabel(syncStatus === 'error' ? 'Sync failed' : `Synced ${relativeTime(lastSync)}`);
+      setSyncTick(t => t + 1);
     }, 30_000);
     return () => clearInterval(id);
-  }, [lastSync, syncStatus, syncLabelVisibleRef]);
+  }, [syncLabelVisibleRef]);
 
+  // Mirror the panel's sync badge into the shell (TopBar) via CalendarNavContext.
+  // Depend on the stable setter, never on the whole `nav` object: setting the
+  // status re-creates that object, and a cleanup keyed on it would clear and
+  // re-set the status on every render (an update loop through FullCalendar).
+  const { setSyncStatus: pushSyncStatus } = nav;
   useEffect(() => {
-    setSyncLabel(syncStatus === 'error' ? 'Sync failed' : (lastSync ? `Synced ${relativeTime(lastSync)}` : 'Syncing…'));
-  }, [lastSync, syncStatus]);
+    pushSyncStatus({ label: syncLabel, error: syncError });
+  }, [pushSyncStatus, syncLabel, syncError]);
+  useEffect(() => () => { pushSyncStatus(null); }, [pushSyncStatus]);
 
-  // Wire nav actions to FullCalendar
+  // Wire the TopBar's nav actions. FullCalendar views hand the API through;
+  // Year view (a custom component) pages the year cursor instead.
   useEffect(() => {
     const api = calRef.current?.getApi();
+    if (nav.view === 'Year') {
+      const cleanup = nav.registerActions({
+        prev:       () => setYearOverride(y => (y ?? yearCursor) - 1),
+        next:       () => setYearOverride(y => (y ?? yearCursor) + 1),
+        today:      () => setYearOverride(new Date().getFullYear()),
+        changeView: (v) => { if (api) { api.changeView(v); nav.setDateLabel(api.view.title); } },
+      });
+      nav.setDateLabel(String(yearCursor));
+      return cleanup;
+    }
     if (!api) return;
-    nav.registerActions({
+    const cleanup = nav.registerActions({
       prev:       () => { api.prev();  nav.setDateLabel(api.view.title); },
       next:       () => { api.next();  nav.setDateLabel(api.view.title); },
       today:      () => { api.today(); nav.setDateLabel(api.view.title); },
       changeView: (v) => { api.changeView(v); nav.setDateLabel(api.view.title); },
     });
     nav.setDateLabel(api.view.title);
-  }, [nav]);
+    return cleanup;
+  }, [nav, yearCursor]);
 
   // Sync view prop → FullCalendar
   useEffect(() => {
@@ -435,7 +432,7 @@ export function CalendarPage() {
       api.changeView(fc);
       nav.setDateLabel(api.view.title);
     }
-  }, [nav.view]);
+  }, [nav]);
 
   // When leaving Year view, apply any pending date navigation
   useEffect(() => {
@@ -445,10 +442,9 @@ export function CalendarPage() {
     api.gotoDate(pendingDateRef.current);
     nav.setDateLabel(api.view.title);
     pendingDateRef.current = null;
-  }, [nav.view]);
+  }, [nav]);
 
-  // Cross-page navigation bridge (WS4 #12): Home hands off via route state
-  // `{ date, view }` instead of an invisible sessionStorage side channel.
+  // Cross-page navigation bridge: Home hands off via route state `{ date, view }`.
   // Consumed once on mount.
   useEffect(() => {
     const st = location.state as { date?: string; view?: string } | null;
@@ -471,17 +467,20 @@ export function CalendarPage() {
 
   const handleYearDayClick = useCallback((date: Date) => {
     pendingDateRef.current = date;
+    setYearOverride(null);
     nav.setView('Day');
   }, [nav]);
 
   const handleYearMonthClick = useCallback((date: Date) => {
     pendingDateRef.current = date;
+    setYearOverride(null);
     nav.setView('Month');
   }, [nav]);
 
-  // WS4 #10 — mini-calendar: single click moves the anchor date without
-  // changing the view type; double-click drops into Day view.
+  // Mini-calendar: single click moves the anchor date without changing the view
+  // type; double-click drops into Day view.
   const handleMiniPick = useCallback((date: Date) => {
+    setYearOverride(null);
     if (nav.view === 'Year') {
       pendingDateRef.current = date;
       nav.setView('Month');
@@ -492,21 +491,25 @@ export function CalendarPage() {
       api.gotoDate(date);
       nav.setDateLabel(api.view.title);
       setMiniAnchor(api.view.currentStart);
+      setMiniSelected(date);
     }
   }, [nav]);
 
   const handleMiniPickDay = useCallback((date: Date) => {
     pendingDateRef.current = date;
+    setYearOverride(null);
     nav.setView('Day');
   }, [nav]);
 
-  const handleFindFreeSlots = useCallback(async (durationMins: number): Promise<FreeSlot[]> => {
+  const handleFindFreeSlots = useCallback(async (durationMins: number, workingStart: number, workingEnd: number): Promise<FreeSlot[]> => {
     const now = new Date();
     const weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const result = await findFreeSlots({
       window_start: now.toISOString(),
       window_end: weekEnd.toISOString(),
       duration_minutes: durationMins,
+      working_hours_start: workingStart,
+      working_hours_end: workingEnd,
     });
     return result.slots;
   }, []);
@@ -525,7 +528,7 @@ export function CalendarPage() {
     openMissedEvents(missedItems, missedTruncated, handleRecoverReschedule);
   }, [openMissedEvents, missedItems, missedTruncated, handleRecoverReschedule]);
 
-  // Initial mount fetch of the missed list (drives the sidebar count).
+  // Initial mount fetch of the missed list (drives the panel count).
   useEffect(() => {
     let cancelled = false;
     getMissedEvents()
@@ -534,15 +537,14 @@ export function CalendarPage() {
         setMissedItems(items);
         setMissedTruncated(truncated);
       })
-      .catch(() => { /* silently ignore — sidebar shows empty state */ });
+      .catch(() => { /* silently ignore — panel shows empty state */ });
     return () => { cancelled = true; };
   }, []);
 
-  // Missed-recovery re-open. The page no longer remounts on save (WS3 #8), so
-  // both the save and cancel paths converge here: when the editor closes with a
-  // recovery in flight, fetch the *fresh* missed list (the saved event's
-  // missed_at was auto-cleared, so it drops out) and re-open the modal. The
-  // pendingMissedRecovery flag's set/consume semantics are unchanged.
+  // Missed-recovery re-open. The page no longer remounts on save, so both the
+  // save and cancel paths converge here: when the editor closes with a recovery
+  // in flight, fetch the *fresh* missed list (the saved event's missed_at was
+  // auto-cleared, so it drops out) and re-open the modal.
   useEffect(() => {
     const prev = prevModalNameRef.current;
     prevModalNameRef.current = modal.name;
@@ -560,11 +562,6 @@ export function CalendarPage() {
     }
   }, [modal.name, openMissedEvents, handleRecoverReschedule]);
 
-  // Wire TopBar sync status
-  useEffect(() => {
-    // Propagate to Shell's TopBar via context — handled by CalendarNavContext's syncStatus (Phase 3 wiring is enough)
-  }, [syncLabel, syncStatus]);
-
   // Ctrl/Cmd + scroll-wheel zoom (cycles dayGridMonth ↔ timeGridWeek ↔ timeGridDay)
   // Plain scroll on non-time-grid views navigates prev/next period.
   useEffect(() => {
@@ -577,6 +574,8 @@ export function CalendarPage() {
 
     const handler = (e: WheelEvent) => {
       if (wheelTimerRef.current) return; // debounce
+      // Year view owns its own wheel paging.
+      if (nav.view === 'Year') return;
 
       const api = calRef.current?.getApi();
       if (!api) return;
@@ -608,7 +607,7 @@ export function CalendarPage() {
         return;
       }
 
-      // WS3 #10 — one period per gesture; 250ms lockout beats 150ms's overshoot.
+      // One period per gesture; 250ms lockout beats 150ms's overshoot.
       wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 250);
     };
 
@@ -631,9 +630,24 @@ export function CalendarPage() {
     [events, timelines, hiddenTimelineIds, activeFilters],
   );
 
-  // WS6 §3/§4 — keyboard event navigation + move-mode. Roving focus over the
-  // mounted occurrences (fed by eventDidMount/eventWillUnmount below); selecting
-  // syncs the highlight, Enter opens the pinned keyboard peek (WS5).
+  // Does the visible range hold any occurrence? Drives the empty-state overlay.
+  const rangeHasEvents = useMemo(() => {
+    if (nav.view === 'Year') {
+      const y = String(yearCursor);
+      return fcEvents.some(o => typeof o.start === 'string' && o.start.startsWith(y));
+    }
+    if (!miniRange) return true;
+    const s = miniRange.start.getTime();
+    const e = miniRange.end.getTime();
+    return fcEvents.some(o => {
+      const t = new Date(o.start as string).getTime();
+      return !isNaN(t) && t >= s && t < e;
+    });
+  }, [fcEvents, miniRange, nav.view, yearCursor]);
+
+  // Keyboard event navigation + move-mode. Roving focus over the mounted
+  // occurrences (fed by eventDidMount/eventWillUnmount below); selecting syncs
+  // the highlight, Enter opens the pinned keyboard peek.
   const { registerEl, unregisterEl } = useEventKeyNav({
     active: nav.view !== 'Year',
     calRef,
@@ -698,8 +712,8 @@ export function CalendarPage() {
     const newStart  = arg.event.start!;
     const newEnd    = arg.event.end ?? new Date(newStart.getTime() + (prevEnd.getTime() - prevStart.getTime()));
 
-    // WS3 #6 — ⌥/Alt-drag duplicates: leave the original in place and create a
-    // copy at the drop time (macOS muscle memory).
+    // Alt-drag duplicates: leave the original in place and create a copy at
+    // the drop time.
     if ((arg.jsEvent as MouseEvent | undefined)?.altKey) {
       arg.revert();
       const { id: _oldId, ...base } = ev;
@@ -723,7 +737,7 @@ export function CalendarPage() {
 
     try {
       // Optimistic: FC already moved the pill. Persist, then record undo — a
-      // failed PUT reverts and pushes no undo entry (WS3 #9).
+      // failed PUT reverts and pushes no undo entry.
       await updateEvent(ev.id, payload);
       pushUndo({
         label: `Move "${ev.title}"`,
@@ -747,9 +761,9 @@ export function CalendarPage() {
     }
   }, [pushUndo, loadAll, addNotification]);
 
-  // ---- Drag shader callbacks (Phase 2) ----
+  // ---- Drag shader callbacks ----
   const handleEventDragStart = useCallback((arg: EventDragStartArg) => {
-    // WS3 #5 — dim the source occurrence so it reads as a "ghost at origin".
+    // Dim the source occurrence so it reads as a "ghost at origin".
     const el = arg.el as HTMLElement | undefined;
     if (el) { el.classList.add('loom-drag-source'); dragSourceElRef.current = el; }
     if (!dragShaderEnabled) return;
@@ -814,8 +828,8 @@ export function CalendarPage() {
     }
   }, [pushUndo, loadAll, addNotification]);
 
-  // Hover-grace helpers (WS5 #1): don't drop a passive peek the instant the
-  // cursor leaves the pill — give ~500ms so the user can move onto the card.
+  // Hover-grace helpers: don't drop a passive peek the instant the cursor
+  // leaves the pill — give ~500ms so the user can move onto the card.
   const cancelPeekHide = useCallback(() => {
     if (peekHideTimerRef.current) { clearTimeout(peekHideTimerRef.current); peekHideTimerRef.current = null; }
   }, []);
@@ -845,7 +859,7 @@ export function CalendarPage() {
     const rect = el.getBoundingClientRect();
 
     // Double-click (same occurrence within 350ms) opens the editor. Single click
-    // selects immediately — no artificial delay (WS3 #2).
+    // selects immediately — no artificial delay.
     if (lastClickedIdRef.current === fcId && now - lastClickTimeRef.current < 350) {
       lastClickedIdRef.current = null;
       lastClickTimeRef.current = 0;
@@ -870,9 +884,9 @@ export function CalendarPage() {
       return next;
     });
 
-    // WS5 #1 — a plain single click pins an interactive peek to the clicked
-    // event; clicking the same pinned event again (a de-select) closes it.
-    // Modifier clicks are multi-select and carry no single-event peek.
+    // A plain single click pins an interactive peek to the clicked event;
+    // clicking the same pinned event again (a de-select) closes it. Modifier
+    // clicks are multi-select and carry no single-event peek.
     cancelPeekHide();
     if (isModifier) {
       setPeek(null);
@@ -906,7 +920,7 @@ export function CalendarPage() {
     schedulePeekHide();
   }, [schedulePeekHide]);
 
-  // ---- Pinned-peek actions (WS5 #1) ----
+  // ---- Pinned-peek actions ----
   const handlePeekEdit = useCallback((ev: Event) => {
     closePeek();
     openEventEditor(ev);
@@ -922,13 +936,23 @@ export function CalendarPage() {
         undo: async () => { await deleteEvent(created.id); await loadAll(); },
         redo: async () => { /* re-create not directly reversible */ },
       });
+      addNotification(buildMutationToast({ verb: 'Duplicated', object: ev.title, undo: undoLast }));
       await loadAll();
     } catch {
       addNotification({ type: 'error', title: 'Duplicate failed', message: 'Could not copy event.' });
     }
-  }, [closePeek, pushUndo, loadAll, addNotification]);
+  }, [closePeek, pushUndo, undoLast, loadAll, addNotification]);
 
   const handlePeekDelete = useCallback(async (ev: Event) => {
+    const ok = await confirm({
+      title: `Delete "${ev.title}"?`,
+      description: ev.is_recurring
+        ? 'This removes every occurrence of the recurring event. You can undo from the toast.'
+        : 'You can undo from the toast.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     closePeek();
     const snapshot = { ...ev };
     try {
@@ -938,15 +962,26 @@ export function CalendarPage() {
         undo: async () => { const { id: _id, ...p } = snapshot; await createEvent(p); await loadAll(); },
         redo: async () => { await deleteEvent(ev.id); await loadAll(); },
       });
-      // WS7 #6 — the toast is a pointer into the undo stack: its Undo button
-      // pops the top entry (the delete we just pushed) rather than telling the
-      // user to recover elsewhere.
+      // The toast is a pointer into the undo stack: its Undo button pops the
+      // top entry (the delete we just pushed).
       addNotification(buildMutationToast({ verb: 'Deleted', object: ev.title, undo: undoLast }));
       await loadAll();
     } catch {
       addNotification({ type: 'error', title: 'Delete failed', message: 'Could not delete event.' });
     }
   }, [closePeek, pushUndo, undoLast, loadAll, addNotification]);
+
+  const handlePeekClockToggle = useCallback(async (ev: Event) => {
+    const isIn = !!ev.actual_start && !ev.actual_end;
+    try {
+      const updated = await clockEvent(ev.id, isIn ? 'out' : 'in');
+      setPeek(prev => (prev && prev.event.id === ev.id ? { ...prev, event: updated } : prev));
+      addNotification({ type: 'success', title: isIn ? 'Clocked out' : 'Clocked in', message: ev.title, autoRemoveMs: 2500 });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: isIn ? 'Clock out failed' : 'Clock in failed', message: 'Could not update tracking.' });
+    }
+  }, [loadAll, addNotification]);
 
   const handlePeekChecklistToggle = useCallback(async (ev: Event, index: number) => {
     const items = parseChecklist(ev.checklist);
@@ -967,9 +1002,9 @@ export function CalendarPage() {
     }
   }, [loadAll, addNotification]);
 
-  // WS3 #1 — a drag (or click) on the empty grid opens the quick-create popover
+  // A drag (or click) on the empty grid opens the quick-create popover
   // anchored to the selection rect, rather than jumping straight to the full
-  // 560px editor. The DragShader selection tint clears here; the popover renders
+  // editor. The DragShader selection tint clears here; the popover renders
   // over the (persisted) selection mirror.
   const handleSelect = useCallback((arg: DateSelectArg) => {
     setSelectRange(null);
@@ -1004,8 +1039,7 @@ export function CalendarPage() {
   }, []);
 
   const buildQuickPayload = useCallback((title: string, calendarId: number, start: Date, end: Date, allDay: boolean): EventCreate => {
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dateStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+    const dateStr = localYMD(start);
     return {
       title,
       start_time: allDay ? `${dateStr}T00:00:00` : start.toISOString(),
@@ -1050,7 +1084,7 @@ export function CalendarPage() {
   }, [quickCreate, openEventEditor]);
 
   // FullCalendar fires selectAllow on every drag-tick; we use it to track the
-  // current selection range so DragShader can tint conflicts in --warning.
+  // current selection range so DragShader can tint conflicts.
   // Always returning true keeps the drag enabled.
   const handleSelectAllow = useCallback((arg: { start: Date; end: Date }) => {
     setSelectRange({ start: arg.start, end: arg.end });
@@ -1061,19 +1095,43 @@ export function CalendarPage() {
     <EventPill info={info} timelines={timelines} />
   ), [timelines]);
 
-  // ---- Bulk delete ----
+  // Column headers: weekday small caps + day number (accent disc on today).
+  // Month view carries only the weekday.
+  const dayHeaderContent = useCallback((arg: DayHeaderContentArg) => {
+    // Use FC's day-of-week index, not `arg.date`: in month view the header
+    // dates are UTC-midnight, so formatting them locally shifts the label a
+    // day west of Greenwich (SAT above the Sunday column).
+    const dow = WEEKDAY_SHORT[arg.dow] ?? arg.text;
+    if (arg.view.type === 'dayGridMonth') {
+      return <span className={styles.colDow}>{dow}</span>;
+    }
+    return (
+      <>
+        <span className={[styles.colDow, arg.isToday ? styles.colDowToday : ''].join(' ')}>{dow}</span>
+        <span className={[styles.colNum, arg.isToday ? styles.colNumToday : ''].join(' ')}>{arg.date.getDate()}</span>
+      </>
+    );
+  }, []);
+
+  // ---- Bulk delete (SelectionBar / Delete key) ----
   const bulkDelete = useCallback(async () => {
     if (selectedEventIds.size === 0) return;
     const ids = [...selectedEventIds];
     const deleted = events.filter(e => ids.includes(e.id));
+    const ok = await confirm({
+      title: ids.length === 1 && deleted[0]
+        ? `Delete "${deleted[0].title}"?`
+        : `Delete ${ids.length} events?`,
+      description: 'You can undo from the toast.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     pushUndo({
       label: `Delete ${ids.length} event(s)`,
       undo: async () => {
-        // Re-create deleted events (POST each)
-        const { createEvent } = await import('../api');
         for (const ev of deleted) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { id, ...payload } = ev;
+          const { id: _id, ...payload } = ev;
           await createEvent(payload);
         }
         await loadAll();
@@ -1083,14 +1141,20 @@ export function CalendarPage() {
     try {
       await Promise.all(ids.map(id => deleteEvent(id)));
       setSelectedEventIds(new Set());
+      setPeek(null);
+      addNotification(buildMutationToast({
+        verb: 'Deleted',
+        object: ids.length === 1 && deleted[0] ? deleted[0].title : `${ids.length} events`,
+        undo: undoLast,
+      }));
       await loadAll();
     } catch {
       addNotification({ type: 'error', title: 'Delete failed', message: 'Some events could not be deleted.' });
     }
-  }, [selectedEventIds, events, pushUndo, loadAll, addNotification]);
+  }, [selectedEventIds, events, pushUndo, undoLast, loadAll, addNotification]);
 
   // ---- Snooze: shifts selected events forward by N days. Triggered via the
-  // `loom-snooze-selected` window event from App.tsx's keyboard shortcuts.
+  // `loom-snooze-selected` window event from the shell's keyboard shortcuts.
   const snoozeSelected = useCallback(async (days: number) => {
     if (selectedEventIds.size === 0) {
       addNotification({ type: 'info', title: 'Nothing selected', message: 'Click an event first to snooze it.', autoRemoveMs: 2500 });
@@ -1175,8 +1239,8 @@ export function CalendarPage() {
 
     const top = candidates[0];
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const startStr = `${String(top.bin).padStart(2, '0')}:00`;
-    const endStr   = `${String(top.bin + 2).padStart(2, '0')}:00`;
+    const startStr = `${pad2(top.bin)}:00`;
+    const endStr   = `${pad2(top.bin + 2)}:00`;
     const dayName  = dayNames[top.weekday];
 
     sessionStorage.setItem('loom_pattern_suggested', '1');
@@ -1200,39 +1264,114 @@ export function CalendarPage() {
   }, [events.length]);
 
   // ---- Timeline actions ----
-  // WS3 #11 — open the themed timeline editor in create mode instead of a raw
-  // window.prompt.
   const handleNewTimeline = useCallback(() => {
     openTimelineEditor();
   }, [openTimelineEditor]);
 
+  const handleEditTimeline = useCallback((id: number) => {
+    openTimelineEditor(id);
+  }, [openTimelineEditor]);
+
   const handleRenameTimeline = useCallback(async (id: number, name: string) => {
     const prev = timelines.find(t => t.id === id)?.name ?? '';
-    await updateCalendar(id, { name });
-    pushUndo({
-      label: `Rename timeline to "${name}"`,
-      undo: async () => { await updateCalendar(id, { name: prev }); await loadAll(); },
-      redo: async () => { await updateCalendar(id, { name }); await loadAll(); },
-    });
-    await loadAll();
-  }, [timelines, pushUndo, loadAll]);
+    try {
+      await updateCalendar(id, { name });
+      pushUndo({
+        label: `Rename timeline to "${name}"`,
+        undo: async () => { await updateCalendar(id, { name: prev }); await loadAll(); },
+        redo: async () => { await updateCalendar(id, { name }); await loadAll(); },
+      });
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Rename failed', message: `Could not rename "${prev}".` });
+    }
+  }, [timelines, pushUndo, loadAll, addNotification]);
 
+  // Deleting a timeline cascades to its events on the backend, so the undo
+  // snapshot carries both: re-create the timeline, then re-point every event
+  // at the new id.
   const handleDeleteTimeline = useCallback(async (id: number) => {
     const tl = timelines.find(t => t.id === id);
     if (!tl) return;
-    if (!window.confirm(`Delete timeline "${tl.name}"? Events will remain but lose their timeline.`)) return;
-    await deleteCalendar(id);
-    pushUndo({
-      label: `Delete timeline "${tl.name}"`,
-      undo: async () => { /* re-create timeline is complex — skip redo */ await loadAll(); },
-      redo: async () => { await deleteCalendar(id); await loadAll(); },
+    const affected = events.filter(e => e.calendar_id === id);
+    const ok = await confirm({
+      title: `Delete "${tl.name}"?`,
+      description: affected.length > 0
+        ? `This also deletes ${affected.length} event${affected.length === 1 ? '' : 's'} on this timeline. You can undo from the toast.`
+        : 'You can undo from the toast.',
+      destructive: true,
+      confirmLabel: 'Delete',
     });
-    await loadAll();
-  }, [timelines, pushUndo, loadAll]);
+    if (!ok) return;
 
-  // WS3 #3 — templates are quick-create accelerators: pre-fill the editor from
-  // the template (title, duration → now-rounded-to-next-15, recurrence, timeline)
-  // instead of discarding it.
+    const snapshot: CalendarCreate = {
+      name: tl.name, description: tl.description, color: tl.color,
+      is_course: tl.is_course, course_code: tl.course_code, term_start: tl.term_start, term_end: tl.term_end,
+    };
+    let currentId = id;
+    try {
+      await deleteCalendar(id);
+      pushUndo({
+        label: `Delete timeline "${tl.name}"`,
+        undo: async () => {
+          const created = await createCalendar(snapshot);
+          currentId = created.id;
+          for (const ev of affected) {
+            const { id: _evId, ...payload } = ev;
+            await createEvent({ ...payload, calendar_id: created.id });
+          }
+          await loadAll();
+        },
+        redo: async () => { await deleteCalendar(currentId); await loadAll(); },
+      });
+      setHiddenTimelineIds(prev => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev); next.delete(id); return next;
+      });
+      addNotification(buildMutationToast({ verb: 'Deleted', object: tl.name, undo: undoLast }));
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed', message: `Could not delete "${tl.name}".` });
+    }
+  }, [timelines, events, pushUndo, undoLast, loadAll, addNotification]);
+
+  const exportICS = useCallback(async (ids: number[], label: string) => {
+    if (ids.length === 0) {
+      addNotification({ type: 'info', title: 'Nothing to export', message: 'Create a timeline first.', autoRemoveMs: 3000 });
+      return;
+    }
+    try {
+      const blob = await exportTimelinesICS(ids);
+      downloadBlob(blob, `${slugify(label)}.ics`);
+      addNotification({ type: 'success', title: 'Exported .ics', message: label, autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Export failed', message: 'Could not build the .ics file.' });
+    }
+  }, [addNotification]);
+
+  const handleExportTimeline = useCallback((id: number) => {
+    const tl = timelines.find(t => t.id === id);
+    void exportICS([id], tl?.name ?? 'timeline');
+  }, [timelines, exportICS]);
+
+  // `loom-export-ics` (shell / command palette): export the given timeline, or
+  // every timeline when no id is passed.
+  useEffect(() => {
+    const handler = (e: globalThis.Event) => {
+      const detail = (e as CustomEvent<{ timelineId?: number }>).detail;
+      if (detail?.timelineId != null) {
+        const tl = timelines.find(t => t.id === detail.timelineId);
+        void exportICS([detail.timelineId], tl?.name ?? 'timeline');
+      } else {
+        void exportICS(timelines.map(t => t.id), 'loom-timelines');
+      }
+    };
+    window.addEventListener('loom-export-ics', handler as EventListener);
+    return () => window.removeEventListener('loom-export-ics', handler as EventListener);
+  }, [timelines, exportICS]);
+
+  // Templates are quick-create accelerators: pre-fill the editor from the
+  // template (title, duration → now-rounded-to-next-15, recurrence, timeline).
   const handleApplyTemplate = useCallback((t: EventTemplate) => {
     const ms = 15 * 60_000;
     const start = new Date(Math.ceil(Date.now() / ms) * ms);
@@ -1245,8 +1384,33 @@ export function CalendarPage() {
     });
   }, [openEventEditor]);
 
-  // ---- Time Block Template handlers ----
+  const handleDeleteTemplate = useCallback(async (id: number) => {
+    const t = templates.find(x => x.id === id);
+    if (!t) return;
+    const ok = await confirm({
+      title: `Delete template "${t.name}"?`,
+      description: 'Events created from it are not affected. You can undo from the toast.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    const { id: _tid, ...snapshot } = t;
+    let currentId = id;
+    try {
+      await deleteTemplate(id);
+      pushUndo({
+        label: `Delete template "${t.name}"`,
+        undo: async () => { const created = await createTemplate(snapshot); currentId = created.id; await loadAll(); },
+        redo: async () => { await deleteTemplate(currentId); await loadAll(); },
+      });
+      addNotification(buildMutationToast({ verb: 'Deleted', object: t.name, undo: undoLast }));
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed', message: `Could not delete "${t.name}".` });
+    }
+  }, [templates, pushUndo, undoLast, loadAll, addNotification]);
 
+  // ---- Time block template handlers ----
   const handleNewTimeBlockTemplate = useCallback(() => {
     openTimeBlockTemplate();
   }, [openTimeBlockTemplate]);
@@ -1272,16 +1436,34 @@ export function CalendarPage() {
         return {
           title:      e.title,
           day_of_week: dow,
-          start_time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
-          end_time:   `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+          start_time: `${pad2(start.getHours())}:${pad2(start.getMinutes())}`,
+          end_time:   `${pad2(end.getHours())}:${pad2(end.getMinutes())}`,
           calendar_id: e.calendar_id,
         };
       });
 
     openTimeBlockTemplate(prefillBlocks);
-  }, [events, calRef, openTimeBlockTemplate]);
+  }, [events, openTimeBlockTemplate]);
 
-  const handleApplyTimeBlockTemplate = useCallback(async (tplId: number, weekMondayDate: string) => {
+  // Apply stamps the template onto the week currently shown in the calendar
+  // (Monday of the week containing FC's current date), after a confirm.
+  const handleApplyTimeBlockTemplate = useCallback(async (tplId: number) => {
+    const tpl = timeBlockTemplates.find(t => t.id === tplId);
+    if (!tpl) return;
+    const base = calRef.current?.getApi()?.getDate() ?? new Date();
+    const monday = new Date(base);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+    const weekMondayDate = localYMD(monday);
+    const weekLabel = monday.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+    const ok = await confirm({
+      title: `Apply "${tpl.name}"?`,
+      description: `Adds its blocks to the week of ${weekLabel} — the week shown in the calendar. You can undo this.`,
+      confirmLabel: 'Apply',
+    });
+    if (!ok) return;
+
     try {
       const { applied_count, events: newEvents } = await applyTimeBlockTemplate(tplId, weekMondayDate);
       const ids = newEvents.map(e => e.id);
@@ -1291,19 +1473,45 @@ export function CalendarPage() {
         redo: async () => { await applyTimeBlockTemplate(tplId, weekMondayDate); await loadAll(); },
       });
       await loadAll();
-      addNotification({ type: 'success', title: `${applied_count} block${applied_count !== 1 ? 's' : ''} added`, autoRemoveMs: 3000 });
+      addNotification({ type: 'success', title: `${applied_count} block${applied_count !== 1 ? 's' : ''} added`, message: `Week of ${weekLabel}`, autoRemoveMs: 3000 });
     } catch {
       addNotification({ type: 'error', title: 'Apply failed', message: 'Could not stamp template onto week.', autoRemoveMs: 4000 });
     }
-  }, [pushUndo, loadAll, addNotification]);
+  }, [timeBlockTemplates, pushUndo, loadAll, addNotification]);
 
   const handleDeleteTimeBlockTemplate = useCallback(async (id: number) => {
-    await deleteTimeBlockTemplate(id);
-    await loadAll();
-  }, [loadAll]);
+    const tpl = timeBlockTemplates.find(t => t.id === id);
+    if (!tpl) return;
+    const ok = await confirm({
+      title: `Delete template "${tpl.name}"?`,
+      description: 'Blocks already on the calendar stay. You can undo from the toast.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    let blocks: TimeBlockDef[] = [];
+    try { blocks = JSON.parse(tpl.blocks_json) as TimeBlockDef[]; } catch { blocks = []; }
+    let currentId = id;
+    try {
+      await deleteTimeBlockTemplate(id);
+      pushUndo({
+        label: `Delete time block template "${tpl.name}"`,
+        undo: async () => {
+          const created = await createTimeBlockTemplate(tpl.name, tpl.description, blocks);
+          currentId = created.id;
+          await loadAll();
+        },
+        redo: async () => { await deleteTimeBlockTemplate(currentId); await loadAll(); },
+      });
+      addNotification(buildMutationToast({ verb: 'Deleted', object: tpl.name, undo: undoLast }));
+      await loadAll();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed', message: `Could not delete "${tpl.name}".` });
+    }
+  }, [timeBlockTemplates, pushUndo, undoLast, loadAll, addNotification]);
 
-  // ---- Keyboard shortcuts (WS4 #2) ----
-  // The calendar's keys now live in the single central registry (App/Shell +
+  // ---- Keyboard shortcuts ----
+  // The calendar's keys live in the single central registry (App/Shell +
   // keybindConfig). New-event / today / prev / next / search dispatch through
   // CalendarNavContext; delete arrives as a window event (like snooze) and
   // Escape-to-clear-selection sits at the BOTTOM of the shared escape stack so
@@ -1321,58 +1529,78 @@ export function CalendarPage() {
     return () => window.removeEventListener('loom-delete-selected', handler);
   }, [bulkDelete]);
 
-  // WS4 #9 — jump-to-date from the TopBar overlay navigates the live calendar
-  // while preserving the current view.
+  // Jump-to-date from the TopBar overlay navigates the live calendar while
+  // preserving the current view.
   useEffect(() => {
     const handler = (e: globalThis.Event) => {
       const detail = (e as CustomEvent<{ date: string }>).detail;
       if (!detail?.date) return;
       const d = new Date(detail.date);
       if (isNaN(d.getTime())) return;
+      setYearOverride(null);
       if (nav.view === 'Year') { pendingDateRef.current = d; nav.setView('Month'); return; }
       const api = calRef.current?.getApi();
-      if (api) { api.gotoDate(d); nav.setDateLabel(api.view.title); setMiniAnchor(api.view.currentStart); }
+      if (api) {
+        api.gotoDate(d);
+        nav.setDateLabel(api.view.title);
+        setMiniAnchor(api.view.currentStart);
+        setMiniSelected(d);
+      }
     };
     window.addEventListener('loom-jump-date', handler as EventListener);
     return () => window.removeEventListener('loom-jump-date', handler as EventListener);
   }, [nav]);
 
+  const filtersHidingEvents = hiddenTimelineIds.size > 0 || activeFilters.size > 0;
+  const emptyTitle =
+    nav.view === 'Month' ? 'No events this month'
+    : nav.view === 'Day' ? 'No events this day'
+    : nav.view === 'Year' ? 'No events this year'
+    : 'No events this week';
+  const showEmpty = lastSync !== null && !emptyDismissed && !rangeHasEvents;
+
+  const quickCreateDefaultTimeline = (() => {
+    const last = Number(localStorage.getItem('loom_last_timeline'));
+    return timelines.some(t => t.id === last) ? last : (timelines[0]?.id ?? 0);
+  })();
+
   return (
-    <div className={styles.page}>
+    <Page bare>
       <CalendarSidebar
-        open={sidebarOpen}
-        onToggle={toggleCalendarSidebar}
-        onFindFreeSlots={handleFindFreeSlots}
-        onScheduleSlot={handleScheduleSlot}
+        open={panelOpen}
+        onToggle={togglePanel}
+        syncLabel={syncLabel}
+        syncError={syncError}
         timelines={timelines}
         templates={templates}
+        timeBlockTemplates={timeBlockTemplates}
+        events={events}
         hiddenTimelineIds={hiddenTimelineIds}
         activeFilters={activeFilters}
         eventCountByTimeline={eventCountByTimeline}
         filterCounts={filterCounts}
         onToggleTimeline={toggleTimeline}
         onToggleFilter={toggleFilter}
-        onNewEvent={() => openEventEditor(null)}
-        onAvailability={openAvailability}
-        onImportICS={openICSImport}
-        onScanFile={handleScanFile}
-        scanLoading={scanLoading}
-        scanResults={scanResults}
-        onApproveScan={handleApproveScan}
-        onDismissScan={handleDismissScan}
-        onClearScan={handleClearScan}
         onNewTimeline={handleNewTimeline}
+        onEditTimeline={handleEditTimeline}
         onRenameTimeline={handleRenameTimeline}
         onDeleteTimeline={handleDeleteTimeline}
+        onExportTimeline={handleExportTimeline}
         onApplyTemplate={handleApplyTemplate}
-        timeBlockTemplates={timeBlockTemplates}
+        onDeleteTemplate={handleDeleteTemplate}
         onNewTimeBlockTemplate={handleNewTimeBlockTemplate}
+        onManageTemplates={openTemplateManager}
         onApplyTimeBlockTemplate={handleApplyTimeBlockTemplate}
         onDeleteTimeBlockTemplate={handleDeleteTimeBlockTemplate}
+        onFindFreeSlots={handleFindFreeSlots}
+        onScheduleSlot={handleScheduleSlot}
         missedCount={missedItems.length}
         onOpenMissed={handleOpenMissed}
-        events={events}
+        onImportICS={openICSImport}
+        onScanSyllabus={openSyllabus}
+        onAvailability={openAvailability}
         miniAnchor={miniAnchor}
+        miniSelected={miniSelected}
         miniRangeStart={miniRange?.start ?? null}
         miniRangeEnd={miniRange?.end ?? null}
         onMiniPick={handleMiniPick}
@@ -1380,10 +1608,23 @@ export function CalendarPage() {
       />
 
       <div ref={mainRef} className={styles.main}>
+        {!panelOpen && (
+          <IconButton
+            className={styles.showPanelBtn}
+            icon={Icons.chevronsRight}
+            label="Show panel"
+            variant="ghost"
+            size="sm"
+            onClick={togglePanel}
+          />
+        )}
+
         {nav.view === 'Year' && (
           <YearView
             events={events}
             timelines={timelines}
+            year={yearCursor}
+            onYearChange={setYearOverride}
             onDayClick={handleYearDayClick}
             onMonthClick={handleYearMonthClick}
             onEventClick={(eid) => {
@@ -1392,121 +1633,130 @@ export function CalendarPage() {
             }}
           />
         )}
-        <div style={{ display: nav.view === 'Year' ? 'none' : undefined, height: '100%' }}>
-        {nav.view === 'Week' && (
-          <div className={styles.weekToolbar}>
-            <button className="loom-btn-ghost" onClick={handleSaveWeekAsTemplate}>
-              Save Week as Template
-            </button>
-          </div>
-        )}
-        <FullCalendar
-          ref={calRef}
-          plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
-          initialView="dayGridMonth"
-          headerToolbar={false}
-          events={fcEvents}
-          eventContent={eventContent}
-          editable
-          droppable={true}
-          eventDurationEditable={true}
-          eventStartEditable={true}
-          selectable
-          selectMirror
-          snapDuration="00:15:00"
-          eventDragMinDistance={5}
-          dragRevertDuration={200}
-          slotEventOverlap={false}
-          nowIndicator={true}
-          dayMaxEvents={true}
-          moreLinkClick="popover"
-          defaultTimedEventDuration="00:30:00"
-          height="100%"
-          // WS6 §1 — descriptive a11y hints ($0 = FC's view-unit / button-text
-          // placeholder). closeHint labels the "+N more" popover's close button.
-          buttonHints={{ prev: 'Previous $0', next: 'Next $0', today: 'This $0' }}
-          viewHint="$0 view"
-          navLinkHint="Go to $0"
-          closeHint="Close"
-          // WS6 §2 — event + day-cell ARIA and roving-nav registration. ARIA goes
-          // on FC's outer element (info.el), never inside the sacred pill.
-          eventDidMount={(info) => {
-            if (info.event.display === 'background') return; // move-mode phantom
-            const ev: Event = info.event.extendedProps.event;
-            const isPrep = !!info.event.extendedProps.isPrepBlock;
-            const start = info.event.start;
-            const end = info.event.end;
-            const tlName = timelines.find(t => t.id === ev.calendar_id)?.name ?? '';
-            const startStr = start ? start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-            const endStr = end ? end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-            const recur = ev.is_recurring ? ', recurring' : '';
-            info.el.setAttribute(
-              'aria-label',
-              `${isPrep ? 'Prep, ' : ''}${ev.title}, ${startStr} to ${endStr}${tlName ? `, ${tlName}` : ''}${recur}`,
-            );
-            info.el.setAttribute('role', 'button');
-            info.el.setAttribute('tabindex', '-1');
-            // Decorative chips inside the pill are already covered by aria-label.
-            info.el
-              .querySelectorAll('[class*="pillTime"],[class*="travelChip"],[class*="pillChk"],[class*="clockDot"],[class*="deadlineChip"]')
-              .forEach(n => n.setAttribute('aria-hidden', 'true'));
-            if (!isPrep && start && end) {
-              registerEl(info.event.id, { el: info.el as HTMLElement, ev, instanceDate: info.event.extendedProps.instanceDate, start, end });
-            }
-          }}
-          eventWillUnmount={(info) => {
-            if (info.event.display === 'background') return;
-            unregisterEl(info.event.id);
-          }}
-          dayCellDidMount={(info) => {
-            info.el.setAttribute('aria-label', info.date.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
-          }}
-          eventDrop={handleEventDrop}
-          eventResize={handleEventResize}
-          eventClick={handleEventClick}
-          eventMouseEnter={handleMouseEnter}
-          eventMouseLeave={handleMouseLeave}
-          select={handleSelect}
-          selectAllow={handleSelectAllow}
-          eventDragStart={handleEventDragStart}
-          eventDragStop={handleEventDragStop}
-          eventAllow={handleEventAllow}
-          eventResizeStart={handleResizeStart}
-          eventResizeStop={handleResizeStop}
-          datesSet={info => {
-            nav.setDateLabel(info.view.title);
-            setQuickCreate(null);
-            setMiniAnchor(info.view.currentStart);
-            setMiniRange({ start: info.start, end: info.end });
-          }}
-          eventClassNames={arg => {
-            const ev: Event = arg.event.extendedProps.event;
-            const classes: string[] = [];
-            if (selectedEventIds.has(ev.id)) classes.push('loom-event-selected');
-            // Dim occurrences whose end is in the past (per-occurrence — uses the
-            // FC event's own end, so a single recurring row dims only its
-            // elapsed instances).
-            if (dimPast && arg.event.end && arg.event.end.getTime() < Date.now()) {
-              classes.push('loom-event-past');
-            }
-            return classes;
-          }}
-        />
 
-        {dragShaderEnabled && (
-          <DragShader dragging={dragging} selectRange={selectRange} fcEvents={fcEvents} />
-        )}
-        <TodayLineFreshness view={nav.view} />
+        <div className={[styles.gridWrap, nav.view === 'Year' ? styles.hidden : ''].join(' ')}>
+          <FullCalendar
+            ref={calRef}
+            plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
+            initialView="dayGridMonth"
+            headerToolbar={false}
+            events={fcEvents}
+            eventContent={eventContent}
+            dayHeaderContent={dayHeaderContent}
+            editable
+            droppable={true}
+            eventDurationEditable={true}
+            eventStartEditable={true}
+            selectable
+            selectMirror
+            snapDuration="00:15:00"
+            eventDragMinDistance={5}
+            dragRevertDuration={200}
+            slotEventOverlap={false}
+            nowIndicator={true}
+            dayMaxEvents={true}
+            moreLinkClick="popover"
+            defaultTimedEventDuration="00:30:00"
+            height="100%"
+            // Descriptive a11y hints ($0 = FC's view-unit / button-text
+            // placeholder). closeHint labels the "+N more" popover's close button.
+            buttonHints={{ prev: 'Previous $0', next: 'Next $0', today: 'This $0' }}
+            viewHint="$0 view"
+            navLinkHint="Go to $0"
+            closeHint="Close"
+            // Event + day-cell ARIA and roving-nav registration. ARIA goes on
+            // FC's outer element (info.el), never inside the pill.
+            eventDidMount={(info) => {
+              if (info.event.display === 'background') return; // move-mode phantom
+              const ev: Event = info.event.extendedProps.event;
+              const isPrep = !!info.event.extendedProps.isPrepBlock;
+              const start = info.event.start;
+              const end = info.event.end;
+              const tlName = timelines.find(t => t.id === ev.calendar_id)?.name ?? '';
+              const startStr = start ? start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+              const endStr = end ? end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+              const recur = ev.is_recurring ? ', recurring' : '';
+              info.el.setAttribute(
+                'aria-label',
+                `${isPrep ? 'Prep, ' : ''}${ev.title}, ${startStr} to ${endStr}${tlName ? `, ${tlName}` : ''}${recur}`,
+              );
+              info.el.setAttribute('role', 'button');
+              info.el.setAttribute('tabindex', '-1');
+              // Decorative chips inside the pill are already covered by aria-label.
+              info.el
+                .querySelectorAll('[class*="pillTime"],[class*="pillChips"]')
+                .forEach(n => n.setAttribute('aria-hidden', 'true'));
+              if (!isPrep && start && end) {
+                registerEl(info.event.id, { el: info.el as HTMLElement, ev, instanceDate: info.event.extendedProps.instanceDate, start, end });
+              }
+            }}
+            eventWillUnmount={(info) => {
+              if (info.event.display === 'background') return;
+              unregisterEl(info.event.id);
+            }}
+            dayCellDidMount={(info) => {
+              info.el.setAttribute('aria-label', info.date.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+            }}
+            eventDrop={handleEventDrop}
+            eventResize={handleEventResize}
+            eventClick={handleEventClick}
+            eventMouseEnter={handleMouseEnter}
+            eventMouseLeave={handleMouseLeave}
+            select={handleSelect}
+            selectAllow={handleSelectAllow}
+            eventDragStart={handleEventDragStart}
+            eventDragStop={handleEventDragStop}
+            eventAllow={handleEventAllow}
+            eventResizeStart={handleResizeStart}
+            eventResizeStop={handleResizeStop}
+            datesSet={info => {
+              nav.setDateLabel(info.view.title);
+              setQuickCreate(null);
+              setMiniAnchor(info.view.currentStart);
+              setMiniSelected(info.view.calendar.getDate());
+              setMiniRange({ start: info.start, end: info.end });
+              setYearOverride(null);
+            }}
+            eventClassNames={arg => {
+              const ev: Event = arg.event.extendedProps.event;
+              const classes: string[] = [];
+              if (selectedEventIds.has(ev.id)) classes.push('loom-event-selected');
+              // Dim occurrences whose end is in the past (per-occurrence — uses the
+              // FC event's own end, so a single recurring row dims only its
+              // elapsed instances).
+              if (dimPast && arg.event.end && arg.event.end.getTime() < Date.now()) {
+                classes.push('loom-event-past');
+              }
+              return classes;
+            }}
+          />
 
-        {nav.view === 'Month' && lastSync && events.length === 0 && !emptyDismissed && (
+          {dragShaderEnabled && (
+            <DragShader dragging={dragging} selectRange={selectRange} fcEvents={fcEvents} />
+          )}
+          <TodayLineFreshness view={nav.view} />
+
+          {nav.view === 'Week' && (
+            <div className={styles.floatLeft}>
+              <Button size="sm" variant="secondary" icon={Icons.bookmark} onClick={handleSaveWeekAsTemplate}>
+                Save week as template
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {showEmpty && (
           <div className={styles.emptyOverlay}>
             <div className={styles.emptyCard}>
-              <p className={styles.emptyText}>
-                Drag on the grid or press <kbd className={styles.emptyKbd}>N</kbd> to create your first event.
-              </p>
-              <button className="loom-btn-ghost" onClick={() => setEmptyDismissed(true)}>
-                Got it
-              </button>
+              <EmptyState
+                icon={Icons.calendar}
+                title={emptyTitle}
+                description={filtersHidingEvents
+                  ? 'Timelines or filters are hiding events. Clear them in the panel, or create a new one.'
+                  : 'Drag on the grid or press N to create one.'}
+                action={{ label: 'New event', icon: Icons.plus, kbd: 'N', onClick: () => openEventEditor(null) }}
+                secondary={{ label: 'Dismiss', onClick: dismissEmpty }}
+              />
             </div>
           </div>
         )}
@@ -1523,6 +1773,7 @@ export function CalendarPage() {
             onEdit={handlePeekEdit}
             onDuplicate={handlePeekDuplicate}
             onDelete={handlePeekDelete}
+            onClockToggle={handlePeekClockToggle}
             onChecklistToggle={idx => void handlePeekChecklistToggle(peek.event, idx)}
             onHoverEnter={cancelPeekHide}
             onHoverLeave={schedulePeekHide}
@@ -1537,68 +1788,58 @@ export function CalendarPage() {
             anchor={quickCreate.anchor}
             timelines={timelines}
             templates={templates}
-            defaultTimelineId={
-              (() => {
-                const last = Number(localStorage.getItem('loom_last_timeline'));
-                return timelines.some(t => t.id === last) ? last : (timelines[0]?.id ?? 0);
-              })()
-            }
+            defaultTimelineId={quickCreateDefaultTimeline}
             onSubmit={handleQuickCreateSubmit}
             onMoreOptions={handleQuickCreateMore}
             onDiscard={discardQuickCreate}
           />
         )}
-        </div>
 
-        <SelectionBar
-          count={selectedEventIds.size}
-          onDelete={() => void bulkDelete()}
-          onSnoozeDay={() => void snoozeSelected(1)}
-          onSnoozeWeek={() => void snoozeSelected(7)}
-          onClear={() => setSelectedEventIds(new Set())}
-        />
-        <WarningStack>
-          {examClusterWarning && !isClusterDismissed(getClusterEventIds(examClusterWarning)) && (
-            <ExamClusterBanner
-              warning={examClusterWarning}
-              onDismiss={() => {
-                markClusterDismissed(getClusterEventIds(examClusterWarning));
-                setExamClusterWarning(null);
-              }}
-            />
-          )}
-          {wellness && (
-            <WellnessToast date={wellness.date} message={wellness.message} />
-          )}
-          {activeTakeaway && (
-            <TakeawayToast
-              key={`${activeTakeaway.event.id}:${activeTakeaway.occurrenceDate}`}
-              event={activeTakeaway.event}
-              occurrenceDate={activeTakeaway.occurrenceDate}
-              onClose={() => setActiveTakeaway(null)}
-            />
-          )}
-          {radar
-            .filter(w => radarDismissed[w.assignment_id] !== w.due_date)
-            .map(w => (
-              <ProcrastinationToast
-                key={w.assignment_id}
-                warning={w}
+        {/* Bottom-center dock: warnings stack, then the selection bar. */}
+        <div className={styles.dock}>
+          <WarningStack>
+            {examClusterWarning && !isClusterDismissed(getClusterEventIds(examClusterWarning)) && (
+              <ExamClusterBanner
+                warning={examClusterWarning}
                 onDismiss={() => {
-                  dismissRadar(w.assignment_id, w.due_date);
-                  setRadarDismissed(prev => ({ ...prev, [w.assignment_id]: w.due_date }));
+                  markClusterDismissed(getClusterEventIds(examClusterWarning));
+                  setExamClusterWarning(null);
                 }}
               />
-            ))}
-        </WarningStack>
+            )}
+            {wellness && (
+              <WellnessToast date={wellness.date} message={wellness.message} />
+            )}
+            {activeTakeaway && (
+              <TakeawayToast
+                key={`${activeTakeaway.event.id}:${activeTakeaway.occurrenceDate}`}
+                event={activeTakeaway.event}
+                occurrenceDate={activeTakeaway.occurrenceDate}
+                onClose={() => setActiveTakeaway(null)}
+              />
+            )}
+            {radar
+              .filter(w => radarDismissed[w.assignment_id] !== w.due_date)
+              .map(w => (
+                <ProcrastinationToast
+                  key={w.assignment_id}
+                  warning={w}
+                  onDismiss={() => {
+                    dismissRadar(w.assignment_id, w.due_date);
+                    setRadarDismissed(prev => ({ ...prev, [w.assignment_id]: w.due_date }));
+                  }}
+                />
+              ))}
+          </WarningStack>
+          <SelectionBar
+            count={selectedEventIds.size}
+            onDelete={() => void bulkDelete()}
+            onSnoozeDay={() => void snoozeSelected(1)}
+            onSnoozeWeek={() => void snoozeSelected(7)}
+            onClear={() => setSelectedEventIds(new Set())}
+          />
+        </div>
       </div>
-    </div>
+    </Page>
   );
-}
-
-export function CalendarSidebarContent() {
-  // CalendarSidebar is rendered inside CalendarPage alongside FullCalendar.
-  // The ContextSidebar in the shell is not used for Calendar — the sidebar
-  // is embedded directly in CalendarPage for tight data coupling.
-  return null;
 }

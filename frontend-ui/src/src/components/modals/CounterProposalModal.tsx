@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { ModalShell, ModalFooter } from './ModalShell';
+import { ModalShell, ModalFooter, ModalStack } from './ModalShell';
+import { Button, Skeleton, Icon, Icons } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
 import { useNotifications } from '../../store/notifications';
 import { getAvailability, respondAmendment } from '../../api';
+import styles from './CounterProposalModal.module.css';
 
 interface CounterProposalModalProps {
   token: string;
@@ -15,23 +17,23 @@ interface Slot {
   end: string;
 }
 
-function formatSlot(slot: Slot): string {
+function formatSlot(slot: Slot): { day: string; time: string } {
   try {
     const d = new Date(`${slot.date}T${slot.start}`);
-    const dayLabel = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-    return `${dayLabel}, ${slot.start}–${slot.end}`;
+    const day = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    return { day, time: `${slot.start} – ${slot.end}` };
   } catch {
-    return `${slot.date} ${slot.start}–${slot.end}`;
+    return { day: slot.date, time: `${slot.start} – ${slot.end}` };
   }
 }
 
-export function CounterProposalModal({ token }: CounterProposalModalProps) {
+export function CounterProposalModal({ token, onSaved }: CounterProposalModalProps) {
   const { close } = useModal();
   const { addNotification } = useNotifications();
   const [slot, setSlot] = useState<Slot | null>(null);
   const [receiverName, setReceiverName] = useState('');
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<'accept' | 'decline' | null>(null);
 
   useEffect(() => {
     getAvailability(token)
@@ -52,78 +54,79 @@ export function CounterProposalModal({ token }: CounterProposalModalProps) {
   }, [token, close, addNotification]);
 
   async function handleAccept() {
-    setSubmitting(true);
+    setSubmitting('accept');
     try {
       await respondAmendment(token, { action: 'accept' });
       addNotification({ type: 'success', title: 'Counter-proposal accepted', autoRemoveMs: 4000 });
+      onSaved();
       close();
     } catch {
-      addNotification({ type: 'error', title: 'Failed to accept', message: 'Could not respond to proposal.' });
+      addNotification({ type: 'error', title: 'Failed to accept', message: 'Could not respond to the proposal.' });
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   }
 
   async function handleDecline() {
-    setSubmitting(true);
+    setSubmitting('decline');
     try {
       await respondAmendment(token, { action: 'decline' });
       addNotification({ type: 'info', title: 'Counter-proposal declined', autoRemoveMs: 4000 });
       close();
     } catch {
-      addNotification({ type: 'error', title: 'Failed to decline', message: 'Could not respond to proposal.' });
+      addNotification({ type: 'error', title: 'Failed to decline', message: 'Could not respond to the proposal.' });
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   }
 
+  const formatted = slot ? formatSlot(slot) : null;
+
   return (
-    <ModalShell title="Counter-proposal received" width={400} onClose={close}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {loading && (
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>Loading…</p>
-        )}
-        {!loading && (
-          <>
-            {receiverName && (
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
-                From: <strong style={{ color: 'var(--text-main)' }}>{receiverName}</strong>
-              </p>
-            )}
-            <div style={{
-              padding: '14px 16px',
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 8,
-              fontSize: 15,
-              fontWeight: 600,
-              color: 'var(--text-main)',
-              textAlign: 'center',
-            }}>
-              {slot ? formatSlot(slot) : 'No time slot provided'}
+    <ModalShell
+      title="Counter-proposal"
+      subtitle={receiverName ? `From ${receiverName}` : undefined}
+      size="sm"
+      onClose={close}
+    >
+      <ModalStack>
+        {loading ? (
+          <div className={styles.slotBox}>
+            <Skeleton width="60%" height={16} />
+            <Skeleton width="40%" height={22} />
+          </div>
+        ) : formatted ? (
+          <div className={styles.slotBox}>
+            <span className={styles.slotIcon}><Icon d={Icons.calendar} size={16} /></span>
+            <div className={styles.slotText}>
+              <div className={styles.slotDay}>{formatted.day}</div>
+              <div className={styles.slotTime}>{formatted.time}</div>
             </div>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
-              Accept to confirm this new time, or decline to cancel the request.
-            </p>
-          </>
+          </div>
+        ) : (
+          <div className={styles.slotBox}>
+            <span className={styles.slotIcon}><Icon d={Icons.alertCircle} size={16} /></span>
+            <div className={styles.slotText}>
+              <div className={styles.slotDay}>No time slot provided</div>
+            </div>
+          </div>
         )}
-      </div>
-      <ModalFooter>
-        <button
-          className="loom-btn-ghost"
-          onClick={handleDecline}
-          disabled={loading || submitting}
-          style={{ color: 'var(--error)' }}
-        >
-          {submitting ? '…' : 'Decline'}
-        </button>
-        <button
-          className="loom-btn-primary"
-          onClick={handleAccept}
-          disabled={loading || submitting || !slot}
-        >
-          {submitting ? '…' : 'Accept'}
-        </button>
+        <p className={styles.help}>
+          Accept to confirm this new time on your calendar, or decline to cancel the request.
+        </p>
+      </ModalStack>
+
+      <ModalFooter
+        left={(
+          <Button variant="danger" onClick={() => { void handleDecline(); }} disabled={loading || submitting !== null} loading={submitting === 'decline'}>
+            Decline
+          </Button>
+        )}
+      >
+        <Button variant="ghost" onClick={close}>Later</Button>
+        <Button variant="primary" icon={Icons.check} onClick={() => { void handleAccept(); }} disabled={loading || submitting !== null || !slot} loading={submitting === 'accept'}>
+          Accept
+        </Button>
       </ModalFooter>
     </ModalShell>
   );

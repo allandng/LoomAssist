@@ -1,24 +1,21 @@
-// Phase v3.0: ProviderPicker — modal opened from "Add connection" in Settings.
-// Four cards: Google · iCloud · Generic CalDAV · Microsoft (disabled, "v3.1").
+// ProviderPicker — opened from "Add connection" in Settings.
+// Google · iCloud · Generic CalDAV · Microsoft (unavailable).
 //
 // Picking Google opens the system browser (via tauri-plugin-opener) with the
 // Supabase-issued auth URL. iCloud / generic CalDAV open the credentials form.
-// Microsoft is disabled per design doc §9 deferred list.
 
 import { useState } from 'react';
 import { useModal } from '../../contexts/ModalContext';
 import { useNotifications } from '../../store/notifications';
-import { Icon, Icons } from '../shared/Icon';
+import { ModalShell, ModalStack } from '../modals/ModalShell';
+import { Badge, Icon, Icons } from '../ui';
+import { ProviderGlyph, type ProviderGlyphKind } from './ProviderGlyph';
 import { startGoogleConnection } from '../../api';
 import styles from './connections.module.css';
 
 type Kind = 'google' | 'caldav_icloud' | 'caldav_generic';
 
-export function ProviderPickerModal({
-  onPicked,
-}: {
-  onPicked?: (kind: Kind) => void;
-}) {
+export function ProviderPickerModal({ onPicked }: { onPicked?: (kind: Kind) => void }) {
   const { close, openCalDAVCredentials } = useModal();
   const { addNotification } = useNotifications();
   const [busy, setBusy] = useState(false);
@@ -36,8 +33,8 @@ export function ProviderPickerModal({
       window.open(auth_url, '_blank');
       addNotification({
         type: 'info',
-        title: 'Complete Google sign-in in your browser',
-        message: 'When you’re done, return here and the connection will appear in Settings.',
+        title: 'Finish Google sign-in in your browser',
+        message: 'When you’re done, come back here — the connection appears in Settings.',
       });
     } catch (e) {
       addNotification({
@@ -58,85 +55,82 @@ export function ProviderPickerModal({
         title: 'Connection added',
         message: 'Pick which calendars to sync next.',
       });
-      // The subscribe drawer is opened by CalDAVCredentialsModal itself via
-      // useModal; nothing more to do here.
+      // The subscribe drawer is opened by CalDAVCredentialsModal itself.
     });
   }
 
   return (
-    <div className={styles.shell} role="dialog" aria-modal="true" aria-label="Add connection">
-      <div className={styles.header}>
-        <span className={styles.headerTitle}>Add a calendar connection</span>
-        <button className={styles.closeBtn} onClick={() => close()}>
-          <Icon d={Icons.x} size={14} />
-        </button>
-      </div>
-
-      <div className={styles.body}>
+    <ModalShell title="Add a calendar connection" subtitle="Sync runs from this device straight to your provider" size="md" onClose={close}>
+      <ModalStack>
         <p className={styles.lede}>
-          LoomAssist syncs <em>directly</em> from this device to your calendar provider — no
-          LoomAssist server in between. Tokens live in your macOS Keychain.
+          No LoomAssist server sits in between. Sign-in tokens are stored in your system keychain and never leave this device.
         </p>
         <div className={styles.providerGrid}>
           <ProviderCard
-            icon={Icons.mail}
+            glyph="google"
             name="Google Calendar"
-            sub="OAuth 2.0 · sync any of your Google calendars"
-            onClick={handleGoogle}
+            sub="Sign in with Google · sync any of your calendars"
+            onClick={() => { void handleGoogle(); }}
             disabled={busy}
+            loading={busy}
           />
           <ProviderCard
-            icon={Icons.upload}
+            glyph="caldav_icloud"
             name="iCloud"
-            sub="CalDAV · requires an app-specific password"
+            sub="CalDAV · needs an app-specific password"
             onClick={() => handleCalDAV('caldav_icloud')}
             disabled={busy}
           />
           <ProviderCard
-            icon={Icons.doc}
-            name="Generic CalDAV"
+            glyph="caldav_generic"
+            name="CalDAV server"
             sub="Fastmail, Nextcloud, anything CalDAV"
             onClick={() => handleCalDAV('caldav_generic')}
             disabled={busy}
           />
           <ProviderCard
-            icon={Icons.help}
+            glyph="microsoft"
             name="Microsoft Outlook"
-            sub="Coming in v3.1"
-            badge="Soon"
+            sub="Outlook and Microsoft 365 calendars"
+            badge="Unavailable"
             disabled
           />
         </div>
-      </div>
-    </div>
+      </ModalStack>
+    </ModalShell>
   );
 }
 
 function ProviderCard({
-  icon, name, sub, badge, disabled, onClick,
+  glyph, name, sub, badge, disabled, loading, onClick,
 }: {
-  icon: React.ReactNode;
+  glyph: ProviderGlyphKind;
   name: string;
   sub: string;
   badge?: string;
   disabled?: boolean;
+  loading?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
-      className={`${styles.providerCard} ${disabled ? styles.providerCardDisabled : ''}`}
+      className={[styles.providerCard, disabled && !loading ? styles.providerCardDisabled : ''].join(' ')}
       type="button"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
+      aria-busy={loading || undefined}
     >
-      <div className={styles.providerLogo}><Icon d={icon} size={18} /></div>
-      <div style={{ flex: 1 }}>
-        <div className={styles.providerName}>
+      <span className={styles.providerLogo}>
+        {loading ? <Icon d={Icons.loader} size={18} className={styles.spin} /> : <ProviderGlyph kind={glyph} size={18} />}
+      </span>
+      <span className={styles.providerText}>
+        <span className={styles.providerName}>
           {name}
-          {badge && <span className={styles.soonChip}>{badge}</span>}
-        </div>
-        <div className={styles.providerSub}>{sub}</div>
-      </div>
+          {badge && <Badge size="sm" outline>{badge}</Badge>}
+        </span>
+        <span className={styles.providerSub}>{sub}</span>
+      </span>
+      {!disabled && <span className={styles.providerArrow}><Icon d={Icons.chevronRight} size={14} /></span>}
     </button>
   );
 }

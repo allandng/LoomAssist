@@ -1,612 +1,430 @@
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useState } from 'react';
 import styles from './CalendarSidebar.module.css';
-import { Icon, Icons } from '../shared/Icon';
-import { Kbd } from '../shared/Kbd';
-import { SectionLabel } from '../shared/SectionLabel';
+import {
+  Badge, Button, Checkbox, IconButton, Icon, Icons, Menu, Section, Select, prompt,
+} from '../ui';
 import { MiniCalendar } from './MiniCalendar';
-import { useModal } from '../../contexts/ModalContext';
-import type { Calendar, Event, EventTemplate, SyllabusEvent, FreeSlot, TimeBlockTemplate } from '../../types';
-
-export interface ScanEventEdit {
-  title: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  calendarId: number;
-}
+import type { Calendar, Event, EventTemplate, FreeSlot, TimeBlockTemplate } from '../../types';
 
 const FILTERS = [
-  { id: 'checklist', label: 'Has checklist', icon: Icons.filter },
-  { id: 'recurring', label: 'Recurring only', icon: Icons.sync },
+  { id: 'checklist', label: 'Has checklist', icon: Icons.tasks },
+  { id: 'recurring', label: 'Recurring only', icon: Icons.repeat },
   { id: 'thisweek',  label: 'This week',      icon: Icons.clock },
 ] as const;
 
-interface CalendarSidebarProps {
-  open?: boolean;
-  onToggle?: () => void;
-  onFindFreeSlots: (durationMins: number) => Promise<FreeSlot[]>;
-  onScheduleSlot: (startISO: string, endISO: string) => void;
+// Working-hours choices for "Find free time" (whole hours, 24h clock).
+const HOURS = Array.from({ length: 19 }, (_, i) => i + 5); // 05:00 … 23:00
+const fmtHour = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+export interface CalendarSidebarProps {
+  open: boolean;
+  onToggle: () => void;
+  /** Sync status rendered as a dot badge in the panel header. */
+  syncLabel: string;
+  syncError: boolean;
+
   timelines: Calendar[];
   templates: EventTemplate[];
+  timeBlockTemplates: TimeBlockTemplate[];
+  events: Event[];
   hiddenTimelineIds: Set<number>;
   activeFilters: Set<string>;
   eventCountByTimeline: Record<number, number>;
   filterCounts: Record<string, number>;
+
   onToggleTimeline: (id: number) => void;
   onToggleFilter: (id: string) => void;
-  onNewEvent: () => void;
-  onAvailability: () => void;
-  onImportICS: () => void;
-  onScanFile: (file: File) => void;
-  scanLoading?: boolean;
-  scanResults?: SyllabusEvent[] | null;
-  onApproveScan: (ev: ScanEventEdit, idx: number) => void;
-  onDismissScan: (idx: number) => void;
-  onClearScan: () => void;
   onNewTimeline: () => void;
+  onEditTimeline: (id: number) => void;
   onRenameTimeline: (id: number, name: string) => void;
   onDeleteTimeline: (id: number) => void;
+  onExportTimeline: (id: number) => void;
+
   onApplyTemplate: (t: EventTemplate) => void;
-  timeBlockTemplates: TimeBlockTemplate[];
+  onDeleteTemplate: (id: number) => void;
   onNewTimeBlockTemplate: () => void;
-  onApplyTimeBlockTemplate: (tplId: number, weekMondayDate: string) => void;
+  /** Opens the event-template manager (apply / delete saved event templates). */
+  onManageTemplates?: () => void;
+  onApplyTimeBlockTemplate: (tplId: number) => void;
   onDeleteTimeBlockTemplate: (id: number) => void;
+
+  onFindFreeSlots: (durationMins: number, workingStart: number, workingEnd: number) => Promise<FreeSlot[]>;
+  onScheduleSlot: (startISO: string, endISO: string) => void;
+
   missedCount: number;
   onOpenMissed: () => void;
-  // WS4 #10 — mini-calendar data + navigation.
-  events: Event[];
+
+  onImportICS: () => void;
+  onScanSyllabus: () => void;
+  onAvailability: () => void;
+
+  // Mini-calendar data + navigation.
   miniAnchor: Date;
+  miniSelected: Date | null;
   miniRangeStart: Date | null;
   miniRangeEnd: Date | null;
   onMiniPick: (d: Date) => void;
   onMiniPickDay: (d: Date) => void;
 }
 
-// ── Scan event card ──────────────────────────────────────────────
-
-function ScanEventCard({
-  ev,
-  defaultCalendarId,
-  timelines,
-  onApprove,
-  onDismiss,
-}: {
-  ev: SyllabusEvent;
-  defaultCalendarId: number;
-  timelines: Calendar[];
-  onApprove: (e: ScanEventEdit) => void;
-  onDismiss: () => void;
-}) {
-  const [title,      setTitle]      = useState(ev.title);
-  const [date,       setDate]       = useState(ev.date ?? '');
-  const [startTime,  setStartTime]  = useState(ev.start_time ?? '');
-  const [endTime,    setEndTime]    = useState(ev.end_time ?? '');
-  const [calendarId, setCalendarId] = useState(ev.calendar_id ?? defaultCalendarId);
-
-  return (
-    <div className={styles.scanCard}>
-      <input
-        className={styles.scanField}
-        value={title}
-        onChange={e => setTitle(e.target.value)}
-        placeholder="Event name"
-      />
-      <div className={styles.scanTimeRow}>
-        <input
-          type="date"
-          className={styles.scanField}
-          value={date}
-          onChange={e => setDate(e.target.value)}
-        />
-        <input
-          type="time"
-          className={styles.scanField}
-          value={startTime}
-          onChange={e => setStartTime(e.target.value)}
-        />
-        <input
-          type="time"
-          className={styles.scanField}
-          value={endTime}
-          onChange={e => setEndTime(e.target.value)}
-        />
-      </div>
-      <select
-        className={styles.scanField}
-        value={calendarId}
-        onChange={e => setCalendarId(Number(e.target.value))}
-      >
-        {timelines.map(t => (
-          <option key={t.id} value={t.id}>{t.name}</option>
-        ))}
-      </select>
-      <div className={styles.scanCardActions}>
-        <button
-          className={styles.scanApproveBtn}
-          onClick={() => onApprove({ title, date, startTime, endTime, calendarId })}
-          disabled={!title.trim() || !date}
-        >
-          ✓ Add
-        </button>
-        <button className={styles.scanDismissBtn} onClick={onDismiss}>
-          Dismiss
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Main sidebar ─────────────────────────────────────────────────
-
-export function CalendarSidebar({
-  open = true,
-  onToggle,
-  onFindFreeSlots,
-  onScheduleSlot,
-  timelines,
-  templates,
-  hiddenTimelineIds,
-  activeFilters,
-  eventCountByTimeline,
-  filterCounts,
-  onToggleTimeline,
-  onToggleFilter,
-  onNewEvent,
-  onAvailability,
-  onImportICS,
-  onScanFile,
-  scanLoading = false,
-  scanResults = null,
-  onApproveScan,
-  onDismissScan,
-  onClearScan,
-  onNewTimeline,
-  onRenameTimeline,
-  onDeleteTimeline,
-  onApplyTemplate,
-  timeBlockTemplates,
-  onNewTimeBlockTemplate,
-  onApplyTimeBlockTemplate,
-  onDeleteTimeBlockTemplate,
-  missedCount,
-  onOpenMissed,
-  events,
-  miniAnchor,
-  miniRangeStart,
-  miniRangeEnd,
-  onMiniPick,
-  onMiniPickDay,
-}: CalendarSidebarProps) {
-  const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
-  const { openTimelineEditor } = useModal();
-  const [renamingId,  setRenamingId]  = useState<number | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const renameRef  = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Time Block Template apply week-picker state
-  const [applyWeekFor,   setApplyWeekFor]   = useState<number | null>(null);
-  const [applyWeekValue, setApplyWeekValue] = useState('');
-  // WS3 #11 — inline two-step confirm for time-block-template delete (the button
-  // flips to "Delete?" for 3s instead of a no-confirm native OS dialog).
-  const [confirmDeleteTbt, setConfirmDeleteTbt] = useState<number | null>(null);
-  const confirmDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const requestDeleteTbt = useCallback((id: number) => {
-    if (confirmDeleteTbt === id) {
-      if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
-      setConfirmDeleteTbt(null);
-      onDeleteTimeBlockTemplate(id);
-      return;
-    }
-    setConfirmDeleteTbt(id);
-    if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
-    confirmDeleteTimerRef.current = setTimeout(() => setConfirmDeleteTbt(null), 3000);
-  }, [confirmDeleteTbt, onDeleteTimeBlockTemplate]);
+/**
+ * Calendar context panel (left of the grid). Collapsible to zero width; the
+ * page owns the open state and persists it under `loom:panel:calendar`.
+ */
+export function CalendarSidebar(props: CalendarSidebarProps) {
+  const {
+    open, onToggle, syncLabel, syncError,
+    timelines, templates, timeBlockTemplates, events,
+    hiddenTimelineIds, activeFilters, eventCountByTimeline, filterCounts,
+    onToggleTimeline, onToggleFilter, onNewTimeline, onEditTimeline, onRenameTimeline, onDeleteTimeline, onExportTimeline,
+    onApplyTemplate, onDeleteTemplate, onNewTimeBlockTemplate, onManageTemplates, onApplyTimeBlockTemplate, onDeleteTimeBlockTemplate,
+    onFindFreeSlots, onScheduleSlot, missedCount, onOpenMissed,
+    onImportICS, onScanSyllabus, onAvailability,
+    miniAnchor, miniSelected, miniRangeStart, miniRangeEnd, onMiniPick, onMiniPickDay,
+  } = props;
 
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [freeOpen, setFreeOpen] = useState(false);
+  const [freeDuration, setFreeDuration] = useState(60);
+  const [freeStart, setFreeStart] = useState(9);
+  const [freeEnd, setFreeEnd] = useState(18);
+  const [freeLoading, setFreeLoading] = useState(false);
+  const [freeSlots, setFreeSlots] = useState<FreeSlot[]>([]);
+  const [freeSearched, setFreeSearched] = useState(false);
+  const [freeError, setFreeError] = useState<string | null>(null);
 
-  // Smart Scheduler state
-  const [schedulerOpen,     setSchedulerOpen]     = useState(false);
-  const [schedulerDuration, setSchedulerDuration] = useState(60);
-  const [schedulerLoading,  setSchedulerLoading]  = useState(false);
-  const [schedulerSlots,    setSchedulerSlots]    = useState<FreeSlot[]>([]);
-  const [schedulerSearched, setSchedulerSearched] = useState(false);
-
-  const handleFindSlots = useCallback(async () => {
-    setSchedulerLoading(true);
-    setSchedulerSlots([]);
-    setSchedulerSearched(false);
+  const handleFind = useCallback(async () => {
+    setFreeLoading(true);
+    setFreeSlots([]);
+    setFreeSearched(false);
+    setFreeError(null);
     try {
-      const slots = await onFindFreeSlots(schedulerDuration);
-      setSchedulerSlots(slots);
+      setFreeSlots(await onFindFreeSlots(freeDuration, freeStart, freeEnd));
+    } catch {
+      setFreeError('Could not search. Is the backend running?');
     } finally {
-      setSchedulerLoading(false);
-      setSchedulerSearched(true);
+      setFreeLoading(false);
+      setFreeSearched(true);
     }
-  }, [onFindFreeSlots, schedulerDuration]);
+  }, [onFindFreeSlots, freeDuration, freeStart, freeEnd]);
 
-  const startRename = useCallback((t: Calendar) => {
-    setRenamingId(t.id);
-    setRenameValue(t.name);
-    setMenuOpenFor(null);
-  }, []);
+  const renameTimeline = useCallback(async (t: Calendar) => {
+    const name = await prompt({
+      title: 'Rename timeline',
+      label: 'Name',
+      defaultValue: t.name,
+      confirmLabel: 'Rename',
+      validate: v => (v.trim() ? null : 'Enter a name'),
+    });
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (trimmed && trimmed !== t.name) onRenameTimeline(t.id, trimmed);
+  }, [onRenameTimeline]);
 
-  const commitRename = useCallback(() => {
-    if (renamingId !== null && renameValue.trim()) {
-      onRenameTimeline(renamingId, renameValue.trim());
-    }
-    setRenamingId(null);
-  }, [renamingId, renameValue, onRenameTimeline]);
-
-  const isScanMode = scanLoading || scanResults !== null;
-  const defaultCalendarId = timelines[0]?.id ?? 0;
-
-  // ── Header label
-  let headerTitle = 'Calendar';
-  if (scanLoading)                               headerTitle = 'Scanning…';
-  else if (scanResults !== null && scanResults.length > 0) headerTitle = `Scan Results · ${scanResults.length}`;
-  else if (scanResults !== null)                 headerTitle = 'Scan Results';
+  const hasTemplates = templates.length > 0 || timeBlockTemplates.length > 0;
 
   return (
-    <div className={`${styles.sidebar} ${open ? '' : styles.collapsed}`}>
-
-      {/* Header */}
-      <div className={styles.header}>
-        <button
-          className={styles.toggleBtn}
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-label="Toggle sidebar"
-        >
-          <Icon d={open ? Icons.chevronLeft : Icons.chevronRight} size={14} />
-        </button>
-        {open && <span className={styles.headerTitle}>{headerTitle}</span>}
-        {open && isScanMode && (
-          <button className={styles.scanClear} onClick={onClearScan} title="Cancel scan">
-            ✕
-          </button>
-        )}
-      </div>
-
-      {/* ── Scan mode ──────────────────── */}
-      {open && isScanMode && (
-        scanLoading ? (
-          <div className={styles.scanLoading}>
-            <div className={styles.scanSpinner} />
-            <span>Reading file…</span>
-          </div>
-        ) : (
-          <div className={styles.scanList}>
-            {(scanResults ?? []).map((ev, idx) => (
-              <ScanEventCard
-                key={idx}
-                ev={ev}
-                defaultCalendarId={defaultCalendarId}
-                timelines={timelines}
-                onApprove={edit => onApproveScan(edit, idx)}
-                onDismiss={() => onDismissScan(idx)}
-              />
-            ))}
-          </div>
-        )
-      )}
-
-      {/* ── Normal mode ────────────────── */}
-      {open && !isScanMode && (
-        <div className={styles.scroll}>
-          <MiniCalendar
-            events={events}
-            timelines={timelines}
-            anchorDate={miniAnchor}
-            rangeStart={miniRangeStart}
-            rangeEnd={miniRangeEnd}
-            onPick={onMiniPick}
-            onPickDay={onMiniPickDay}
-          />
-
-          {/* Timelines */}
-          <SectionLabel right={
-            <button className={styles.miniPlus} onClick={onNewTimeline} title="New timeline">
-              <Icon d={Icons.plus} size={11} />
-            </button>
-          }>
-            Timelines
-          </SectionLabel>
-
-          <div className={styles.tlList}>
-            {timelines.map(t => {
-              const checked    = !hiddenTimelineIds.has(t.id);
-              const isRenaming = renamingId === t.id;
-              return (
-                <div key={t.id} className={styles.tlRow}>
-                  <button
-                    className={styles.tlCheckbox}
-                    style={{
-                      background:  checked ? t.color : 'transparent',
-                      borderColor: checked ? t.color : 'var(--border-strong)',
-                    }}
-                    onClick={() => onToggleTimeline(t.id)}
-                    aria-checked={checked}
-                    role="checkbox"
-                    aria-label={`Show ${t.name}`}
-                  >
-                    {checked && <Icon d={Icons.check} size={9} stroke="#0B1120" strokeWidth={3} />}
-                  </button>
-
-                  {isRenaming ? (
-                    <input
-                      ref={renameRef}
-                      className={styles.renameInput}
-                      value={renameValue}
-                      onChange={e => setRenameValue(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter')  commitRename();
-                        if (e.key === 'Escape') setRenamingId(null);
-                      }}
-                      onFocus={e => (e.target as HTMLInputElement).select()}
-                      autoFocus
-                    />
-                  ) : (
-                    <span
-                      className={styles.tlName}
-                      style={{ color: checked ? 'var(--text-main)' : 'var(--text-muted)' }}
-                      onDoubleClick={e => { e.stopPropagation(); startRename(t); }}
-                    >
-                      {t.name}
-                    </span>
-                  )}
-
-                  <span className={styles.tlCount}>{eventCountByTimeline[t.id] ?? 0}</span>
-
-                  <button
-                    className={styles.moreBtn}
-                    onClick={e => { e.stopPropagation(); setMenuOpenFor(menuOpenFor === t.id ? null : t.id); }}
-                    aria-label={`${t.name} options`}
-                  >
-                    <Icon d={Icons.more} size={13} />
-                  </button>
-
-                  {menuOpenFor === t.id && (
-                    <div className={styles.tlMenu}>
-                      <button onClick={() => startRename(t)}>Rename</button>
-                      <button onClick={() => { setMenuOpenFor(null); openTimelineEditor(t.id); }}>Edit…</button>
-                      <button onClick={() => { setMenuOpenFor(null); onDeleteTimeline(t.id); }}>Delete</button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+    <aside
+      className={[styles.panel, open ? '' : styles.collapsed].join(' ')}
+      aria-label="Calendar panel"
+      aria-hidden={!open}
+    >
+      {open && (
+        <>
+          <div className={styles.header}>
+            <span className={styles.headerTitle}>Calendar</span>
+            <Badge size="sm" dot tone={syncError ? 'error' : 'success'} title={syncLabel}>
+              {syncLabel}
+            </Badge>
+            <IconButton
+              className={styles.collapseBtn}
+              icon={Icons.chevronsLeft}
+              label="Hide panel"
+              size="sm"
+              onClick={onToggle}
+            />
           </div>
 
-          {/* Filters */}
-          <SectionLabel right={
-            <button
-              className={styles.miniPlus}
-              onClick={() => setFiltersOpen(o => !o)}
-              title={filtersOpen ? 'Collapse' : 'Expand'}
-            >
-              <Icon d={Icons.chevronDown} size={11} style={{ transform: filtersOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms' }} />
-            </button>
-          }>
-            Filters
-          </SectionLabel>
-          {filtersOpen && (
-            <div className={styles.filterList}>
-              {FILTERS.map(f => {
-                const active = activeFilters.has(f.id);
-                return (
-                  <button
-                    key={f.id}
-                    className={`${styles.filterChip} ${active ? styles.filterChipActive : ''}`}
-                    onClick={() => onToggleFilter(f.id)}
-                  >
-                    <Icon d={f.icon} size={12} />
-                    <span>{f.label}</span>
-                    <span className={styles.filterCount}>{filterCounts[f.id] ?? 0}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div className={styles.scroll}>
+            <MiniCalendar
+              events={events}
+              timelines={timelines}
+              anchorDate={miniAnchor}
+              selectedDate={miniSelected}
+              rangeStart={miniRangeStart}
+              rangeEnd={miniRangeEnd}
+              onPick={onMiniPick}
+              onPickDay={onMiniPickDay}
+            />
 
-          {/* Templates */}
-          {templates.length > 0 && (
-            <>
-              <SectionLabel right={<span className={styles.tplCount}>{templates.length}</span>}>
-                Templates
-              </SectionLabel>
-              <div className={styles.tplList}>
-                {templates.map(t => (
-                  <button key={t.id} className={styles.tplCard} onClick={() => onApplyTemplate(t)}>
-                    <div className={styles.tplName}>{t.name}</div>
-                    <div className={styles.tplMeta}>
-                      {t.duration_minutes} min{t.is_recurring ? ' · recurring' : ''}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* Time Block Templates */}
-          <SectionLabel right={
-            <button className={styles.miniPlus} onClick={onNewTimeBlockTemplate} title="New time block template">+</button>
-          }>
-            Time Block Templates
-          </SectionLabel>
-          {timeBlockTemplates.length > 0 && (
-            <div className={styles.tbtList}>
-              {timeBlockTemplates.map(t => (
-                <div key={t.id} className={styles.tbtRow}>
-                  <span className={styles.tbtName}>{t.name}</span>
-                  <div className={styles.tbtActions}>
-                    {applyWeekFor === t.id ? (
-                      <>
-                        <input
-                          type="week"
-                          className={styles.weekPicker}
-                          value={applyWeekValue}
-                          onChange={e => setApplyWeekValue(e.target.value)}
+            {/* ── Timelines ─────────────────────────────────────────── */}
+            <div className={styles.group}>
+              <Section
+                small
+                title="Timelines"
+                actions={<IconButton icon={Icons.plus} label="New timeline" size="sm" onClick={onNewTimeline} />}
+              >
+                <div className={styles.list}>
+                  {timelines.map(t => {
+                    const checked = !hiddenTimelineIds.has(t.id);
+                    return (
+                      <div key={t.id} className={styles.tlRow}>
+                        <Checkbox
+                          color={t.color}
+                          checked={checked}
+                          onChange={() => onToggleTimeline(t.id)}
+                          aria-label={`Show ${t.name}`}
                         />
-                        <button
-                          className={styles.tbtApplyConfirm}
-                          disabled={!applyWeekValue}
-                          onClick={() => {
-                            if (!applyWeekValue) return;
-                            const [yearStr, weekStr] = applyWeekValue.split('-W');
-                            const year = Number(yearStr);
-                            const week = Number(weekStr);
-                            // ISO 8601: Jan 4 is always in week 1
-                            const jan4 = new Date(year, 0, 4);
-                            const dayOfWeek = jan4.getDay() || 7;
-                            const monday = new Date(jan4);
-                            monday.setDate(jan4.getDate() - (dayOfWeek - 1) + (week - 1) * 7);
-                            const mondayISO = monday.toISOString().slice(0, 10);
-                            onApplyTimeBlockTemplate(t.id, mondayISO);
-                            setApplyWeekFor(null);
-                            setApplyWeekValue('');
-                          }}
+                        <span
+                          className={[styles.tlName, checked ? '' : styles.tlNameHidden].join(' ')}
+                          onDoubleClick={() => void renameTimeline(t)}
+                          title="Double-click to rename"
                         >
-                          Apply
-                        </button>
-                        <button
-                          className={styles.tbtCancel}
-                          onClick={() => { setApplyWeekFor(null); setApplyWeekValue(''); }}
-                        >
-                          ✕
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        className={styles.tbtApplyBtn}
-                        onClick={() => setApplyWeekFor(t.id)}
-                        title="Apply to week"
-                      >
-                        Apply ▶
-                      </button>
-                    )}
-                    <button
-                      className={styles.tbtDeleteBtn}
-                      onClick={() => requestDeleteTbt(t.id)}
-                      title={confirmDeleteTbt === t.id ? 'Click again to confirm' : 'Delete template'}
-                    >
-                      {confirmDeleteTbt === t.id ? 'Delete?' : '🗑'}
-                    </button>
-                  </div>
+                          {t.name}
+                        </span>
+                        <Badge size="sm">{eventCountByTimeline[t.id] ?? 0}</Badge>
+                        <Menu
+                          align="end"
+                          width={200}
+                          trigger={({ open: menuOpen, toggle, ref, ...a }) => (
+                            <IconButton
+                              ref={ref}
+                              onClick={toggle}
+                              icon={Icons.moreVertical}
+                              label={`${t.name} options`}
+                              size="sm"
+                              active={menuOpen}
+                              className={styles.rowMenuBtn}
+                              {...a}
+                            />
+                          )}
+                          items={[
+                            { id: 'rename', label: 'Rename', icon: Icons.pencil, onSelect: () => void renameTimeline(t) },
+                            { id: 'edit',   label: 'Edit',   icon: Icons.settings, onSelect: () => onEditTimeline(t.id) },
+                            { id: 'export', label: 'Export .ics', icon: Icons.download, onSelect: () => onExportTimeline(t.id) },
+                            { separator: true },
+                            { id: 'delete', label: 'Delete', icon: Icons.trash, danger: true, onSelect: () => onDeleteTimeline(t.id) },
+                          ]}
+                        />
+                      </div>
+                    );
+                  })}
+                  {timelines.length === 0 && (
+                    <p className={styles.muted}>No timelines yet.</p>
+                  )}
                 </div>
-              ))}
+              </Section>
             </div>
-          )}
 
-          {/* Smart Scheduler */}
-          <SectionLabel right={
-            <button
-              className={styles.miniPlus}
-              onClick={() => setSchedulerOpen(o => !o)}
-              title={schedulerOpen ? 'Collapse' : 'Expand'}
-            >
-              <Icon d={Icons.chevronDown} size={11} style={{ transform: schedulerOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms' }} />
-            </button>
-          }>
-            Find Free Time
-          </SectionLabel>
-
-          {schedulerOpen && (
-            <div className={styles.schedulerPanel}>
-              <div className={styles.schedulerRow}>
-                <select
-                  className={styles.schedulerSelect}
-                  value={schedulerDuration}
-                  onChange={e => setSchedulerDuration(Number(e.target.value))}
-                >
-                  <option value={30}>30 min</option>
-                  <option value={60}>1 hour</option>
-                  <option value={90}>90 min</option>
-                  <option value={120}>2 hours</option>
-                </select>
-                <button
-                  className={styles.schedulerFindBtn}
-                  onClick={handleFindSlots}
-                  disabled={schedulerLoading}
-                >
-                  {schedulerLoading ? '…' : 'Search'}
-                </button>
-              </div>
-
-              {schedulerSlots.map((slot, i) => {
-                const s = new Date(slot.start);
-                const e = new Date(slot.end);
-                const dateStr = s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-                const timeStr = `${s.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-                return (
-                  <button
-                    key={i}
-                    className={styles.schedulerSlot}
-                    onClick={() => onScheduleSlot(slot.start, slot.end)}
-                  >
-                    <span className={styles.schedulerSlotDate}>{dateStr}</span>
-                    <span className={styles.schedulerSlotTime}>{timeStr}</span>
-                  </button>
-                );
-              })}
-
-              {schedulerSearched && !schedulerLoading && schedulerSlots.length === 0 && (
-                <p className={styles.schedulerEmpty}>No free slots found this week.</p>
-              )}
+            {/* ── Filters ───────────────────────────────────────────── */}
+            <div className={styles.group}>
+              <Section
+                small
+                title="Filters"
+                actions={
+                  <IconButton
+                    icon={Icons.chevronDown}
+                    label={filtersOpen ? 'Collapse filters' : 'Expand filters'}
+                    size="sm"
+                    className={[styles.chev, filtersOpen ? styles.chevOpen : ''].join(' ')}
+                    aria-expanded={filtersOpen}
+                    onClick={() => setFiltersOpen(o => !o)}
+                  />
+                }
+              >
+                {filtersOpen && (
+                  <div className={styles.list}>
+                    {FILTERS.map(f => {
+                      const active = activeFilters.has(f.id);
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={[styles.filterRow, active ? styles.filterRowActive : ''].join(' ')}
+                          aria-pressed={active}
+                          onClick={() => onToggleFilter(f.id)}
+                        >
+                          <Icon d={f.icon} size={13} />
+                          <span className={styles.filterLabel}>{f.label}</span>
+                          <Badge size="sm" tone={active ? 'accent' : 'neutral'}>{filterCounts[f.id] ?? 0}</Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </Section>
             </div>
-          )}
 
-          {/* Missed events */}
-          <SectionLabel right={
-            missedCount > 0 ? <span className={styles.tplCount}>{missedCount}</span> : undefined
-          }>
-            Missed
-          </SectionLabel>
-          <div className={styles.missedPanel}>
-            {missedCount === 0
-              ? <p className={styles.schedulerEmpty}>Nothing marked as missed.</p>
-              : <button className={styles.missedOpenBtn} onClick={onOpenMissed}>
-                  Review {missedCount} missed
-                </button>
-            }
+            {/* ── Templates ─────────────────────────────────────────── */}
+            <div className={styles.group}>
+              <Section
+                small
+                title="Templates"
+                actions={
+                  <>
+                    {onManageTemplates && (
+                      <IconButton icon={Icons.copy} label="Manage event templates" size="sm" onClick={onManageTemplates} />
+                    )}
+                    <IconButton icon={Icons.plus} label="New time-block template" size="sm" onClick={onNewTimeBlockTemplate} />
+                  </>
+                }
+              >
+                {!hasTemplates && (
+                  <p className={styles.muted}>Save an event as a template from the editor, or build a weekly time-block template.</p>
+                )}
+                {hasTemplates && (
+                  <div className={styles.list}>
+                    {templates.map(t => (
+                      <div key={`t-${t.id}`} className={styles.tplRow}>
+                        <div className={styles.tplText}>
+                          <div className={styles.tplName}>{t.name}</div>
+                          <div className={styles.tplMeta}>
+                            {t.duration_minutes} min{t.is_recurring ? ' · recurring' : ''}
+                          </div>
+                        </div>
+                        <Button size="sm" variant="ghost" onClick={() => onApplyTemplate(t)}>Apply</Button>
+                        <Menu
+                          align="end"
+                          width={180}
+                          trigger={({ open: menuOpen, toggle, ref, ...a }) => (
+                            <IconButton
+                              ref={ref}
+                              onClick={toggle}
+                              icon={Icons.moreVertical}
+                              label={`${t.name} options`}
+                              size="sm"
+                              active={menuOpen}
+                              className={styles.rowMenuBtn}
+                              {...a}
+                            />
+                          )}
+                          items={[
+                            { id: 'delete', label: 'Delete', icon: Icons.trash, danger: true, onSelect: () => onDeleteTemplate(t.id) },
+                          ]}
+                        />
+                      </div>
+                    ))}
+                    {timeBlockTemplates.map(t => (
+                      <div key={`tb-${t.id}`} className={styles.tplRow}>
+                        <div className={styles.tplText}>
+                          <div className={styles.tplName}>{t.name}</div>
+                          <div className={styles.tplMeta}>Weekly time blocks</div>
+                        </div>
+                        <Button size="sm" variant="ghost" onClick={() => onApplyTimeBlockTemplate(t.id)}>Apply</Button>
+                        <Menu
+                          align="end"
+                          width={180}
+                          trigger={({ open: menuOpen, toggle, ref, ...a }) => (
+                            <IconButton
+                              ref={ref}
+                              onClick={toggle}
+                              icon={Icons.moreVertical}
+                              label={`${t.name} options`}
+                              size="sm"
+                              active={menuOpen}
+                              className={styles.rowMenuBtn}
+                              {...a}
+                            />
+                          )}
+                          items={[
+                            { id: 'delete', label: 'Delete', icon: Icons.trash, danger: true, onSelect: () => onDeleteTimeBlockTemplate(t.id) },
+                          ]}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            </div>
+
+            {/* ── Find free time ────────────────────────────────────── */}
+            <div className={styles.group}>
+              <Section
+                small
+                title="Find free time"
+                actions={
+                  <IconButton
+                    icon={Icons.chevronDown}
+                    label={freeOpen ? 'Collapse find free time' : 'Expand find free time'}
+                    size="sm"
+                    className={[styles.chev, freeOpen ? styles.chevOpen : ''].join(' ')}
+                    aria-expanded={freeOpen}
+                    onClick={() => setFreeOpen(o => !o)}
+                  />
+                }
+              >
+                {freeOpen && (
+                  <div className={styles.freePanel}>
+                    <Select size="sm" value={freeDuration} onChange={e => setFreeDuration(Number(e.target.value))} aria-label="Duration">
+                      <option value={30}>30 min</option>
+                      <option value={60}>1 hour</option>
+                      <option value={90}>90 min</option>
+                      <option value={120}>2 hours</option>
+                    </Select>
+                    <div className={styles.freeHours}>
+                      <Select size="sm" value={freeStart} onChange={e => setFreeStart(Number(e.target.value))} aria-label="Working hours start">
+                        {HOURS.map(h => <option key={h} value={h}>{fmtHour(h)}</option>)}
+                      </Select>
+                      <span className={styles.freeDash} aria-hidden="true">–</span>
+                      <Select size="sm" value={freeEnd} onChange={e => setFreeEnd(Number(e.target.value))} aria-label="Working hours end">
+                        {HOURS.map(h => <option key={h} value={h}>{fmtHour(h)}</option>)}
+                      </Select>
+                    </div>
+                    <Button size="sm" variant="secondary" block icon={Icons.search} loading={freeLoading} onClick={() => void handleFind()}>
+                      Find
+                    </Button>
+
+                    {freeSlots.length > 0 && (
+                      <ul className={styles.slotList}>
+                        {freeSlots.map((slot, i) => {
+                          const s = new Date(slot.start);
+                          const e = new Date(slot.end);
+                          const dateStr = s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+                          const timeStr = `${s.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+                          return (
+                            <li key={i} className={styles.slotRow}>
+                              <div className={styles.slotText}>
+                                <span className={styles.slotDate}>{dateStr}</span>
+                                <span className={styles.slotTime}>{timeStr}</span>
+                              </div>
+                              <Button size="sm" variant="ghost" onClick={() => onScheduleSlot(slot.start, slot.end)}>Schedule</Button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {freeError && <Badge tone="error" dot>{freeError}</Badge>}
+                    {freeSearched && !freeLoading && !freeError && freeSlots.length === 0 && (
+                      <p className={styles.muted}>No free slots in the next 7 days.</p>
+                    )}
+                  </div>
+                )}
+              </Section>
+            </div>
+
+            {/* ── Missed ────────────────────────────────────────────── */}
+            <div className={styles.group}>
+              <Section
+                small
+                title="Missed"
+                actions={missedCount > 0 ? <Badge size="sm" tone="warning">{missedCount}</Badge> : undefined}
+              >
+                {missedCount === 0
+                  ? <p className={styles.muted}>Nothing marked as missed.</p>
+                  : <Button size="sm" variant="ghost" block icon={Icons.alertCircle} onClick={onOpenMissed}>
+                      Review {missedCount} missed
+                    </Button>}
+              </Section>
+            </div>
           </div>
-        </div>
-      )}
 
-      {/* Hidden file input for scan */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf"
-        style={{ display: 'none' }}
-        onChange={e => {
-          const file = e.target.files?.[0];
-          if (file) onScanFile(file);
-          e.target.value = '';
-        }}
-      />
-
-      {/* Footer — hidden during scan mode */}
-      {open && !isScanMode && (
-        <div className={styles.footer}>
-          <button className={`${styles.quickBtn} ${styles.quickBtnPrimary}`} onClick={onNewEvent}>
-            <Icon d={Icons.plus} size={12} /> New Event <Kbd small>N</Kbd>
-          </button>
-          <button className={styles.quickBtn} onClick={onAvailability}>
-            <Icon d={Icons.mail} size={12} /> Availability
-          </button>
-          <button className={styles.quickBtn} onClick={onImportICS}>
-            <Icon d={Icons.upload} size={12} /> Import ICS
-          </button>
-          <button
-            className={`${styles.quickBtn} ${styles.quickBtnFull}`}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Icon d={Icons.doc} size={12} /> Scan File
-          </button>
-        </div>
+          <div className={styles.footer}>
+            <Button size="sm" variant="ghost" icon={Icons.upload} className={styles.footerBtn} onClick={onImportICS}>Import .ics</Button>
+            <Button size="sm" variant="ghost" icon={Icons.doc} className={styles.footerBtn} onClick={onScanSyllabus}>Scan syllabus</Button>
+            <Button size="sm" variant="subtle" icon={Icons.mail} className={styles.footerBtn} onClick={onAvailability}>Share availability</Button>
+          </div>
+        </>
       )}
-    </div>
+    </aside>
   );
 }

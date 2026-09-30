@@ -54,3 +54,37 @@ export function projectCourseGrade(
   if (totalWeight === 0) return { projected: null, remainingCount };
   return { projected: round2(weightedSum / totalWeight), remainingCount };
 }
+
+/** Parse a Course.grade_weights JSON string; tolerant of malformed input. */
+export function parseGradeWeights(raw: string | null | undefined): GradeWeight[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (w): w is GradeWeight =>
+        !!w && typeof w === 'object' && typeof (w as GradeWeight).name === 'string' && typeof (w as GradeWeight).weight === 'number',
+    );
+  } catch {
+    return [];
+  }
+}
+
+export interface CourseGradeSummary {
+  /** Weighted average over graded assignments only (0..100), or null when nothing is graded. */
+  current: number | null;
+  gradedCount: number;
+  remainingCount: number;
+}
+
+/**
+ * Current standing: only assignments with a score count. Unlike
+ * `projectCourseGrade` no assumption is made about ungraded work.
+ */
+export function currentCourseGrade(assignments: Assignment[], weights: GradeWeight[]): CourseGradeSummary {
+  const graded = assignments.filter(a => a.score !== null && a.max_score !== null && a.max_score > 0);
+  const remainingCount = assignments.filter(a => a.score === null).length;
+  if (graded.length === 0) return { current: null, gradedCount: 0, remainingCount };
+  const { projected } = projectCourseGrade(graded, weights, 0);
+  return { current: projected, gradedCount: graded.length, remainingCount };
+}

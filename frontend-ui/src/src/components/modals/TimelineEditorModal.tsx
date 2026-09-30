@@ -1,23 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useModal } from '../../contexts/ModalContext';
 import { useUndo } from '../../contexts/UndoContext';
-import { ModalShell, ModalFooter } from './ModalShell';
+import { ModalShell, ModalFooter, ModalStack } from './ModalShell';
+import { Button, Field, Input, Switch, Icons, confirm as confirmDialog } from '../ui';
 import { useNotifications } from '../../store/notifications';
 import { listCalendars, updateCalendar, createCalendar, deleteCalendar } from '../../api';
 import { DEFAULT_TIMELINE_COLOR, TIMELINE_PALETTE } from '../../lib/colors';
 import type { Calendar } from '../../types';
+import styles from './TimelineEditorModal.module.css';
 
 interface TimelineEditorModalProps {
   timelineId?: number;     // undefined = creating a new timeline
   onSaved: () => void;
 }
 
-const PALETTE = TIMELINE_PALETTE;
+const SWATCH_NAMES: Record<string, string> = {
+  '#6366F1': 'Indigo', '#10B981': 'Green', '#F59E0B': 'Amber', '#EC4899': 'Pink',
+  '#06B6D4': 'Cyan', '#8B5CF6': 'Violet', '#EF4444': 'Red',
+};
 
 export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModalProps) {
   const { close } = useModal();
   const { addNotification } = useNotifications();
   const { push: pushUndo } = useUndo();
+  const ids = useId();
   const isEditing = timelineId != null;
 
   const [tl, setTl]               = useState<Calendar | null>(null);
@@ -29,6 +35,7 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
   const [termStart, setTermStart] = useState('');
   const [termEnd, setTermEnd]     = useState('');
   const [saving, setSaving]       = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -48,7 +55,7 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
 
   async function handleSave() {
     if (!name.trim()) {
-      addNotification({ type: 'warning', title: 'Name required', message: 'Please enter a timeline name.' });
+      setNameError('Enter a name for the timeline.');
       return;
     }
     setSaving(true);
@@ -84,97 +91,112 @@ export function TimelineEditorModal({ timelineId, onSaved }: TimelineEditorModal
     }
   }
 
+  async function handleDelete() {
+    if (!tl) return;
+    const ok = await confirmDialog({
+      title: `Delete "${tl.name}"?`,
+      description: 'Events on this timeline are deleted with it. This can’t be undone.',
+      destructive: true,
+      confirmLabel: 'Delete timeline',
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await deleteCalendar(tl.id);
+      addNotification({ type: 'success', title: 'Timeline deleted', autoRemoveMs: 2500 });
+      onSaved();
+      close();
+    } catch {
+      addNotification({ type: 'error', title: 'Delete failed' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isPresetColor = TIMELINE_PALETTE.map(p => p.toUpperCase()).includes(color.toUpperCase());
+
   return (
-    <ModalShell title={isEditing ? 'Edit Timeline' : 'New Timeline'} onClose={close}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-          Name
-          <input
-            className="loom-field"
+    <ModalShell variant="sheet" size="sm" title={isEditing ? 'Edit timeline' : 'New timeline'} onClose={close}>
+      <ModalStack>
+        <Field label="Name" htmlFor={`${ids}-name`} error={nameError}>
+          <Input
+            id={`${ids}-name`}
             value={name}
-            onChange={e => setName(e.target.value)}
+            onChange={e => { setName(e.target.value); if (nameError) setNameError(null); }}
             placeholder="e.g. Calculus II"
-            style={{ marginTop: 4 }}
-            autoFocus
+            invalid={!!nameError}
+            data-autofocus
           />
-        </label>
+        </Field>
 
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-          Description
-          <input
-            className="loom-field"
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-            style={{ marginTop: 4 }}
-          />
-        </label>
+        <Field label="Description" htmlFor={`${ids}-desc`}>
+          <Input id={`${ids}-desc`} value={description} onChange={e => setDescription(e.target.value)} placeholder="What lives on this timeline?" />
+        </Field>
 
-        <div>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: 6 }}>Color</span>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {PALETTE.map(p => (
-              <button
-                key={p}
-                onClick={() => setColor(p)}
-                aria-label={`Color ${p}`}
-                style={{
-                  width: 26, height: 26, borderRadius: 6,
-                  background: p, border: color === p ? '2px solid var(--text-main)' : '1px solid var(--border)',
-                  cursor: 'pointer',
-                }}
-              />
-            ))}
-          </div>
-        </div>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-main)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={isCourse} onChange={e => setIsCourse(e.target.checked)} />
-          <span>This is a course (drives Up Next, Semester view, grade tracker)</span>
-        </label>
-
-        {isCourse && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 22 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-              Course code
+        <Field label="Color">
+          <div className={styles.swatches} role="radiogroup" aria-label="Timeline color">
+            {TIMELINE_PALETTE.map(p => {
+              const on = p.toUpperCase() === color.toUpperCase();
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={SWATCH_NAMES[p.toUpperCase()] ?? p}
+                  className={[styles.swatch, on ? styles.swatchOn : ''].join(' ')}
+                  style={{ '--swatch': p } as React.CSSProperties}
+                  onClick={() => setColor(p)}
+                />
+              );
+            })}
+            <label className={[styles.swatch, styles.swatchCustom, !isPresetColor ? styles.swatchOn : ''].join(' ')} style={{ '--swatch': color } as React.CSSProperties} title="Custom color">
               <input
-                className="loom-field"
-                value={courseCode}
-                onChange={e => setCourseCode(e.target.value)}
-                placeholder="e.g. CS3500"
-                style={{ marginTop: 4 }}
+                type="color"
+                className={styles.colorInput}
+                value={color}
+                onChange={e => setColor(e.target.value)}
+                aria-label="Custom color"
               />
+              <span className={styles.customGlyph} aria-hidden="true">+</span>
             </label>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-                Term start
-                <input
-                  type="date"
-                  className="loom-field"
-                  value={termStart}
-                  onChange={e => setTermStart(e.target.value)}
-                  style={{ marginTop: 4, width: '100%' }}
-                />
-              </label>
-              <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-                Term end
-                <input
-                  type="date"
-                  className="loom-field"
-                  value={termEnd}
-                  onChange={e => setTermEnd(e.target.value)}
-                  style={{ marginTop: 4, width: '100%' }}
-                />
-              </label>
-            </div>
           </div>
-        )}
-      </div>
+        </Field>
 
-      <ModalFooter>
-        <button className="loom-btn-ghost" onClick={close}>Cancel</button>
-        <button className="loom-btn-primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        <div className={styles.courseBox}>
+          <Switch
+            checked={isCourse}
+            onChange={setIsCourse}
+            label="This is a course"
+            description="Drives Up next, the semester view and the grade tracker."
+          />
+          {isCourse && (
+            <div className={styles.courseFields}>
+              <Field label="Course code" htmlFor={`${ids}-code`}>
+                <Input id={`${ids}-code`} value={courseCode} onChange={e => setCourseCode(e.target.value)} placeholder="e.g. CS3500" />
+              </Field>
+              <div className={styles.grid2}>
+                <Field label="Term start" htmlFor={`${ids}-ts`}>
+                  <Input id={`${ids}-ts`} type="date" value={termStart} onChange={e => setTermStart(e.target.value)} />
+                </Field>
+                <Field label="Term end" htmlFor={`${ids}-te`}>
+                  <Input id={`${ids}-te`} type="date" value={termEnd} onChange={e => setTermEnd(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          )}
+        </div>
+      </ModalStack>
+
+      <ModalFooter
+        left={isEditing && tl ? (
+          <Button variant="danger" icon={Icons.trash} onClick={() => { void handleDelete(); }} disabled={saving}>Delete</Button>
+        ) : undefined}
+      >
+        <Button variant="ghost" onClick={close}>Cancel</Button>
+        <Button variant="primary" onClick={() => { void handleSave(); }} loading={saving} disabled={!name.trim()}>
+          {isEditing ? 'Save changes' : 'Create timeline'}
+        </Button>
       </ModalFooter>
     </ModalShell>
   );

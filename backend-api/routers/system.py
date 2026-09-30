@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from core.deps import _check_rate
-from loom_logger import get_logger, LOG_FILE, CRASH_FLAG
+from loom_logger import get_logger, clear_log_file, LOG_FILE, CRASH_FLAG
 
 router = APIRouter()
 
@@ -55,9 +55,11 @@ def export_logs():
 
 @router.delete("/api/logs")
 def clear_logs():
-    if LOG_FILE.exists():
-        LOG_FILE.unlink()
-    LOG_FILE.touch()
+    # Windows: the open RotatingFileHandler makes unlink() raise WinError 32,
+    # so truncate in place + reopen the handler (see loom_logger.clear_log_file).
+    clear_log_file()
+    if not LOG_FILE.exists():
+        LOG_FILE.touch()
     return {"status": "ok"}
 
 

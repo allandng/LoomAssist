@@ -51,10 +51,11 @@ def build_oauth_url(provider: str) -> str:
     """
     if provider not in SUPPORTED_OAUTH_PROVIDERS:
         raise ValueError(f"Unsupported OAuth provider: {provider}")
-    return (
-        f"{SUPABASE_URL}/auth/v1/authorize"
-        f"?provider={provider}&redirect_to={SUPABASE_REDIRECT}"
-    )
+    from urllib.parse import urlencode
+    # redirect_to must be URL-encoded (it carries "://" and ":8000"); the
+    # default points at GET /auth/oauth/callback served by this backend.
+    qs = urlencode({"provider": provider, "redirect_to": SUPABASE_REDIRECT})
+    return f"{SUPABASE_URL}/auth/v1/authorize?{qs}"
 
 
 async def email_signup(email: str, password: str) -> dict:

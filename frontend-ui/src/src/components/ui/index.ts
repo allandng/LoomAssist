@@ -27,8 +27,9 @@ export type { SegmentedOption, SegmentedProps, TabItem, TabsProps, BadgeProps, B
 export { Menu, Popover } from './Menu';
 export type { MenuItem, MenuEntry, MenuProps, PopoverProps } from './Menu';
 
-export { confirm, prompt, DialogHost } from './Dialog';
-export type { ConfirmOptions, PromptOptions } from './Dialog';
+export { DialogHost } from './Dialog';
+export { confirm, prompt } from './dialogStore';
+export type { ConfirmOptions, PromptOptions } from './dialogStore';
 
 /* Existing shared atoms, re-exported so one import path covers the kit. */
 export { Icon, Icons } from '../shared/Icon';

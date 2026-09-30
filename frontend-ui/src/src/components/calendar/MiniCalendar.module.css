@@ -1,5 +1,5 @@
 .mini {
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
@@ -7,13 +7,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .monthLabel {
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-main);
+  padding-left: var(--space-2);
 }
 
 .steppers {
@@ -21,35 +22,17 @@
   gap: var(--space-1);
 }
 
-.stepBtn {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--text-md);
-  line-height: 1;
-}
-
-.stepBtn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-main);
-}
-
 .dow {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .dow span {
   text-align: center;
   font-size: var(--text-2xs);
   font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--text-dim);
 }
 
@@ -74,10 +57,12 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   padding: 0;
+  color: var(--text-muted);
+  transition: background var(--motion-fast) var(--ease-standard);
 }
 
 .day:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
 }
 
 .day:focus-visible {
@@ -85,51 +70,64 @@
   outline-offset: -1px;
 }
 
+/* Visible-range band (week / day views). */
 .banded {
-  background: var(--accent-soft);
+  background: var(--accent-softer);
+  border-radius: 0;
 }
 
 .banded:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--accent-soft);
 }
 
 .num {
+  position: relative;
+  z-index: 1;
   font-size: var(--text-xs);
-  color: var(--text-muted);
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
-.today .num {
-  color: #fff;
-  font-weight: 700;
+/* Disc behind the number: ring for today, fill for the selected day. */
+.today::before,
+.selected::before {
+  content: '';
+  position: absolute;
+  width: calc(var(--space-6) - var(--space-1));
+  height: calc(var(--space-6) - var(--space-1));
+  border-radius: var(--radius-full);
 }
 
 .today::before {
-  content: '';
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  z-index: 0;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
-.today .num,
-.today .dot {
-  position: relative;
-  z-index: 1;
+.today .num {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.selected::before {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.selected .num {
+  color: var(--text-on-accent);
+  font-weight: 700;
 }
 
 .dot {
   position: absolute;
-  bottom: 2px;
+  bottom: var(--space-1);
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
+  width: var(--space-2);
+  height: var(--space-2);
   border-radius: var(--radius-full);
+  z-index: 1;
 }
 
-.today .dot {
-  background: #fff !important;
+.selected .dot {
+  background: var(--text-on-accent) !important;
 }
