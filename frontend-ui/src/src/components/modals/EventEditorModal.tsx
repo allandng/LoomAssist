@@ -36,6 +36,17 @@ function formatDT(dtLocal: string): string {
     : d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/** datetime-local value ("YYYY-MM-DDTHH:mm[:ss]") → naive local ISO with seconds. */
+function toNaiveLocalISO(v: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
+  if (m) return `${m[1]}T${m[2]}:${m[3]}:${m[4] ?? '00'}`;
+  // Fallback for anything else parseable: format in local time, never UTC.
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return v;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function toLocalDT(iso: string): string {
   // Convert ISO datetime to datetime-local input value
   const d = new Date(iso);
@@ -258,6 +269,19 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const selectedTimeline = timelines.find(t => t.id === calendarId);
 
+  // ModalRoot refetches timelines when a modal opens, so a brand-new event can
+  // mount before they arrive and sit on calendar_id 0 (which the backend
+  // rejects) while the <select> visually shows the first option. Adopt the
+  // first real timeline (or the prefill) as soon as the list lands.
+  useEffect(() => {
+    if (timelines.length === 0 || timelines.some(t => t.id === calendarId)) return;
+    const preferred = prefill?.calendarId && timelines.some(t => t.id === prefill.calendarId)
+      ? prefill.calendarId
+      : timelines[0]!.id;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing derived default once data arrives
+    setCalendarId(preferred);
+  }, [timelines, calendarId, prefill?.calendarId]);
+
   // ---- Clock-in / Clock-out ----
   async function handleClock(action: 'in' | 'out') {
     if (!event?.id) return;
@@ -355,8 +379,13 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   // path), `missed_at` goes out as null. Saving a marked event via the regular
   // Save button therefore unmarks it — the user implicitly recovered it.
   const buildPayload = useCallback((opts?: { missedAt?: string | null }) => {
-    const start = allDay ? `${startVal}T00:00:00` : new Date(startVal).toISOString();
-    const end   = allDay ? `${endVal}T23:59:59`   : new Date(endVal).toISOString();
+    // Timed events are stored as naive LOCAL ISO ("YYYY-MM-DDTHH:mm:ss"), the
+    // same shape the seed data, ICS import and the tray/iOS clients use. The
+    // datetime-local inputs already hold that form minus the seconds; never
+    // round-trip through toISOString(), which would emit UTC "Z" strings and
+    // mix aware/naive timestamps in the DB.
+    const start = allDay ? `${startVal}T00:00:00` : toNaiveLocalISO(startVal);
+    const end   = allDay ? `${endVal}T23:59:59`   : toNaiveLocalISO(endVal);
     return {
       title: title.trim(),
       start_time: start,

@@ -1,6 +1,6 @@
 [package]
 name = "frontend-ui"
-version = "2.4.0"
+version = "3.0.0"
 description = "LoomAssist — local-first desktop calendar"
 authors = ["LoomAssist"]
 edition = "2021"
