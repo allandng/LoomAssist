@@ -1,3 +1,5 @@
+import { modLabel, modParts } from './platform';
+
 export type KeybindContext = 'Global' | 'Calendar';
 
 export interface KeybindDef {
@@ -108,11 +110,19 @@ export function getKeybind(action: KeybindAction): KeybindDef {
   return loadKeybinds()[action];
 }
 
+/**
+ * Cross-platform label for a binding. `meta` renders as ⌘ on Mac and Ctrl
+ * elsewhere (see lib/platform.ts); the storage format is unchanged.
+ */
 export function formatKeyLabel(def: KeybindDef): string {
-  const parts: string[] = [];
-  if (def.ctrl)  parts.push('Ctrl');
-  if (def.meta)  parts.push('⌘');
-  if (def.shift) parts.push('Shift');
-  parts.push(def.label || def.key.toUpperCase());
-  return parts.join('+');
+  return modLabel({ key: def.key, ctrl: def.ctrl, meta: def.meta, shift: def.shift, label: def.label || undefined });
 }
+
+/** Same as formatKeyLabel but one entry per key, for rendering a row of <Kbd>. */
+export function formatKeyParts(def: KeybindDef): string[] {
+  return modParts({ key: def.key, ctrl: def.ctrl, meta: def.meta, shift: def.shift, label: def.label || undefined });
+}
+
+// Re-export as a statement (not `export { x }` of an import) so the dev
+// transform never elides the import and leaves a dangling export.
+export { modKey, isMac, modLabel, modParts } from './platform';

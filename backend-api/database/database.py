@@ -4,8 +4,14 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-# This creates a local file named loom.sqlite3 in your root folder
-SQLALCHEMY_DATABASE_URL = "sqlite:///./loom.sqlite3"
+from core.paths import db_path as _db_path
+
+# SQLite file location: LOOM_DB_PATH env override, otherwise
+# backend-api/loom.sqlite3 (anchored to the code directory, NOT the CWD, so
+# launching from any shell / the Tauri bundle finds the same database).
+_DB_FILE = _db_path()
+_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{_DB_FILE.as_posix()}"
 
 # Connect to the SQLite database
 engine = create_engine(
@@ -240,6 +246,19 @@ def run_migrations():
         except Exception as e:
             logging.error(f"Migration error on deviceconfig table: {e}")
 
+        # Cross-platform pass: Peer network address (host/port) so LAN sync
+        # targets the paired device instead of the cert fingerprint.
+        try:
+            result = conn.execute(text("PRAGMA table_info(peer)")).fetchall()
+            peer_cols = [row[1] for row in result]
+            peer_new = {"host": "TEXT", "port": "INTEGER"}
+            for col_name, col_type in peer_new.items():
+                if col_name not in peer_cols:
+                    conn.execute(text(f"ALTER TABLE peer ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to peer table.")
+        except Exception as e:
+            logging.error(f"Migration error on peer address cols: {e}")
+
         # Phase v3.0: Account table (identity-only mirror of Supabase user)
         try:
             conn.execute(text("""
@@ -300,6 +319,15 @@ def run_migrations():
                 idx_connectioncalendar_connection
                 ON connectioncalendar(connection_id)
             """))
+            # Cross-platform pass: provider colour hint + per-pair enable flag
+            # (surfaced by GET /connections/{id}/subscriptions).
+            result = conn.execute(text("PRAGMA table_info(connectioncalendar)")).fetchall()
+            cc_cols = [row[1] for row in result]
+            cc_new = {"remote_color": "TEXT", "enabled": "INTEGER DEFAULT 1"}
+            for col_name, col_type in cc_new.items():
+                if col_name not in cc_cols:
+                    conn.execute(text(f"ALTER TABLE connectioncalendar ADD COLUMN {col_name} {col_type}"))
+                    logging.info(f"Migration: added column '{col_name}' to connectioncalendar table.")
         except Exception as e:
             logging.error(f"Migration error on connectioncalendar table: {e}")
 

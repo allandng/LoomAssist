@@ -1,33 +1,66 @@
-/* Design tokens — ported 1:1 from LA_TOKENS in design-wireframes/shared.jsx */
+/* ═══════════════════════════════════════════════════════════════════════════
+   LoomAssist design tokens — v3 redesign
+   ---------------------------------------------------------------------------
+   One vocabulary for every surface. Dark is the default theme; light and
+   high-contrast override the same names below, so components never branch on
+   theme — they only ever reference these variables.
+
+   Naming:
+     --bg-*       surfaces, from the window (app) up to popovers (elevated)
+     --border-*   hairlines
+     --text-*     ink
+     --accent-*   the single brand hue (indigo-violet)
+     --success / --warning / --error / --info   semantic hues (+ "-soft" tints)
+     --tl-*       timeline swatch palette (mirrors lib/colors.ts)
+   Scales:
+     --space-N, --radius-*, --text-*, --motion-*, --ease-*, --shadow-*, --z-*
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 :root {
-  /* Backgrounds */
-  --bg-main:     #0B1120;
-  --bg-panel:    #121B2E;
-  --bg-elevated: #1A2540;
-  --bg-subtle:   #0F172A;
+  color-scheme: dark;
 
-  /* Borders */
-  --border:        #1F2A44;
-  --border-strong: #2B3A5C;
+  /* ── Surfaces (dark) ─────────────────────────────────────────────────── */
+  --bg-app:      #0B0C10;   /* window chrome behind everything */
+  --bg-main:     #101116;   /* main content canvas */
+  --bg-panel:    #15171D;   /* sidebars, cards, table headers */
+  --bg-elevated: #1C1E26;   /* popovers, menus, inputs on a panel */
+  --bg-subtle:   #22252E;   /* chips, kbd, input fills on main */
+  --bg-inset:    #0A0B0E;   /* wells, code, timer track */
+  --bg-hover:    color-mix(in srgb, #FFFFFF 5%, transparent);
+  --bg-active:   color-mix(in srgb, #FFFFFF 9%, transparent);
 
-  /* Text */
-  --text-main:  #F1F5FA;
-  --text-muted: #8A97B2;
-  --text-dim:   #5D6B86;
+  /* ── Borders ─────────────────────────────────────────────────────────── */
+  --border:        #262932;
+  --border-strong: #353947;
+  --border-focus:  var(--accent);
 
-  /* Accent (indigo) */
-  --accent:       #6366F1;
-  --accent-soft:  rgba(99, 102, 241, 0.14);
-  --accent-hover: #818CF8;
+  /* ── Text ────────────────────────────────────────────────────────────── */
+  --text-main:      #EEEFF4;
+  --text-muted:     #9DA3B5;
+  --text-dim:       #6B7186;
+  --text-on-accent: #FFFFFF;
 
-  /* Semantic */
-  --success:  #10B981;
-  --warning:  #D97706;
-  --error:    #EF4444;
-  --info:     #3B82F6;
-  --progress: #6366F1;
+  /* ── Accent (indigo-violet) ──────────────────────────────────────────── */
+  --accent:        #7B7EF6;
+  --accent-strong: #6366F1;
+  --accent-hover:  #9295FA;
+  --accent-text:   #A6A8FF;                                   /* accent used as ink on dark */
+  --accent-soft:   color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-softer: color-mix(in srgb, var(--accent) 8%, transparent);
 
-  /* Timeline swatches */
+  /* ── Semantic ────────────────────────────────────────────────────────── */
+  --success:  #34C38F;
+  --warning:  #F0A33A;
+  --error:    #F26B6B;
+  --info:     #4F9CF9;
+  --progress: var(--accent);
+
+  --success-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 14%, transparent);
+  --error-soft:   color-mix(in srgb, var(--error) 14%, transparent);
+  --info-soft:    color-mix(in srgb, var(--info) 14%, transparent);
+
+  /* ── Timeline swatches (keep in sync with lib/colors.ts) ─────────────── */
   --tl-school:   #6366F1;
   --tl-work:     #10B981;
   --tl-personal: #F59E0B;
@@ -35,59 +68,163 @@
   --tl-family:   #06B6D4;
   --tl-errands:  #8B5CF6;
 
-  /* Drag shader (Phase 2) */
-  --drag-free:     rgba(74, 222, 128, 0.12);
-  --drag-conflict: rgba(248, 113, 113, 0.18);
+  /* ── Drag shader ─────────────────────────────────────────────────────── */
+  --drag-free:     color-mix(in srgb, var(--success) 14%, transparent);
+  --drag-conflict: color-mix(in srgb, var(--error) 18%, transparent);
 
-  /* Typography */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* ── Scales added in the WS1 token pass ── */
+  --text-2xs: 10px;
+  --text-xs:  11px;
+  --text-sm:  12px;
+  --text-base: 13px;
+  --text-md:  14px;
+  --text-lg:  16px;
+  --text-xl:  20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-display: 56px;
 
-  /* Spacing */
+  --leading-tight: 1.2;
+  --leading-snug:  1.35;
+  --leading-body:  1.5;
+
+  /* ── Spacing ─────────────────────────────────────────────────────────── */
   --space-1: 2px;
   --space-2: 4px;
   --space-3: 8px;
   --space-4: 12px;
   --space-5: 16px;
   --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
 
-  /* Radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  /* ── Radius ──────────────────────────────────────────────────────────── */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 999px;
 
-  /* Type scale */
-  --text-2xs: 10px;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-
-  /* Motion — M3-derived duration bands + standard/decel/accel eases */
-  --motion-fast: 100ms;
-  --motion-base: 150ms;
-  --motion-modal: 250ms;
+  /* ── Motion ──────────────────────────────────────────────────────────── */
+  --motion-fast:  100ms;
+  --motion-base:  160ms;
+  --motion-modal: 240ms;
+  --motion-slow:  360ms;
   --ease-standard: cubic-bezier(.2, 0, 0, 1);
-  --ease-decel: cubic-bezier(0, 0, 0, 1);
-  --ease-accel: cubic-bezier(.3, 0, 1, 1);
+  --ease-decel:    cubic-bezier(0, 0, 0, 1);
+  --ease-accel:    cubic-bezier(.3, 0, 1, 1);
+  --ease-spring:   cubic-bezier(.2, .9, .3, 1.2);
 
-  /* Shadows + scrim */
-  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.5);
-  --shadow-toast: 0 10px 24px rgba(0, 0, 0, 0.4);
-  --overlay-scrim: rgba(6, 11, 24, 0.7);
+  /* ── Elevation ───────────────────────────────────────────────────────── */
+  --shadow-sm:      0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-card:    0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--border);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-strong);
+  --shadow-modal:   0 28px 72px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-strong);
+  --shadow-toast:   0 10px 28px rgba(0, 0, 0, 0.5);
+  --overlay-scrim:  rgba(4, 6, 12, 0.66);
 
-  /* Semantic soft tints */
-  --error-soft: color-mix(in srgb, var(--error) 12%, transparent);
-  --warning-soft: color-mix(in srgb, var(--warning) 10%, transparent);
-  --success-soft: color-mix(in srgb, var(--success) 12%, transparent);
-  --info-soft: color-mix(in srgb, var(--info) 12%, transparent);
-
-  /* Focus */
+  /* ── Focus ───────────────────────────────────────────────────────────── */
   --focus-ring: 2px solid var(--accent);
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  --sidebar-w:  228px;   /* expanded app sidebar */
+  --rail-w:     64px;    /* collapsed app sidebar */
+  --topbar-h:   52px;
+  --panel-w:    272px;   /* page-level context panel (calendar left, focus left) */
+  --sheet-w:    440px;   /* right-side editor sheet */
+  --content-max: 1120px;
+
+  /* ── Z layers ────────────────────────────────────────────────────────── */
+  --z-sticky:  10;
+  --z-panel:   40;
+  --z-popover: 100;
+  --z-sheet:   400;
+  --z-modal:   500;
+  --z-toast:   600;
+  --z-palette: 700;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Light theme
+   ═══════════════════════════════════════════════════════════════════════════ */
+body.light-mode {
+  color-scheme: light;
+
+  --bg-app:      #EEF0F4;
+  --bg-main:     #FFFFFF;
+  --bg-panel:    #F7F8FA;
+  --bg-elevated: #FFFFFF;
+  --bg-subtle:   #F0F1F5;
+  --bg-inset:    #E8EAF0;
+  --bg-hover:    color-mix(in srgb, #0F1220 5%, transparent);
+  --bg-active:   color-mix(in srgb, #0F1220 9%, transparent);
+
+  --border:        #E4E6EC;
+  --border-strong: #C9CDD8;
+
+  --text-main:  #15171E;
+  --text-muted: #5B6173;
+  --text-dim:   #8B90A2;
+
+  --accent:        #5B5EEA;
+  --accent-strong: #4F52DE;
+  --accent-hover:  #4A4DD9;
+  --accent-text:   #4548C9;
+  --accent-soft:   color-mix(in srgb, var(--accent) 11%, transparent);
+  --accent-softer: color-mix(in srgb, var(--accent) 6%, transparent);
+
+  --success: #15803D;
+  --warning: #B45309;
+  --error:   #DC2626;
+  --info:    #2563EB;
+
+  --success-soft: color-mix(in srgb, var(--success) 11%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 12%, transparent);
+  --error-soft:   color-mix(in srgb, var(--error) 10%, transparent);
+  --info-soft:    color-mix(in srgb, var(--info) 10%, transparent);
+
+  --drag-free:     color-mix(in srgb, var(--success) 12%, transparent);
+  --drag-conflict: color-mix(in srgb, var(--error) 12%, transparent);
+
+  --shadow-sm:      0 1px 2px rgba(15, 18, 32, 0.06);
+  --shadow-card:    0 1px 2px rgba(15, 18, 32, 0.05), 0 0 0 1px var(--border);
+  --shadow-popover: 0 12px 32px rgba(15, 18, 32, 0.14), 0 0 0 1px var(--border);
+  --shadow-modal:   0 28px 72px rgba(15, 18, 32, 0.2), 0 0 0 1px var(--border);
+  --shadow-toast:   0 10px 28px rgba(15, 18, 32, 0.14);
+  --overlay-scrim:  rgba(15, 18, 32, 0.4);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   High-contrast theme (WCAG AAA ≥ 7:1 body text)
+   ═══════════════════════════════════════════════════════════════════════════ */
+body.high-contrast {
+  --bg-app:      #000000;
+  --bg-main:     #000000;
+  --bg-panel:    #0A0A0A;
+  --bg-elevated: #161616;
+  --bg-subtle:   #1F1F1F;
+  --bg-inset:    #000000;
+  --border:        #4A4A4A;
+  --border-strong: #8A8A8A;
+  --text-main:   #FFFFFF;
+  --text-muted:  #E0E0E0;
+  --text-dim:    #B4B4B4;
+  --accent:        #C7B6FF;
+  --accent-strong: #B39DFF;
+  --accent-hover:  #D9CDFF;
+  --accent-text:   #D9CDFF;
+  --accent-soft:   color-mix(in srgb, var(--accent) 22%, transparent);
+  --success: #5CE0A8;
+  --warning: #FFC466;
+  --error:   #FF8A8A;
+  --info:    #7DBBFF;
+}
+
+/* Dyslexia-friendly font (OpenDyslexic, bundled in fonts.css). */
+body.font-dyslexic {
+  --font-sans: 'OpenDyslexic', 'Inter', -apple-system, sans-serif;
 }

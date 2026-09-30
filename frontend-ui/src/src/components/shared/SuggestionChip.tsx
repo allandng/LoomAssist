@@ -1,8 +1,11 @@
 import type { ConflictSuggestion } from '../../types';
+import styles from './SuggestionChip.module.css';
+import { Icon, Icons } from './Icon';
 
 interface Props {
   suggestion: ConflictSuggestion;
   onClick: (suggestion: ConflictSuggestion) => void;
+  disabled?: boolean;
 }
 
 function formatRange(start: string, end: string): string {
@@ -12,33 +15,16 @@ function formatRange(start: string, end: string): string {
   return `${s.toLocaleString([], opts)} – ${e.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 
-export function SuggestionChip({ suggestion, onClick }: Props) {
+/** One proposed alternative slot. Click applies it. */
+export function SuggestionChip({ suggestion, onClick, disabled }: Props) {
   return (
-    <button
-      onClick={() => onClick(suggestion)}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        gap: 2,
-        background: 'var(--bg-elevated)',
-        border: '1px solid var(--border-strong)',
-        borderRadius: 8,
-        padding: '7px 12px',
-        cursor: 'pointer',
-        textAlign: 'left',
-        width: '100%',
-        transition: 'border-color 0.15s',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-      onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-strong)')}
-    >
-      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>
-        {formatRange(suggestion.start, suggestion.end)}
+    <button type="button" className={styles.chip} onClick={() => onClick(suggestion)} disabled={disabled}>
+      <span className={styles.icon}><Icon d={Icons.clock} size={13} /></span>
+      <span className={styles.text}>
+        <span className={styles.range}>{formatRange(suggestion.start, suggestion.end)}</span>
+        {suggestion.rationale && <span className={styles.rationale}>{suggestion.rationale}</span>}
       </span>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-        {suggestion.rationale}
-      </span>
+      <span className={styles.arrow}><Icon d={Icons.arrowRight} size={13} /></span>
     </button>
   );
 }

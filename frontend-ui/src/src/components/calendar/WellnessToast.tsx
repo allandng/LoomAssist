@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import styles from './WellnessToast.module.css';
-import { Icon, Icons } from '../shared/Icon';
+import { IconButton, Icon, Icons } from '../ui';
 
 interface WellnessToastProps {
   message: string;
   date: string;
 }
 
-// WS7 #7 — per-warning dismissal persisted to sessionStorage (mirrors
-// ExamClusterBanner) so the toast doesn't reappear when CalendarPage remounts.
+// Per-warning dismissal persisted to sessionStorage (mirrors ExamClusterBanner)
+// so the toast doesn't reappear when CalendarPage remounts.
 const DISMISS_PREFIX = 'loom_wellness_dismissed:';
 
 export function wellnessDismissKey(date: string, message: string): string {
@@ -35,19 +35,13 @@ export function WellnessToast({ message, date }: WellnessToastProps) {
   };
 
   return (
-    <div className={styles.toast}>
-      <span className={styles.icon}>⚠</span>
+    <div className={`${styles.toast} ${styles.warning}`} role="status">
+      <span className={styles.icon} aria-hidden="true"><Icon d={Icons.warning} size={14} /></span>
       <div className={styles.body}>
-        <div className={styles.title}>Busy day ahead — {date}</div>
+        <div className={styles.title}>Busy day ahead · {date}</div>
         <div className={styles.message}>{message}</div>
       </div>
-      <button
-        className={styles.dismiss}
-        onClick={dismiss}
-        aria-label="Dismiss wellness warning"
-      >
-        <Icon d={Icons.x} size={12} />
-      </button>
+      <IconButton size="sm" icon={Icons.x} label="Dismiss wellness warning" onClick={dismiss} />
     </div>
   );
 }

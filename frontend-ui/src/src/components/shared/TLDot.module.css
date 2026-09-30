@@ -1,5 +1,5 @@
 .dot {
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   flex-shrink: 0;
   display: inline-block;
 }

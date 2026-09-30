@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
-import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
+import { useState, useCallback, useId } from 'react';
+import { ModalShell, ModalFooter, ModalStack } from './ModalShell';
+import { Button, IconButton, Field, Input, Select, EmptyState, Icons } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
 import { useNotifications } from '../../store/notifications';
 import { createTimeBlockTemplate } from '../../api';
@@ -21,6 +22,7 @@ function emptyBlock(defaultCalendarId: number): TimeBlockDef {
 export function TimeBlockTemplateModal({ prefillBlocks, timelines, onSaved }: TimeBlockTemplateModalProps) {
   const { close } = useModal();
   const { addNotification } = useNotifications();
+  const ids = useId();
   const defaultCalId = timelines[0]?.id ?? 0;
 
   const [name, setName] = useState('');
@@ -51,104 +53,74 @@ export function TimeBlockTemplateModal({ prefillBlocks, timelines, onSaved }: Ti
       addNotification({ type: 'success', title: `Template "${name.trim()}" saved`, autoRemoveMs: 3000 });
       close();
     } catch {
-      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save template.', autoRemoveMs: 4000 });
+      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save the template.', autoRemoveMs: 4000 });
     } finally {
       setSaving(false);
     }
   }, [name, description, blocks, onSaved, close, addNotification]);
 
-  const canSave = name.trim().length > 0 && blocks.every(b => b.title.trim().length > 0);
+  const canSave = name.trim().length > 0 && blocks.length > 0 && blocks.every(b => b.title.trim().length > 0);
+  const dirty = name.trim().length > 0 || description.trim().length > 0 || blocks.some(b => b.title.trim().length > 0);
 
   return (
-    <ModalShell title="Save Time Block Template" width={620} onClose={close}>
-      <div className={styles.body}>
-        <FieldLabel>Template Name</FieldLabel>
-        <input
-          className="loom-field"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="e.g. Deep Work Week"
-          autoFocus
-        />
-
-        <FieldLabel>Description (optional)</FieldLabel>
-        <input
-          className="loom-field"
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          placeholder="What is this routine for?"
-        />
-
-        <div className={styles.blocksHeader}>
-          <span className={styles.blocksTitle}>Blocks</span>
-          <button className="loom-btn-ghost" onClick={addBlock}>+ Add Block</button>
+    <ModalShell
+      title="Save week as template"
+      subtitle="Reusable set of weekly time blocks you can stamp onto any week"
+      size="lg"
+      onClose={close}
+      confirmOnClose={dirty}
+    >
+      <ModalStack>
+        <div className={styles.grid2}>
+          <Field label="Template name" htmlFor={`${ids}-name`}>
+            <Input id={`${ids}-name`} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Deep work week" data-autofocus />
+          </Field>
+          <Field label="Description" htmlFor={`${ids}-desc`}>
+            <Input id={`${ids}-desc`} value={description} onChange={e => setDescription(e.target.value)} placeholder="What is this routine for?" />
+          </Field>
         </div>
 
-        <div className={styles.blockList}>
-          {blocks.length === 0 && (
-            <p className={styles.emptyMsg}>No blocks yet — click "+ Add Block" to start.</p>
-          )}
-          {blocks.map((b, idx) => (
-            <div key={idx} className={styles.blockRow}>
-              <input
-                className={`loom-field ${styles.blockTitle}`}
-                value={b.title}
-                onChange={e => updateBlock(idx, { title: e.target.value })}
-                placeholder="Block title"
-              />
-              <select
-                className={`loom-field ${styles.blockDay}`}
-                value={b.day_of_week}
-                onChange={e => updateBlock(idx, { day_of_week: Number(e.target.value) })}
-              >
-                {[1, 2, 3, 4, 5, 6, 7].map(d => (
-                  <option key={d} value={d}>{DAY_LABELS[d]}</option>
-                ))}
-              </select>
-              <input
-                type="time"
-                className={`loom-field ${styles.blockTime}`}
-                value={b.start_time}
-                onChange={e => updateBlock(idx, { start_time: e.target.value })}
-              />
-              <span className={styles.timeSep}>–</span>
-              <input
-                type="time"
-                className={`loom-field ${styles.blockTime}`}
-                value={b.end_time}
-                onChange={e => updateBlock(idx, { end_time: e.target.value })}
-              />
-              <select
-                className={`loom-field ${styles.blockCal}`}
-                value={b.calendar_id}
-                onChange={e => updateBlock(idx, { calendar_id: Number(e.target.value) })}
-              >
-                {timelines.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-              <button
-                className={styles.removeBtn}
-                onClick={() => removeBlock(idx)}
-                aria-label="Remove block"
-              >
-                ✕
-              </button>
+        <div className={styles.blocksHead}>
+          <span className={styles.blocksTitle}>Blocks <span className={styles.count}>{blocks.length}</span></span>
+          <Button variant="secondary" size="sm" icon={Icons.plus} onClick={addBlock}>Add block</Button>
+        </div>
+
+        {blocks.length === 0 ? (
+          <EmptyState
+            compact
+            icon={Icons.columns}
+            title="No blocks yet"
+            description="Add at least one weekly block to save this template."
+            action={{ label: 'Add block', icon: Icons.plus, onClick: addBlock }}
+          />
+        ) : (
+          <div className={styles.blockList}>
+            <div className={styles.blockHeader} aria-hidden="true">
+              <span>Title</span><span>Day</span><span>From</span><span>To</span><span>Timeline</span><span />
             </div>
-          ))}
-        </div>
-      </div>
+            {blocks.map((b, idx) => (
+              <div key={idx} className={styles.blockRow}>
+                <Input size="sm" value={b.title} onChange={e => updateBlock(idx, { title: e.target.value })} placeholder="Block title" aria-label={`Block ${idx + 1} title`} invalid={b.title.trim().length === 0 && name.trim().length > 0} />
+                <Select size="sm" value={b.day_of_week} onChange={e => updateBlock(idx, { day_of_week: Number(e.target.value) })} aria-label={`Block ${idx + 1} day`}>
+                  {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>{DAY_LABELS[d]}</option>)}
+                </Select>
+                <Input size="sm" type="time" value={b.start_time} onChange={e => updateBlock(idx, { start_time: e.target.value })} aria-label={`Block ${idx + 1} start`} />
+                <Input size="sm" type="time" value={b.end_time} onChange={e => updateBlock(idx, { end_time: e.target.value })} aria-label={`Block ${idx + 1} end`} invalid={b.end_time <= b.start_time} />
+                <Select size="sm" value={b.calendar_id} onChange={e => updateBlock(idx, { calendar_id: Number(e.target.value) })} aria-label={`Block ${idx + 1} timeline`}>
+                  {timelines.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </Select>
+                <IconButton icon={Icons.x} label={`Remove block ${idx + 1}`} size="sm" onClick={() => removeBlock(idx)} />
+              </div>
+            ))}
+          </div>
+        )}
+      </ModalStack>
 
       <ModalFooter>
-        <button className="loom-btn-ghost" onClick={close}>Cancel</button>
-        <div style={{ flex: 1 }} />
-        <button
-          className="loom-btn-primary"
-          onClick={handleSave}
-          disabled={saving || !canSave}
-        >
-          {saving ? 'Saving…' : 'Save Template'}
-        </button>
+        <Button variant="ghost" onClick={close}>Cancel</Button>
+        <Button variant="primary" icon={Icons.bookmark} onClick={() => { void handleSave(); }} disabled={!canSave} loading={saving}>
+          Save template
+        </Button>
       </ModalFooter>
     </ModalShell>
   );

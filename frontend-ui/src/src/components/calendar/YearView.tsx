@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import type { Event, Calendar } from '../../types';
 import { DEFAULT_TIMELINE_COLOR } from '../../lib/colors';
+import { Segmented, TLDot } from '../ui';
 import styles from './YearView.module.css';
 
 const MONTH_NAMES = [
@@ -18,31 +19,38 @@ function monthDays(year: number, month: number): (number | null)[] {
   return cells;
 }
 
+type YearMode = 'year' | 'semester';
+
 interface YearViewProps {
   events: Event[];
+  /** The displayed year — owned by CalendarPage so the TopBar chevrons drive it. */
+  year: number;
+  onYearChange: (year: number) => void;
   onDayClick: (date: Date) => void;
   onMonthClick: (date: Date) => void;
   timelines?: Calendar[];
   onEventClick?: (eventId: number) => void;
 }
 
-export function YearView({ events, onDayClick, onMonthClick, timelines = [], onEventClick }: YearViewProps) {
-  const [mode, setMode] = useState<'year' | 'semester'>('year');
+/**
+ * Custom Year view (not a FullCalendar view). Navigation lives in the TopBar
+ * via CalendarNavContext; here only the Year / Semester mode switch remains.
+ * Scroll-wheel pages years; a month name opens Month view, a day opens Day view.
+ */
+export function YearView({ events, year, onYearChange, onDayClick, onMonthClick, timelines = [], onEventClick }: YearViewProps) {
+  const [mode, setMode] = useState<YearMode>('year');
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-  const [year, setYear] = useState(today.getFullYear());
   const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (wheelTimerRef.current) return;
-    e.preventDefault();
-    setYear(y => e.deltaY > 0 ? y + 1 : y - 1);
+    onYearChange(e.deltaY > 0 ? year + 1 : year - 1);
     wheelTimerRef.current = setTimeout(() => { wheelTimerRef.current = null; }, 200);
-  }, []);
+  }, [onYearChange, year]);
 
-  // Per-day density: event count + the dominant timeline's color, so the
-  // mini-calendar shows 1–3 density dots pre-navigation (WS2 §10).
+  // Per-day density: event count + the dominant timeline's color, so each
+  // mini month shows 1–3 density dots pre-navigation.
   const dayDensity = new Map<string, { count: number; byCal: Record<number, number> }>();
   for (const ev of events) {
     const ds = ev.start_time.slice(0, 10);
@@ -63,34 +71,17 @@ export function YearView({ events, onDayClick, onMonthClick, timelines = [], onE
 
   return (
     <div className={styles.root} onWheel={handleWheel}>
-      <div className={styles.header}>
-        <button className={styles.navBtn} onClick={() => setYear(y => y - 1)}>‹</button>
-        <span className={styles.yearLabel}>{year}</span>
-        <button className={styles.navBtn} onClick={() => setYear(y => y + 1)}>›</button>
-        <div style={{ marginLeft: 16, display: 'inline-flex', gap: 4, padding: 2, background: 'var(--bg-elevated)', borderRadius: 6 }}>
-          <button
-            onClick={() => setMode('year')}
-            style={{
-              padding: '4px 10px', fontSize: 11, fontWeight: 600,
-              borderRadius: 4, border: 'none', cursor: 'pointer',
-              background: mode === 'year' ? 'var(--accent)' : 'transparent',
-              color: mode === 'year' ? '#fff' : 'var(--text-muted)',
-            }}
-          >
-            Year
-          </button>
-          <button
-            onClick={() => setMode('semester')}
-            style={{
-              padding: '4px 10px', fontSize: 11, fontWeight: 600,
-              borderRadius: 4, border: 'none', cursor: 'pointer',
-              background: mode === 'semester' ? 'var(--accent)' : 'transparent',
-              color: mode === 'semester' ? '#fff' : 'var(--text-muted)',
-            }}
-          >
-            Semester
-          </button>
-        </div>
+      <div className={styles.toolbar}>
+        <Segmented<YearMode>
+          size="sm"
+          aria-label="Year layout"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'year', label: 'Year' },
+            { value: 'semester', label: 'Semester' },
+          ]}
+        />
       </div>
 
       {mode === 'semester' ? (
@@ -101,52 +92,55 @@ export function YearView({ events, onDayClick, onMonthClick, timelines = [], onE
           onEventClick={onEventClick}
         />
       ) : (
-      <div className={styles.grid}>
-        {Array.from({ length: 12 }, (_, m) => {
-          const cells = monthDays(year, m);
-          return (
-            <div key={m} className={styles.month}>
-              <button
-                className={styles.monthName}
-                onClick={() => onMonthClick(new Date(year, m, 1))}
-                title={`Go to ${MONTH_NAMES[m]} ${year}`}
-              >
-                {MONTH_NAMES[m]}
-              </button>
-              <div className={styles.dow}>
-                {DOW.map((d, i) => <span key={i}>{d}</span>)}
+        <div className={styles.grid}>
+          {Array.from({ length: 12 }, (_, m) => {
+            const cells = monthDays(year, m);
+            return (
+              <div key={m} className={styles.month}>
+                <button
+                  type="button"
+                  className={styles.monthName}
+                  onClick={() => onMonthClick(new Date(year, m, 1))}
+                  title={`Open ${MONTH_NAMES[m]} ${year} in Month view`}
+                >
+                  {MONTH_NAMES[m]}
+                </button>
+                <div className={styles.dow} aria-hidden="true">
+                  {DOW.map((d, i) => <span key={i}>{d}</span>)}
+                </div>
+                <div className={styles.days}>
+                  {cells.map((day, i) => {
+                    if (!day) return <span key={i} className={styles.empty} />;
+                    const ds = `${year}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const isToday = ds === todayStr;
+                    const density = dayDensity.get(ds);
+                    const dotCount = density ? (density.count >= 5 ? 3 : density.count >= 3 ? 2 : 1) : 0;
+                    const dotColor = density ? dotColorFor(density.byCal) : undefined;
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        className={`${styles.day} ${isToday ? styles.today : ''}`}
+                        onClick={() => onDayClick(new Date(year, m, day))}
+                        aria-current={isToday ? 'date' : undefined}
+                        title={density ? `${ds} · ${density.count} event${density.count === 1 ? '' : 's'}` : ds}
+                      >
+                        <span className={styles.dayNum}>{day}</span>
+                        {dotCount > 0 && (
+                          <span className={styles.dots} aria-hidden="true">
+                            {Array.from({ length: dotCount }, (_, di) => (
+                              <span key={di} className={styles.dot} style={{ background: dotColor }} />
+                            ))}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div className={styles.days}>
-                {cells.map((day, i) => {
-                  if (!day) return <span key={i} className={styles.empty} />;
-                  const ds = `${year}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const isToday = ds === todayStr;
-                  const density = dayDensity.get(ds);
-                  const dotCount = density ? (density.count >= 5 ? 3 : density.count >= 3 ? 2 : 1) : 0;
-                  const dotColor = density ? dotColorFor(density.byCal) : undefined;
-                  return (
-                    <button
-                      key={i}
-                      className={`${styles.day} ${isToday ? styles.today : ''}`}
-                      onClick={() => onDayClick(new Date(year, m, day))}
-                      title={ds}
-                    >
-                      <span className={styles.dayNum}>{day}</span>
-                      {dotCount > 0 && (
-                        <span className={styles.dots}>
-                          {Array.from({ length: dotCount }, (_, di) => (
-                            <span key={di} className={styles.dot} style={{ background: dotColor }} />
-                          ))}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -164,14 +158,14 @@ function SemesterView({ year, events, timelines, onEventClick }: SemesterViewPro
 
   if (courseTimelines.length === 0) {
     return (
-      <div style={{ padding: '32px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
+      <p className={styles.semesterEmpty}>
         No course timelines yet. Mark a timeline as a course in its Edit menu (with a term start and end) to see it here.
-      </div>
+      </p>
     );
   }
 
   return (
-    <div style={{ padding: '12px 16px 32px', display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto' }}>
+    <div className={styles.semester}>
       {courseTimelines.map(tl => {
         const start = new Date(tl.term_start!);
         const end   = new Date(tl.term_end!);
@@ -184,33 +178,28 @@ function SemesterView({ year, events, timelines, onEventClick }: SemesterViewPro
         });
 
         return (
-          <div key={tl.id} style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: tl.color, display: 'inline-block' }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-main)' }}>{tl.name}</span>
-              {tl.course_code && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{tl.course_code}</span>}
-              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div key={tl.id} className={styles.course}>
+            <div className={styles.courseHead}>
+              <TLDot color={tl.color} size={8} />
+              <span className={styles.courseName}>{tl.name}</span>
+              {tl.course_code && <span className={styles.courseCode}>{tl.course_code}</span>}
+              <span className={styles.courseTerm}>
                 {start.toLocaleDateString([], { month: 'short', day: 'numeric' })} – {end.toLocaleDateString([], { month: 'short', day: 'numeric' })}
               </span>
             </div>
-            <div style={{ position: 'relative', height: 32, background: 'var(--bg-subtle)', borderRadius: 4 }}>
+            <div className={styles.track}>
               {tlEvents.map(ev => {
                 const evDate = new Date(ev.start_time);
                 const pct = ((evDate.getTime() - start.getTime()) / totalMs) * 100;
                 return (
                   <button
                     key={ev.id}
+                    type="button"
+                    className={styles.tick}
                     onClick={() => onEventClick?.(ev.id)}
+                    aria-label={`${ev.title}, ${evDate.toLocaleDateString()}`}
                     title={`${ev.title} — ${evDate.toLocaleDateString()}`}
-                    style={{
-                      position: 'absolute',
-                      left: `${pct}%`,
-                      top: 4, bottom: 4, width: 6,
-                      background: tl.color,
-                      border: 'none', borderRadius: 2,
-                      cursor: 'pointer', padding: 0,
-                      transform: 'translateX(-50%)',
-                    }}
+                    style={{ left: `${pct}%`, background: tl.color }}
                   />
                 );
               })}

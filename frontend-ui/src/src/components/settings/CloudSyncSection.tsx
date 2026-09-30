@@ -4,64 +4,63 @@ import {
   getCloudStatus, type CloudStatus,
 } from '../../api';
 import { useNotifications } from '../../store/notifications';
-
-const fieldStyle = {
-  padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)',
-  background: 'var(--bg-elevated)', color: 'var(--text-main)', fontSize: 13, width: 260,
-} as const;
+import { Badge, Button, Field, Input, Row, Skeleton } from '../ui';
+import { errMessage, relativeTime } from './util';
+import styles from './settings.module.css';
 
 /**
- * Settings section for the v3.0 AWS E2E-encrypted sync (Stage 2).
- * One password does double duty: Cognito SRP sign-in + local KEK derivation.
- * Locking (or restarting the backend) drops the keys — re-unlock required.
+ * Settings → Sync → Encrypted cloud vault (Stage 2 AWS E2E sync).
+ * One password does double duty: cloud sign-in + local key derivation.
+ * Locking (or restarting the backend) drops the keys, so re-unlock is needed.
+ * Rendered inside a Card body by SyncSection.
  */
 export function CloudSyncSection() {
   const { addNotification } = useNotifications();
-  const [status, setStatus] = useState<CloudStatus | null>(null);
-  const [email, setEmail] = useState('');
+  const [status, setStatus]     = useState<CloudStatus | null | 'unavailable'>(null);
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [code, setCode] = useState('');
+  const [code, setCode]         = useState('');
   const [needsConfirm, setNeedsConfirm] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [busy, setBusy]         = useState(false);
+  const [syncing, setSyncing]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    getCloudStatus().then(s => {
-      setStatus(s);
-      if (s.email) setEmail(s.email);
-    }).catch(() => setStatus(null));
+    getCloudStatus()
+      .then(s => { setStatus(s); if (s.email) setEmail(s.email); })
+      .catch(() => setStatus('unavailable'));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleSignup = async () => {
-    setBusy(true);
+  async function handleSignup() {
+    setBusy(true); setError(null);
     try {
       await cloudSignup(email, password);
       setNeedsConfirm(true);
       addNotification({ type: 'info', title: 'Check your email', message: 'Enter the confirmation code to finish creating your sync account.' });
     } catch (e) {
-      addNotification({ type: 'error', title: 'Sign-up failed', message: String(e) });
+      setError(errMessage(e, 'Sign-up failed.'));
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const handleConfirm = async () => {
-    setBusy(true);
+  async function handleConfirm() {
+    setBusy(true); setError(null);
     try {
       await cloudConfirm(email, code);
       setNeedsConfirm(false);
-      addNotification({ type: 'success', title: 'Account confirmed', message: 'You can now unlock cloud sync.' });
+      addNotification({ type: 'success', title: 'Account confirmed', message: 'You can now unlock the vault.' });
     } catch (e) {
-      addNotification({ type: 'error', title: 'Confirmation failed', message: String(e) });
+      setError(errMessage(e, 'Confirmation failed.'));
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const handleUnlock = async () => {
-    setBusy(true);
+  async function handleUnlock() {
+    setBusy(true); setError(null);
     try {
       const r = await cloudUnlock(email, password);
       setPassword('');
@@ -74,95 +73,103 @@ export function CloudSyncSection() {
       });
       refresh();
     } catch (e) {
-      addNotification({ type: 'error', title: 'Unlock failed', message: String(e) });
+      setError(errMessage(e, 'Unlock failed.'));
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const handleLock = async () => {
-    await cloudLock();
-    refresh();
-  };
+  async function handleLock() {
+    setBusy(true);
+    try { await cloudLock(); refresh(); } finally { setBusy(false); }
+  }
 
-  const handleSync = async () => {
+  async function handleSync() {
     setSyncing(true);
     try {
       const s = await cloudSyncRun();
       addNotification({
-        type: 'success', title: 'Sync complete', collapseKey: 'cloud-sync',
+        type: 'success', title: 'Sync complete', collapseKey: 'cloud-sync', autoRemoveMs: 5000,
         message: `Pulled ${s.pull.created + s.pull.updated}, pushed ${s.push.pushed}, deleted ${s.pull.deleted + s.push.deleted}.`,
       });
       refresh();
     } catch (e) {
-      addNotification({ type: 'error', title: 'Sync failed', message: String(e), collapseKey: 'cloud-sync' });
+      addNotification({ type: 'error', title: 'Sync failed', message: errMessage(e), collapseKey: 'cloud-sync' });
     } finally {
       setSyncing(false);
     }
-  };
+  }
 
-  const unlocked = status?.unlocked ?? false;
+  if (status === null) {
+    return (
+      <div className={styles.stack} aria-busy="true">
+        <Skeleton width="60%" />
+        <Skeleton width="40%" />
+        <Skeleton width={120} height={32} />
+      </div>
+    );
+  }
 
-  return (
-    <>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-        Sync events and tasks between your own devices through an end-to-end encrypted vault
-        (AES-256-GCM; the server only ever stores ciphertext). Separate from provider
-        connections and from your LoomAssist account — one password signs you in and derives
-        the encryption key, and it never leaves this device.
-      </p>
+  if (status === 'unavailable') {
+    return (
+      <Row label="Vault" description="Cloud sync is not configured on this device's backend." divider={false}>
+        <Badge tone="neutral">Unavailable</Badge>
+      </Row>
+    );
+  }
 
-      {unlocked ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-main)' }}>
-            <span style={{ color: 'var(--success)', marginRight: 6 }}>●</span>
-            Unlocked as <strong>{status?.email}</strong>
-            {status?.last_synced_at && (
-              <span style={{ color: 'var(--text-muted)' }}>
-                {' '}· last synced {new Date(status.last_synced_at).toLocaleString()}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="loom-btn-primary" onClick={handleSync} disabled={syncing}>
-              {syncing ? 'Syncing…' : 'Sync now'}
-            </button>
-            <button className="loom-btn-ghost" onClick={handleLock}>Lock</button>
-          </div>
+  if (status.unlocked) {
+    return (
+      <>
+        <Row label="Vault" description={status.email ?? undefined}>
+          <Badge tone="success" dot>Unlocked</Badge>
+        </Row>
+        <Row label="Last synced" divider={false}>
+          <span className={styles.value}>{relativeTime(status.last_synced_at, 'Not yet')}</span>
+        </Row>
+        <div className={styles.actions}>
+          <Button variant="primary" loading={syncing} onClick={handleSync}>Sync now</Button>
+          <Button variant="ghost" disabled={busy} onClick={handleLock}>Lock</Button>
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <input type="email" placeholder="Email" value={email}
-            onChange={e => setEmail(e.target.value)} style={fieldStyle} />
-          <input type="password" placeholder="Password" value={password}
-            onChange={e => setPassword(e.target.value)} style={fieldStyle} />
-          {needsConfirm && (
-            <input placeholder="Confirmation code" value={code}
-              onChange={e => setCode(e.target.value)} style={fieldStyle} />
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            {needsConfirm ? (
-              <button className="loom-btn-primary" onClick={handleConfirm} disabled={busy || !code}>
-                {busy ? 'Confirming…' : 'Confirm account'}
-              </button>
-            ) : (
-              <>
-                <button className="loom-btn-primary" onClick={handleUnlock}
-                  disabled={busy || !email || !password}>
-                  {busy ? 'Unlocking…' : 'Unlock / Sign in'}
-                </button>
-                <button className="loom-btn-ghost" onClick={handleSignup}
-                  disabled={busy || !email || !password}>
-                  Create sync account
-                </button>
-              </>
-            )}
-          </div>
-          <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
-            Unlocking takes a moment — the encryption key is derived on-device with scrypt.
-          </p>
+      </>
+    );
+  }
+
+  const canSubmit = !!email && !!password && !busy;
+  return (
+    <form
+      className={styles.vaultForm}
+      onSubmit={e => { e.preventDefault(); if (needsConfirm) handleConfirm(); else if (canSubmit) handleUnlock(); }}
+    >
+      <div className={styles.vaultFields}>
+        <Field label="Email" htmlFor="vault-email">
+          <Input id="vault-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} disabled={busy} />
+        </Field>
+        <Field label="Password" htmlFor="vault-password" hint="Signs you in and derives the encryption key on this device.">
+          <Input id="vault-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} disabled={busy} />
+        </Field>
+        {needsConfirm && (
+          <Field label="Confirmation code" htmlFor="vault-code" className={styles.formWide} hint="From the email we just sent.">
+            <Input id="vault-code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e => setCode(e.target.value)} disabled={busy} />
+          </Field>
+        )}
+      </div>
+      {error && (
+        <div className={`${styles.alert} ${styles.alertError}`} role="alert">
+          <span className={styles.alertText}>{error}</span>
         </div>
       )}
-    </>
+      <div className={styles.actions}>
+        {needsConfirm ? (
+          <Button type="submit" variant="primary" loading={busy} disabled={!code}>Confirm account</Button>
+        ) : (
+          <>
+            <Button type="submit" variant="primary" loading={busy} disabled={!email || !password}>Unlock</Button>
+            <Button type="button" variant="ghost" disabled={!canSubmit} onClick={handleSignup}>Create sync account</Button>
+          </>
+        )}
+        <span className={styles.dim}>Unlocking takes a moment — the key is derived on-device with scrypt.</span>
+      </div>
+    </form>
   );
 }

@@ -1,12 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId, type ReactNode } from 'react';
 import styles from './EventEditorModal.module.css';
-import { ModalShell, ModalFooter, FieldLabel } from './ModalShell';
+import { ModalShell, ModalFooter, ModalNotice } from './ModalShell';
+import { modKey } from './platform';
 import { SourceBadge } from '../shared/SourceBadge';
 import { MentionTextarea } from '../shared/MentionTextarea';
-import { TLDot } from '../shared/TLDot';
-import { Icon, Icons } from '../shared/Icon';
-import { Kbd } from '../shared/Kbd';
-import { useModal } from '../../contexts/ModalContext';
+import { SuggestionChip } from '../shared/SuggestionChip';
+import {
+  Button, IconButton, Field, Input, Select, Switch, Checkbox, Badge, Menu, TLDot, Icon, Icons,
+  confirm as confirmDialog, prompt as promptDialog, type MenuEntry,
+} from '../ui';
+import { useModal, type EventEditorPrefill } from '../../contexts/ModalContext';
 import { useUndo } from '../../contexts/UndoContext';
 import { useNotifications } from '../../store/notifications';
 import {
@@ -14,13 +17,17 @@ import {
   createTemplate, createTask, listTasks, deleteTask,
   parseDateTime, clockEvent, resolveConflict, listCourses,
   cascadeDependents, listEvents, checkConflicts, skipEventDate, unskipEventDate,
+  listAssignments, createAssignment, updateAssignment, deleteAssignment,
 } from '../../api';
 import type { Event, Calendar, ChecklistItem, ConflictSuggestion, Course } from '../../types';
-import { SuggestionChip } from '../shared/SuggestionChip';
 import { parseChecklist } from '../../lib/eventUtils';
 import { isExamLike, stripExamWord } from '../../lib/eventClassification';
 import { checkSleepWindow } from '../../lib/sleepWindow';
 import { getMissedButtonState } from '../../lib/missedEvents';
+
+export type { EventEditorPrefill };
+
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 function formatDT(dtLocal: string): string {
   if (!dtLocal) return '';
@@ -29,63 +36,35 @@ function formatDT(dtLocal: string): string {
     : d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-function NLDateInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [text, setText] = useState(() => formatDT(value));
-  const [preview, setPreview] = useState<string | null>(null);
-  const [parsing, setParsing] = useState(false);
-  const [error, setError] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // WS5 #4 — remember the last string we actually sent to the Ollama parser so an
-  // unchanged value (e.g. edited then reverted) doesn't re-fire the LLM.
-  const lastParsedRef = useRef<string>('');
+/** datetime-local value ("YYYY-MM-DDTHH:mm[:ss]") → naive local ISO with seconds. */
+function toNaiveLocalISO(v: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
+  if (m) return `${m[1]}T${m[2]}:${m[3]}:${m[4] ?? '00'}`;
+  // Fallback for anything else parseable: format in local time, never UTC.
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return v;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+function toLocalDT(iso: string): string {
+  // Convert ISO datetime to datetime-local input value
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
-  const handleChange = useCallback((raw: string) => {
-    setText(raw);
-    setPreview(null);
-    setError(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (!raw.trim()) return;
-    timerRef.current = setTimeout(async () => {
-      const native = new Date(raw);
-      if (!isNaN(native.getTime()) && native.getFullYear() > 2000) {
-        const local = toLocalDT(native.toISOString());
-        onChange(local);
-        setPreview(formatDT(local));
-        return;
-      }
-      if (raw === lastParsedRef.current) return; // no change since last LLM parse
-      lastParsedRef.current = raw;
-      setParsing(true);
-      try {
-        const res = await parseDateTime(raw);
-        onChange(res.iso.slice(0, 16));
-        setPreview(res.display);
-      } catch {
-        setError(true);
-      } finally {
-        setParsing(false);
-      }
-    }, 600);
-  }, [onChange]);
+function toLocalDate(iso: string): string {
+  return iso ? iso.split('T')[0] : '';
+}
 
-  return (
-    <div className={styles.nlWrap}>
-      <input
-        className={`loom-field${error ? ` ${styles.nlError}` : ''}`}
-        value={text}
-        onChange={e => handleChange(e.target.value)}
-        placeholder='e.g. "next fri 2pm"'
-      />
-      {parsing && <div className={`${styles.nlPreview} ${styles.nlParsing}`}>Parsing…</div>}
-      {!parsing && preview && (
-        <div className={styles.nlPreview}>
-          <Icon d={Icons.check} size={11} stroke="var(--accent)" strokeWidth={2.5} /> {preview}
-        </div>
-      )}
-    </div>
-  );
+function formatDuration(ms: number): string {
+  if (!isFinite(ms) || ms <= 0) return '';
+  const mins = Math.round(ms / 60_000);
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
 }
 
 const REMINDER_OPTIONS = [
@@ -100,26 +79,87 @@ const REMINDER_OPTIONS = [
 ];
 
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const DOW_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function toLocalDT(iso: string): string {
-  // Convert ISO datetime to datetime-local input value
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/* ── Natural-language time helper (Ollama-backed) ────────────────────────── */
+
+function NLTimeInput({ onResolved }: { onResolved: (localDT: string) => void }) {
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState<string | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Remember the last string we actually sent to the parser so an unchanged
+  // value (e.g. edited then reverted) doesn't re-fire the LLM.
+  const lastParsedRef = useRef<string>('');
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const handleChange = useCallback((raw: string) => {
+    setText(raw);
+    setPreview(null);
+    setError(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!raw.trim()) return;
+    timerRef.current = setTimeout(async () => {
+      const native = new Date(raw);
+      if (!isNaN(native.getTime()) && native.getFullYear() > 2000) {
+        const local = toLocalDT(native.toISOString());
+        onResolved(local);
+        setPreview(formatDT(local));
+        return;
+      }
+      if (raw === lastParsedRef.current) return;
+      lastParsedRef.current = raw;
+      setParsing(true);
+      try {
+        const res = await parseDateTime(raw);
+        onResolved(res.iso.slice(0, 16));
+        setPreview(res.display);
+      } catch {
+        setError(true);
+      } finally {
+        setParsing(false);
+      }
+    }, 600);
+  }, [onResolved]);
+
+  return (
+    <div className={styles.nl}>
+      <Input
+        size="sm"
+        icon={Icons.sparkles}
+        value={text}
+        onChange={e => handleChange(e.target.value)}
+        placeholder='Type a time, e.g. "next fri 2pm"'
+        aria-label="Set the start time in plain language"
+        invalid={error}
+      />
+      {(parsing || preview || error) && (
+        <div className={[styles.nlPreview, error ? styles.nlError : ''].join(' ')} aria-live="polite">
+          {parsing ? <><Icon d={Icons.loader} size={11} className={styles.spin} /> Parsing…</>
+            : error ? <><Icon d={Icons.alertCircle} size={11} /> Couldn’t read that time</>
+            : <><Icon d={Icons.check} size={11} strokeWidth={2.5} /> Start set to {preview}</>}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function toLocalDate(iso: string): string {
-  return iso ? iso.split('T')[0] : '';
+/* ── Icon-led row ────────────────────────────────────────────────────────── */
+
+function Row({ icon, active, label, children }: { icon: ReactNode; active?: boolean; label: string; children: ReactNode }) {
+  return (
+    <div className={styles.row}>
+      <span className={[styles.rowIcon, active ? styles.rowIconActive : ''].join(' ')} title={label} aria-hidden="true">
+        <Icon d={icon} size={15} />
+      </span>
+      <div className={styles.rowBody}>{children}</div>
+    </div>
+  );
 }
 
-// WS3 #1/#3 — quick-create "More options" and template-apply seed a NEW event's
-// title / timeline / recurrence. Ignored when editing an existing `event`.
-export interface EventEditorPrefill {
-  title?: string;
-  calendarId?: number;
-  isRecurring?: boolean;
-  recurrenceDays?: string;
-}
+/* ── Props ───────────────────────────────────────────────────────────────── */
 
 interface EventEditorModalProps {
   event?: Event | null;
@@ -136,6 +176,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const { close, openStudyBlock } = useModal();
   const { push: pushUndo } = useUndo();
   const { addNotification } = useNotifications();
+  const ids = useId();
 
   const isEdit = !!event;
   const isLocked = event?.title === 'Meeting (availability booking)';
@@ -151,7 +192,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [endVal, setEndVal]         = useState(
     event  ? (event.is_all_day ? toLocalDate(event.end_time) : toLocalDT(event.end_time))
     : endISO ? toLocalDT(endISO)
-    : (date  ? `${date}T10:00` : toLocalDT(new Date(Date.now() + 3_600_000).toISOString()))
+    : (date  ? `${date}T10:00` : toLocalDT(new Date(new Date().getTime() + 3_600_000).toISOString()))
   );
   const [calendarId, setCalendarId] = useState(event?.calendar_id ?? prefill?.calendarId ?? timelines[0]?.id ?? 0);
   const [reminder, setReminder]     = useState(event?.reminder_minutes ?? 0);
@@ -162,7 +203,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [travelTime, setTravelTime] = useState<number>(event?.travel_time_minutes ?? 0);
   const [eventType, setEventType]   = useState<'' | 'lecture' | 'lab' | 'office_hours' | 'other'>(event?.event_type ?? '');
   const [prepMinutes, setPrepMinutes] = useState<number>(event?.prep_minutes ?? 0);
-  const [description, setDescription] = useState(event?.description ?? '');
+  const [description, setDescription] = useState(event?.description ?? prefill?.description ?? '');
   const [checklist, setChecklist]   = useState<ChecklistItem[]>(parseChecklist(event?.checklist ?? ''));
 
   // Recurrence
@@ -173,7 +214,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   });
   const [recurEnd, setRecurEnd]     = useState(event?.recurrence_end ? toLocalDate(event.recurrence_end) : '');
   const [skipDates, setSkipDates]   = useState(event?.skipped_dates ?? '');
-  const [skipDraft, setSkipDraft]   = useState(''); // WS5 #5 — date-input adder
+  const [skipDraft, setSkipDraft]   = useState('');
 
   // Task board status
   const [isOnTaskBoard, setIsOnTaskBoard] = useState(false);
@@ -181,11 +222,28 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const [conflictWarning, setConflictWarning] = useState('');
   const [needsConfirm, setNeedsConfirm] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Course link. Events link to a course through an Assignment row
+  // (course_id + event_id) — the same mechanism the syllabus import uses.
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<number | null>(null);
+  const [initialCourseId, setInitialCourseId] = useState<number | null>(null);
+  const [assignmentId, setAssignmentId] = useState<number | null>(null);
   useEffect(() => { listCourses().then(setCourses).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!event?.id) return;
+    let cancelled = false;
+    listAssignments({ event_id: event.id }).then(rows => {
+      if (cancelled || rows.length === 0) return;
+      setCourseId(rows[0].course_id);
+      setInitialCourseId(rows[0].course_id);
+      setAssignmentId(rows[0].id);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [event?.id]);
 
-  // Phase 10: Dependencies
+  // Dependencies
   const [allEvents, setAllEvents] = useState<Event[]>([]);
   const [dependsOnId, setDependsOnId] = useState<number | null>(event?.depends_on_event_id ?? null);
   const [dependsOffset, setDependsOffset] = useState<number>(event?.depends_offset_minutes ?? 0);
@@ -197,16 +255,8 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
   const [actualStart, setActualStart] = useState<string | null>(event?.actual_start ?? null);
   const [actualEnd,   setActualEnd]   = useState<string | null>(event?.actual_end   ?? null);
 
-  // "Missed" opt-in marker — drives the footer Mark/Unmark button.
+  // "Missed" opt-in marker — drives the Mark/Unmark action.
   const [missedAt, setMissedAt] = useState<string | null>(event?.missed_at ?? null);
-
-  // WS5 #6 — in-modal replacements for window.prompt/confirm.
-  const [confirmingDelete, setConfirmingDelete] = useState(false); // two-step delete (non-recurring)
-  const [deleteScopeOpen, setDeleteScopeOpen] = useState(false);   // scope popover (recurring)
-  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [templateNaming, setTemplateNaming] = useState(false);
-  const [templateName, setTemplateName] = useState('');
-  useEffect(() => () => { if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current); }, []);
 
   // Load task board status for existing events
   useEffect(() => {
@@ -219,40 +269,123 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
 
   const selectedTimeline = timelines.find(t => t.id === calendarId);
 
+  // ModalRoot refetches timelines when a modal opens, so a brand-new event can
+  // mount before they arrive and sit on calendar_id 0 (which the backend
+  // rejects) while the <select> visually shows the first option. Adopt the
+  // first real timeline (or the prefill) as soon as the list lands.
+  useEffect(() => {
+    if (timelines.length === 0 || timelines.some(t => t.id === calendarId)) return;
+    const preferred = prefill?.calendarId && timelines.some(t => t.id === prefill.calendarId)
+      ? prefill.calendarId
+      : timelines[0]!.id;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing derived default once data arrives
+    setCalendarId(preferred);
+  }, [timelines, calendarId, prefill?.calendarId]);
+
   // ---- Clock-in / Clock-out ----
   async function handleClock(action: 'in' | 'out') {
     if (!event?.id) return;
-    const updated = await clockEvent(event.id, action);
-    setActualStart(updated.actual_start ?? null);
-    setActualEnd(updated.actual_end ?? null);
-    onSaved();
+    try {
+      const updated = await clockEvent(event.id, action);
+      setActualStart(updated.actual_start ?? null);
+      setActualEnd(updated.actual_end ?? null);
+      onSaved();
+    } catch {
+      addNotification({ type: 'error', title: action === 'in' ? 'Could not start tracking' : 'Could not stop tracking' });
+    }
   }
 
   // ---- Checklist helpers ----
   const addChecklistItem = useCallback(() => {
     setChecklist(prev => [...prev, { text: '', done: false }]);
   }, []);
-
   const toggleChecklistItem = useCallback((idx: number) => {
     setChecklist(prev => prev.map((item, i) => i === idx ? { ...item, done: !item.done } : item));
   }, []);
-
   const updateChecklistText = useCallback((idx: number, text: string) => {
     setChecklist(prev => prev.map((item, i) => i === idx ? { ...item, text } : item));
   }, []);
-
   const removeChecklistItem = useCallback((idx: number) => {
     setChecklist(prev => prev.filter((_, i) => i !== idx));
   }, []);
 
-  // ---- Submit ----
+  // ---- Conflict verdict reset ----
+  // Changing the time / timeline / all-day invalidates a prior conflict verdict —
+  // clear it so the next save re-runs the pre-check instead of writing straight away.
+  const resetConfirm = useCallback(() => {
+    setNeedsConfirm(false);
+    setConflictWarning('');
+    setSuggestions([]);
+    setSuggestionsOpen(false);
+  }, []);
+  const changeStart = useCallback((v: string) => { setStartVal(v); resetConfirm(); }, [resetConfirm]);
+  const changeEnd   = useCallback((v: string) => { setEndVal(v);   resetConfirm(); }, [resetConfirm]);
+
+  // ---- Date / time parts (structured inputs over the datetime-local strings) ----
+  const startDate = startVal.slice(0, 10);
+  const startTime = startVal.slice(11, 16) || '09:00';
+  const endDate   = endVal.slice(0, 10);
+  const endTime   = endVal.slice(11, 16) || '10:00';
+  const [showEndDate, setShowEndDate] = useState(() => !allDay && startDate !== endDate);
+  const durationMs = new Date(endVal).getTime() - new Date(startVal).getTime();
+
+  const shiftBoth = useCallback((newStartLocal: string) => {
+    // Preserve duration: move end by the same delta as start.
+    const dur = new Date(endVal).getTime() - new Date(startVal).getTime();
+    const ns = new Date(newStartLocal);
+    changeStart(newStartLocal);
+    if (!isNaN(ns.getTime()) && isFinite(dur) && dur > 0) changeEnd(toLocalDT(new Date(ns.getTime() + dur).toISOString()));
+  }, [startVal, endVal, changeStart, changeEnd]);
+
+  const onDateChange = (d: string) => {
+    if (!d) return;
+    if (allDay) {
+      changeStart(d);
+      if (!endVal || endVal < d) changeEnd(d);
+      return;
+    }
+    shiftBoth(`${d}T${startTime}`);
+  };
+  const onStartTimeChange = (t: string) => { if (t) shiftBoth(`${startDate}T${t}`); };
+  const onEndTimeChange   = (t: string) => { if (t) changeEnd(`${endDate || startDate}T${t}`); };
+  const onEndDateChange   = (d: string) => { if (d) changeEnd(allDay ? d : `${d}T${endTime}`); };
+
+  const toggleAllDay = (next: boolean) => {
+    setAllDay(next);
+    resetConfirm();
+    if (next) {
+      setStartVal(startDate);
+      setEndVal(endDate || startDate);
+      if (recurring) setRecurring(false);
+      setShowEndDate(false);
+    } else {
+      setStartVal(`${startDate}T09:00`);
+      setEndVal(`${endDate || startDate}T10:00`);
+    }
+  };
+
+  const applyNaturalStart = useCallback((localDT: string) => {
+    if (allDay) {
+      const d = localDT.slice(0, 10);
+      changeStart(d);
+      if (!endVal || endVal < d) changeEnd(d);
+    } else {
+      shiftBoth(localDT);
+    }
+  }, [allDay, endVal, changeStart, changeEnd, shiftBoth]);
+
+  // ---- Payload ----
   // Auto-clear-on-save: when called with no opts (the regular handleSubmit
   // path), `missed_at` goes out as null. Saving a marked event via the regular
   // Save button therefore unmarks it — the user implicitly recovered it.
-  // The Mark/Unmark button passes an explicit value via opts.
   const buildPayload = useCallback((opts?: { missedAt?: string | null }) => {
-    const start = allDay ? `${startVal}T00:00:00` : new Date(startVal).toISOString();
-    const end   = allDay ? `${endVal}T23:59:59`   : new Date(endVal).toISOString();
+    // Timed events are stored as naive LOCAL ISO ("YYYY-MM-DDTHH:mm:ss"), the
+    // same shape the seed data, ICS import and the tray/iOS clients use. The
+    // datetime-local inputs already hold that form minus the seconds; never
+    // round-trip through toISOString(), which would emit UTC "Z" strings and
+    // mix aware/naive timestamps in the DB.
+    const start = allDay ? `${startVal}T00:00:00` : toNaiveLocalISO(startVal);
+    const end   = allDay ? `${endVal}T23:59:59`   : toNaiveLocalISO(endVal);
     return {
       title: title.trim(),
       start_time: start,
@@ -278,18 +411,39 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       timezone: event?.timezone ?? 'local',
       per_day_times: event?.per_day_times ?? '',
       missed_at: opts?.missedAt ?? null,
+      course_id: courseId,
     };
   }, [title, allDay, startVal, endVal, calendarId, reminder, reminderSource, location, travelTime,
       eventType, prepMinutes, description, checklist, recurring, recurDays, recurEnd, skipDates,
-      dependsOnId, dependsOffset, event]);
+      dependsOnId, dependsOffset, event, courseId]);
 
-  // WS5 #4 — client-side validation: end must be after start. Blocks the save.
+  // Client-side validation: end must be after start. Blocks the save.
   const endInvalid = allDay
     ? (!!endVal && !!startVal && endVal < startVal)
     : (new Date(endVal).getTime() <= new Date(startVal).getTime());
 
+  // Keep the Assignment row that links this event to a course in step with the
+  // course picker (create / move / unlink). Never blocks the event save.
+  const syncCourseLink = useCallback(async (eventId: number, startISO: string, eventTitle: string) => {
+    try {
+      const due = startISO.slice(0, 10);
+      if (courseId && !assignmentId) {
+        const a = await createAssignment({ course_id: courseId, title: eventTitle, due_date: due, weight_category: null, score: null, max_score: null, event_id: eventId });
+        setAssignmentId(a.id);
+      } else if (courseId && assignmentId && courseId !== initialCourseId) {
+        await updateAssignment(assignmentId, { course_id: courseId, title: eventTitle, due_date: due });
+      } else if (!courseId && assignmentId) {
+        await deleteAssignment(assignmentId);
+        setAssignmentId(null);
+      }
+      setInitialCourseId(courseId);
+    } catch {
+      addNotification({ type: 'warning', title: 'Course link not saved', message: 'The event was saved, but linking it to the course failed.' });
+    }
+  }, [courseId, assignmentId, initialCourseId, addNotification]);
+
   // The single write. Only runs once the conflict pre-check has cleared or the
-  // user has explicitly confirmed "Save anyway" — never before (WS5 #3).
+  // user has explicitly confirmed "Save anyway" — never before.
   const performWrite = useCallback(async () => {
     const payload = buildPayload();
     let createdEvent: Event | null = null;
@@ -302,6 +456,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
         undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
         redo: async () => { await updateEvent(event.id, payload); },
       });
+      await syncCourseLink(event.id, payload.start_time, payload.title);
       if (dependents.length > 0) {
         const eid = event.id;
         addNotification({
@@ -321,6 +476,7 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
         undo: async () => { await deleteEvent(created.id); },
         redo: async () => { /* re-create not directly reversible */ },
       });
+      await syncCourseLink(created.id, payload.start_time, payload.title);
     }
 
     const sw = checkSleepWindow(payload.start_time, payload.end_time, !!payload.is_all_day);
@@ -341,78 +497,72 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     } else {
       close();
     }
-  }, [isEdit, event, buildPayload, pushUndo, onSaved, close, openStudyBlock, addNotification]);
+  }, [isEdit, event, buildPayload, pushUndo, onSaved, close, openStudyBlock, addNotification, syncCourseLink]);
 
   const handleSubmit = useCallback(async () => {
-    if (!title.trim() || endInvalid) return;
+    if (!title.trim() || endInvalid || saving) return;
+    setSaving(true);
+    try {
+      // First click (not yet confirmed): dry-run the conflict check and, if it
+      // overlaps, warn + offer alternatives WITHOUT writing. The second click
+      // ("Save anyway") skips the check and performs the single write.
+      if (!needsConfirm) {
+        const p = buildPayload();
+        let conflicts: Array<{ id: number; title: string; conflict_type?: string }> = [];
+        try {
+          const res = await checkConflicts({
+            start_time: p.start_time, end_time: p.end_time,
+            calendar_id: p.calendar_id, exclude_event_id: event?.id ?? null,
+          });
+          conflicts = res.conflicts;
+        } catch { /* if the pre-check itself fails, fall through and let the write proceed */ }
 
-    // First click (not yet confirmed): dry-run the conflict check and, if it
-    // overlaps, warn + offer alternatives WITHOUT writing. The second click
-    // ("Save anyway") skips the check and performs the single write (WS5 #3).
-    if (!needsConfirm) {
-      const p = buildPayload();
-      let conflicts: Array<{ id: number; title: string; conflict_type?: string }> = [];
-      try {
-        const res = await checkConflicts({
-          start_time: p.start_time, end_time: p.end_time,
-          calendar_id: p.calendar_id, exclude_event_id: event?.id ?? null,
-        });
-        conflicts = res.conflicts;
-      } catch { /* if the pre-check itself fails, fall through and let the write proceed */ }
-
-      if (conflicts.length) {
-        const names = conflicts.map(c => (
-          c.conflict_type === 'travel' ? `the travel buffer for "${c.title}"`
-          : c.conflict_type === 'prep' ? `the prep buffer for "${c.title}"`
-          : `"${c.title}"`
-        )).join(', ');
-        setConflictWarning(`Overlaps with: ${names}`);
-        setNeedsConfirm(true);
-        setSuggestions([]);
-        setSuggestionsOpen(false);
-        resolveConflict({
-          event: { title: p.title, start_time: p.start_time, end_time: p.end_time, calendar_id: p.calendar_id },
-          conflicts: conflicts.map(c => ({ id: c.id, title: c.title })),
-        }).then(res => {
-          if (res.suggestions.length) { setSuggestions(res.suggestions); setSuggestionsOpen(true); }
-        }).catch(() => { /* silently ignore */ });
-        return; // nothing written yet
+        if (conflicts.length) {
+          const names = conflicts.map(c => (
+            c.conflict_type === 'travel' ? `the travel buffer for "${c.title}"`
+            : c.conflict_type === 'prep' ? `the prep buffer for "${c.title}"`
+            : `"${c.title}"`
+          )).join(', ');
+          setConflictWarning(`Overlaps with ${names}.`);
+          setNeedsConfirm(true);
+          setSuggestions([]);
+          setSuggestionsOpen(false);
+          resolveConflict({
+            event: { title: p.title, start_time: p.start_time, end_time: p.end_time, calendar_id: p.calendar_id },
+            conflicts: conflicts.map(c => ({ id: c.id, title: c.title })),
+          }).then(res => {
+            if (res.suggestions.length) { setSuggestions(res.suggestions); setSuggestionsOpen(true); }
+          }).catch(() => { /* silently ignore */ });
+          return; // nothing written yet
+        }
       }
+      await performWrite();
+    } catch {
+      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save the event.' });
+    } finally {
+      setSaving(false);
     }
+  }, [title, endInvalid, saving, needsConfirm, event, buildPayload, performWrite, addNotification]);
 
-    await performWrite();
-  }, [title, endInvalid, needsConfirm, event, buildPayload, performWrite]);
-
-  // Changing the time / timeline / all-day invalidates a prior conflict verdict —
-  // clear it so the next save re-runs the pre-check instead of writing straight
-  // away. Reset from the change handlers (not an effect) to keep renders clean.
-  const resetConfirm = useCallback(() => {
-    setNeedsConfirm(false);
-    setConflictWarning('');
-    setSuggestions([]);
-    setSuggestionsOpen(false);
-  }, []);
-  const changeStart = useCallback((v: string) => { setStartVal(v); resetConfirm(); }, [resetConfirm]);
-  const changeEnd   = useCallback((v: string) => { setEndVal(v);   resetConfirm(); }, [resetConfirm]);
-
-  // WS5 #2 — a dirty editor must not be lost to a stray backdrop click. Snapshot
-  // the initial field values on first render and compare each render.
+  // A dirty editor must not be lost to a stray scrim click. Snapshot the
+  // initial field values on first render and compare each render.
   const currentSnapshot = JSON.stringify({
     title, allDay, startVal, endVal, calendarId, reminder, reminderSource,
     location, travelTime, eventType, prepMinutes, description,
     checklist: JSON.stringify(checklist), recurring, recurDays: recurDays.join(','),
-    recurEnd, skipDates, dependsOnId, dependsOffset, courseId, missedAt,
+    recurEnd, skipDates, dependsOnId, dependsOffset, missedAt,
   });
   const [initialSnapshot] = useState(() => currentSnapshot);
-  const dirty = currentSnapshot !== initialSnapshot;
+  const dirty = currentSnapshot !== initialSnapshot || courseId !== initialCourseId;
 
+  // ---- Delete ----
   const doDeleteAll = useCallback(async () => {
     if (!event) return;
     const snapshot = { ...event };
     await deleteEvent(event.id);
     pushUndo({
       label: `Delete "${event.title}"`,
-      undo: async () => { const { createEvent } = await import('../../api'); const { id, ...p } = snapshot; await createEvent(p); },
+      undo: async () => { const { id: _id, ...p } = snapshot; await createEvent(p); },
       redo: async () => { await deleteEvent(event.id); },
     });
     onSaved();
@@ -434,20 +584,27 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     close();
   }, [event, instanceDate, pushUndo, onSaved, close]);
 
-  // WS5 #6 — no window.confirm. Recurring events open a scope popover; single
-  // events use a two-step inline confirm that self-resets after 3s.
-  const handleDeleteClick = useCallback(() => {
+  const handleDelete = useCallback(async () => {
     if (!event) return;
-    if (event.is_recurring) { setDeleteScopeOpen(true); return; }
-    if (!confirmingDelete) {
-      setConfirmingDelete(true);
-      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
-      deleteTimerRef.current = setTimeout(() => setConfirmingDelete(false), 3000);
-      return;
-    }
-    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
-    void doDeleteAll();
-  }, [event, confirmingDelete, doDeleteAll]);
+    const ok = await confirmDialog({
+      title: `Delete "${event.title}"?`,
+      description: 'The event is removed from your calendar. You can undo this afterwards.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (ok) await doDeleteAll();
+  }, [event, doDeleteAll]);
+
+  const handleDeleteSeries = useCallback(async () => {
+    if (!event) return;
+    const ok = await confirmDialog({
+      title: `Delete every occurrence of "${event.title}"?`,
+      description: 'The whole repeating series is removed. You can undo this afterwards.',
+      destructive: true,
+      confirmLabel: 'Delete series',
+    });
+    if (ok) await doDeleteAll();
+  }, [event, doDeleteAll]);
 
   const handleMarkToggle = useCallback(async () => {
     if (!event) return;
@@ -477,31 +634,43 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
       await deleteTask(taskId);
       setIsOnTaskBoard(false);
       setTaskId(null);
+      addNotification({ type: 'info', title: 'Removed from task board', autoRemoveMs: 2500 });
     } else {
       const t = await createTask({ event_id: event.id, is_complete: false, note: '', status: 'backlog', priority: 'med', due_date: '' });
       setIsOnTaskBoard(true);
       setTaskId(t.id);
+      addNotification({ type: 'success', title: 'Added to task board', autoRemoveMs: 2500 });
     }
-  }, [event, isOnTaskBoard, taskId]);
+  }, [event, isOnTaskBoard, taskId, addNotification]);
 
   const handleSaveAsTemplate = useCallback(async () => {
-    const name = templateName.trim();
-    if (!name) return;
-    await createTemplate({
-      name, title: title.trim(), description,
-      duration_minutes: Math.round((new Date(endVal).getTime() - new Date(startVal).getTime()) / 60_000) || 60,
-      is_recurring: recurring, recurrence_days: recurDays.join(','), calendar_id: calendarId,
+    const name = await promptDialog({
+      title: 'Save as template',
+      description: 'Reuses this event’s title, duration, timeline and recurrence.',
+      label: 'Template name',
+      placeholder: 'e.g. Weekly standup',
+      defaultValue: title.trim(),
+      validate: v => (v.trim() ? null : 'Enter a name for the template'),
+      confirmLabel: 'Save template',
     });
-    setTemplateNaming(false);
-    setTemplateName('');
-    addNotification({ type: 'success', title: 'Template saved', message: `"${name}" added to templates`, autoRemoveMs: 3000 });
-  }, [templateName, title, description, startVal, endVal, recurring, recurDays, calendarId, addNotification]);
+    if (!name) return;
+    try {
+      await createTemplate({
+        name: name.trim(), title: title.trim(), description,
+        duration_minutes: Math.round((new Date(endVal).getTime() - new Date(startVal).getTime()) / 60_000) || 60,
+        is_recurring: recurring, recurrence_days: recurDays.join(','), calendar_id: calendarId,
+      });
+      addNotification({ type: 'success', title: 'Template saved', message: `"${name.trim()}" added to templates`, autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not save template' });
+    }
+  }, [title, description, startVal, endVal, recurring, recurDays, calendarId, addNotification]);
 
   const toggleRecurDay = useCallback((dow: number) => {
     setRecurDays(prev => prev.includes(dow) ? prev.filter(d => d !== dow) : [...prev, dow]);
   }, []);
 
-  // WS5 #5 — skip-dates as a removable chip list backed by the comma string.
+  // Skip-dates as a removable chip list backed by the comma string.
   const skipDatesList = skipDates.split(',').map(s => s.trim()).filter(Boolean);
   const addSkipDate = useCallback(() => {
     const d = skipDraft.trim();
@@ -518,469 +687,421 @@ export function EventEditorModal({ event, date, instanceDate, startISO, endISO, 
     setSkipDates(prev => prev.split(',').map(s => s.trim()).filter(Boolean).filter(x => x !== d).join(','));
   }, []);
 
+  // Apply a suggested alternative slot directly (writes immediately).
+  const applySuggestion = useCallback(async (sug: ConflictSuggestion) => {
+    const p = buildPayload();
+    const updated = { ...p, start_time: sug.start, end_time: sug.end };
+    try {
+      if (isEdit && event) {
+        const prev = event;
+        await updateEvent(event.id, updated);
+        pushUndo({
+          label: `Reschedule "${prev.title}"`,
+          undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
+          redo: async () => { await updateEvent(event.id, updated); },
+        });
+        await syncCourseLink(event.id, updated.start_time, updated.title);
+      } else {
+        const { event: created } = await createEvent(updated);
+        pushUndo({
+          label: `Create "${created.title}"`,
+          undo: async () => { await deleteEvent(created.id); },
+          redo: async () => {},
+        });
+        await syncCourseLink(created.id, updated.start_time, updated.title);
+      }
+      setSuggestionsOpen(false);
+      setConflictWarning('');
+      onSaved();
+      close();
+    } catch {
+      addNotification({ type: 'error', title: 'Could not apply that time' });
+    }
+  }, [buildPayload, isEdit, event, pushUndo, onSaved, close, addNotification, syncCourseLink]);
+
+  // ⌘/Ctrl+Enter saves from anywhere in the sheet.
+  const onFormKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void handleSubmit();
+    }
+  };
+
+  // ---- Footer menus ----
+  const missedBtn = getMissedButtonState(event, missedAt);
+  const moreItems: MenuEntry[] = [
+    { id: 'template', label: 'Save as template', icon: Icons.bookmark, onSelect: () => { void handleSaveAsTemplate(); } },
+    ...(isEdit ? [
+      { id: 'task', label: isOnTaskBoard ? 'Remove from task board' : 'Add to task board', icon: Icons.tasks, checked: isOnTaskBoard, onSelect: () => { void handleAddToTaskBoard(); } },
+      ...(instanceDate ? [{ id: 'skip', label: 'Skip this date', icon: Icons.chevronsRight, onSelect: () => { void handleSkipDate(); } }] : []),
+      ...(missedBtn.visible ? [{ id: 'missed', label: missedBtn.label ?? 'Mark as missed', icon: Icons.flag, onSelect: () => { void handleMarkToggle(); } }] : []),
+    ] : []),
+  ];
+  const deleteItems: MenuEntry[] = [
+    ...(instanceDate ? [{ id: 'occ', label: 'This occurrence', icon: Icons.calendar, onSelect: () => { void doDeleteOccurrence(); } }] : []),
+    { id: 'all', label: 'All occurrences', icon: Icons.trash, danger: true, onSelect: () => { void handleDeleteSeries(); } },
+  ];
+
+  const trackedMin = actualStart && actualEnd
+    ? Math.round((new Date(actualEnd).getTime() - new Date(actualStart).getTime()) / 60000)
+    : null;
+
   return (
-    <ModalShell title={isEdit ? 'Edit event' : 'New event'} width={560} onClose={close} confirmOnClose={dirty}>
-      <div className={styles.form}>
+    <ModalShell
+      variant="sheet"
+      title={isEdit ? 'Edit event' : 'New event'}
+      subtitle={isEdit && event ? formatDT(toLocalDT(event.start_time)) : undefined}
+      onClose={close}
+      confirmOnClose={dirty}
+    >
+      <div className={styles.form} onKeyDown={onFormKeyDown}>
 
         {isLocked && (
-          <div className={styles.lockedBanner}>
-            <Icon d={Icons.lock} size={13} stroke="var(--accent)" /> Time set by availability booking — description is read-only.
-          </div>
+          <ModalNotice tone="info" icon={<Icon d={Icons.lock} size={13} />}>
+            Time set by an availability booking — the notes are read-only.
+          </ModalNotice>
         )}
 
-        {/* Title */}
-        <div className={styles.field}>
-          <FieldLabel>Title</FieldLabel>
+        {/* Title + timeline */}
+        <div className={styles.titleBlock}>
           <input
-            className="loom-field"
+            id={`${ids}-title`}
+            className={styles.titleInput}
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="Event title"
+            aria-label="Event title"
             autoFocus
             data-autofocus
           />
-        </div>
-
-        {/* Start / End / All-day */}
-        <div className={styles.row3}>
-          <div>
-            <FieldLabel>Start</FieldLabel>
-            {allDay
-              ? <input className="loom-field" type="date" value={startVal} onChange={e => changeStart(e.target.value)} />
-              : <NLDateInput value={startVal} onChange={changeStart} />
-            }
-          </div>
-          <div>
-            <FieldLabel>End</FieldLabel>
-            {allDay
-              ? <input className="loom-field" type="date" value={endVal} onChange={e => changeEnd(e.target.value)} />
-              : <NLDateInput value={endVal} onChange={changeEnd} />
-            }
-          </div>
-          <label className={styles.alldayLabel}>
-            <div
-              className={styles.checkbox}
-              style={{ borderColor: allDay ? 'var(--accent)' : 'var(--border-strong)', background: allDay ? 'var(--accent)' : 'transparent' }}
-              onClick={() => { setAllDay(v => !v); resetConfirm(); if (recurring) setRecurring(false); }}
-            >
-              {allDay && <Icon d={Icons.check} size={9} stroke="white" strokeWidth={3} />}
-            </div>
-            All-day
-          </label>
-        </div>
-
-        {endInvalid && (
-          <div className={styles.validationError}>End must be after start.</div>
-        )}
-
-        {/* Timeline + Reminder */}
-        <div className={styles.row2}>
-          <div>
-            <FieldLabel>Timeline</FieldLabel>
-            <div className={styles.timelineSelect}>
-              {selectedTimeline && <TLDot color={selectedTimeline.color} size={8} />}
-              <select
-                className={styles.selectInline}
+          <div className={styles.tlRow}>
+            <TLDot color={selectedTimeline?.color ?? 'var(--accent)'} size={10} />
+            <div className={styles.tlSelect}>
+              <Select
+                size="sm"
                 value={calendarId}
+                aria-label="Timeline"
                 onChange={e => { setCalendarId(Number(e.target.value)); resetConfirm(); }}
               >
                 {timelines.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-              <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
+              </Select>
             </div>
-            {courses.length > 0 && (
-              <div className={styles.timelineSelect} style={{ marginTop: 6 }}>
-                <select
-                  className={styles.selectInline}
-                  value={courseId ?? ''}
-                  onChange={e => {
-                    const val = Number(e.target.value) || null;
-                    setCourseId(val);
-                    // Auto-set timeline to the course's default if available
-                    const c = courses.find(c => c.id === val);
-                    if (c?.timeline_id) setCalendarId(c.timeline_id);
-                  }}
-                >
-                  <option value="">No course</option>
-                  {courses.map(c => <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ''}</option>)}
-                </select>
-                <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
-              </div>
-            )}
           </div>
-          <div>
-            <FieldLabel>
-              Reminder
-              {reminderSource === 'inferred' && (
-                <span className={styles.suggestedPill} title="AI-suggested based on event title">Suggested</span>
+        </div>
+
+        {/* When */}
+        <Row icon={Icons.clock} label="When">
+          {allDay ? (
+            <div className={styles.inline}>
+              <div className={styles.dateInput}><Input type="date" value={startVal} aria-label="Start date" onChange={e => onDateChange(e.target.value)} /></div>
+              <span className={styles.dash} aria-hidden="true">→</span>
+              <div className={styles.dateInput}><Input type="date" value={endVal} aria-label="End date" onChange={e => onEndDateChange(e.target.value)} invalid={endInvalid} /></div>
+            </div>
+          ) : (
+            <>
+              <div className={styles.inline}>
+                <div className={styles.dateInput}><Input type="date" value={startDate} aria-label="Date" onChange={e => onDateChange(e.target.value)} /></div>
+                <div className={styles.timeInput}><Input type="time" step={300} value={startTime} aria-label="Start time" onChange={e => onStartTimeChange(e.target.value)} /></div>
+                <span className={styles.dash} aria-hidden="true">–</span>
+                <div className={styles.timeInput}><Input type="time" step={300} value={endTime} aria-label="End time" onChange={e => onEndTimeChange(e.target.value)} invalid={endInvalid} /></div>
+              </div>
+              {showEndDate && (
+                <div className={styles.inline}>
+                  <span className={styles.subLabel}>Ends on</span>
+                  <div className={styles.dateInput}><Input type="date" value={endDate} aria-label="End date" onChange={e => onEndDateChange(e.target.value)} invalid={endInvalid} /></div>
+                </div>
               )}
-            </FieldLabel>
-            <div className={styles.timelineSelect}>
-              <select
-                className={styles.selectInline}
-                value={reminder}
-                onChange={e => {
-                  setReminder(Number(e.target.value));
-                  setReminderSource('user');
-                }}
-              >
-                {REMINDER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
-            </div>
-          </div>
-        </div>
-
-        {/* Event type (gates prep buffer) */}
-        <div>
-          <FieldLabel>Event type</FieldLabel>
-          <div className={styles.timelineSelect}>
-            <select
-              className={styles.selectInline}
-              value={eventType}
-              onChange={e => setEventType(e.target.value as typeof eventType)}
-            >
-              <option value="">None</option>
-              <option value="lecture">Lecture</option>
-              <option value="lab">Lab</option>
-              <option value="office_hours">Office Hours</option>
-              <option value="other">Other</option>
-            </select>
-            <Icon d={Icons.chevronDown} size={12} className={styles.selectChevron} />
-          </div>
-        </div>
-
-        {/* Location + Travel time + Prep (lectures only) */}
-        <div className={styles.locationRow}>
-          <input
-            className={`loom-field ${styles.locationInput}`}
-            placeholder="Location"
-            value={location}
-            onChange={e => setLocation(e.target.value)}
-          />
-          <div className={styles.travelWrap}>
-            <input
-              className={`loom-field ${styles.travelInput}`}
-              type="number"
-              min={0}
-              step={5}
-              placeholder="0"
-              value={travelTime || ''}
-              onChange={e => setTravelTime(Number(e.target.value))}
-            />
-            <span className={styles.travelLabel}>min travel</span>
-          </div>
-          {eventType === 'lecture' && !allDay && (
-            <div className={styles.travelWrap}>
-              <input
-                className={`loom-field ${styles.travelInput}`}
-                type="number"
-                min={0}
-                step={5}
-                placeholder="0"
-                value={prepMinutes || ''}
-                onChange={e => setPrepMinutes(Number(e.target.value))}
-              />
-              <span className={styles.travelLabel}>min prep</span>
-            </div>
+            </>
           )}
-        </div>
-
-        {/* Phase v3.0: Provenance — only renders when this event came from sync */}
-        <SourceBadge
-          variant="editor"
-          connectionCalendarId={event?.connection_calendar_id}
-          lastSyncedAt={event?.last_synced_at}
-        />
-
-        {/* Depends on (Phase 10) */}
-        {allEvents.length > 0 && (
-          <div className={styles.dependsRow}>
-            <div className={styles.dependsMain}>
-              <div className={styles.dependsLabel}>Depends on</div>
-              <select
-                className={`loom-field ${styles.dependsSelect}`}
-                value={dependsOnId ?? ''}
-                onChange={e => setDependsOnId(Number(e.target.value) || null)}
-              >
-                <option value="">None</option>
-                {allEvents.map(e => (
-                  <option key={e.id} value={e.id}>{e.title} ({e.start_time.slice(0, 10)})</option>
-                ))}
-              </select>
+          <div className={styles.sub}>
+            <Switch size="sm" checked={allDay} onChange={toggleAllDay} label="All day" />
+            <div className={styles.subRight}>
+              {!allDay && !showEndDate && (
+                <Button variant="subtle" size="sm" onClick={() => setShowEndDate(true)}>Ends another day</Button>
+              )}
+              {!allDay && durationMs > 0 && <span className={styles.durationHint}>{formatDuration(durationMs)}</span>}
             </div>
-            {dependsOnId && (
-              <div className={styles.dependsOffset}>
-                <div className={styles.dependsLabel}>Offset (min)</div>
-                <input
-                  type="number"
-                  className={`loom-field ${styles.dependsOffsetInput}`}
-                  value={dependsOffset}
-                  onChange={e => setDependsOffset(Number(e.target.value))}
-                  title="Minutes after parent event ends (+) or before parent starts (-)"
-                />
-              </div>
-            )}
           </div>
-        )}
+          {endInvalid && <div className={styles.validation} role="alert">End must be after start.</div>}
+          <NLTimeInput onResolved={applyNaturalStart} />
+        </Row>
 
-        {/* Recurrence */}
-        <div className={`${styles.recurBox} ${recurring ? styles.recurBoxActive : ''}`}>
-          <div className={styles.recurHeader}>
-            <Icon d={Icons.sync} size={13} className={recurring ? styles.recurIconActive : styles.recurIcon} />
-            <span className={styles.recurLabel}>{recurring ? 'Repeating weekly' : 'Does not repeat'}</span>
-            <button
-              className={`${styles.toggle} ${recurring ? styles.toggleOn : ''}`}
-              onClick={() => { if (!allDay) setRecurring(v => !v); }}
-              aria-pressed={recurring}
-              disabled={allDay}
-            />
-          </div>
-
+        {/* Repeat */}
+        <Row icon={Icons.repeat} label="Repeat" active={recurring}>
+          <Switch
+            size="sm"
+            checked={recurring}
+            onChange={v => { if (!allDay) setRecurring(v); }}
+            disabled={allDay}
+            label={recurring ? 'Repeats weekly' : 'Does not repeat'}
+            description={allDay ? 'All-day events can’t repeat' : undefined}
+          />
           {recurring && (
             <>
-              <div className={styles.dowRow}>
+              <div className={styles.dowRow} role="group" aria-label="Repeat on">
                 {DOW.map((d, i) => {
                   const on = recurDays.includes(i);
                   return (
                     <button
                       key={i}
-                      className={`${styles.dowBtn} ${on ? styles.dowBtnOn : ''}`}
+                      type="button"
+                      className={[styles.dow, on ? styles.dowOn : ''].join(' ')}
+                      aria-pressed={on}
+                      aria-label={DOW_FULL[i]}
                       onClick={() => toggleRecurDay(i)}
                     >{d}</button>
                   );
                 })}
               </div>
-              <div className={styles.recurEndField}>
-                <FieldLabel>Ends</FieldLabel>
-                <input className={`loom-field ${styles.recurEndInput}`} type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} />
-              </div>
-              <div className={styles.recurEndField}>
-                <FieldLabel>Skip dates</FieldLabel>
-                {skipDatesList.length > 0 && (
-                  <div className={styles.skipChips}>
-                    {skipDatesList.map(d => (
-                      <span key={d} className={styles.skipChip}>
-                        {d}
-                        <button
-                          type="button"
-                          className={styles.skipChipRemove}
-                          onClick={() => removeSkipDate(d)}
-                          aria-label={`Remove ${d}`}
-                        >
-                          <Icon d={Icons.x} size={10} />
-                        </button>
-                      </span>
-                    ))}
+              <div className={styles.grid2}>
+                <Field label="Ends" htmlFor={`${ids}-recur-end`}>
+                  <Input id={`${ids}-recur-end`} type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} />
+                </Field>
+                <Field label="Skip a date" htmlFor={`${ids}-skip`}>
+                  <div className={styles.inline}>
+                    <div className={styles.grow}><Input id={`${ids}-skip`} type="date" value={skipDraft} onChange={e => setSkipDraft(e.target.value)} /></div>
+                    <IconButton icon={Icons.plus} label="Add skipped date" variant="ghost" onClick={addSkipDate} disabled={!skipDraft.trim()} />
                   </div>
-                )}
-                <div className={styles.skipAdder}>
-                  <input
-                    className={`loom-field ${styles.skipDateInput}`}
-                    type="date"
-                    value={skipDraft}
-                    onChange={e => setSkipDraft(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="loom-btn-ghost"
-                    onClick={addSkipDate}
-                    disabled={!skipDraft.trim()}
-                  >
-                    Add
-                  </button>
-                </div>
+                </Field>
               </div>
+              {skipDatesList.length > 0 && (
+                <div className={styles.chips} aria-label="Skipped dates">
+                  {skipDatesList.map(d => (
+                    <span key={d} className={styles.chip}>
+                      {d}
+                      <button type="button" className={styles.chipRemove} onClick={() => removeSkipDate(d)} aria-label={`Remove ${d}`}>
+                        <Icon d={Icons.x} size={10} strokeWidth={2.25} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </>
           )}
-        </div>
+        </Row>
 
-        {/* Description */}
-        <div className={styles.field}>
-          <FieldLabel>Description <span className={styles.sublabel}>· Markdown · @mention</span></FieldLabel>
-          <MentionTextarea
-            value={description}
-            onChange={setDescription}
-            readOnly={isLocked}
-          />
-        </div>
+        {/* Location + travel */}
+        <Row icon={Icons.mapPin} label="Location">
+          <div className={styles.inline}>
+            <div className={styles.grow}>
+              <Input placeholder="Add a location" value={location} aria-label="Location" onChange={e => setLocation(e.target.value)} />
+            </div>
+            <div className={styles.travelWrap}>
+              <div className={styles.travelInput}>
+                <Input type="number" min={0} step={5} placeholder="0" value={travelTime || ''} aria-label="Travel time in minutes" onChange={e => setTravelTime(Number(e.target.value))} />
+              </div>
+              <span className={styles.unit}>min travel</span>
+            </div>
+          </div>
+        </Row>
+
+        {/* Reminder */}
+        <Row icon={Icons.alarm} label="Reminder">
+          <Field
+            label="Reminder"
+            htmlFor={`${ids}-reminder`}
+            labelRight={reminderSource === 'inferred' ? <Badge tone="accent" size="sm" icon={Icons.sparkles} title="Suggested from the event title">Suggested</Badge> : undefined}
+          >
+            <Select id={`${ids}-reminder`} value={reminder} onChange={e => { setReminder(Number(e.target.value)); setReminderSource('user'); }}>
+              {REMINDER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </Select>
+          </Field>
+        </Row>
+
+        {/* Course */}
+        {courses.length > 0 && (
+          <Row icon={Icons.graduation} label="Course" active={!!courseId}>
+            <Field label="Course" htmlFor={`${ids}-course`} hint={courseId ? 'Shows up as an assignment for this course.' : undefined}>
+              <Select
+                id={`${ids}-course`}
+                value={courseId ?? ''}
+                onChange={e => {
+                  const val = Number(e.target.value) || null;
+                  setCourseId(val);
+                  // Auto-set timeline to the course's default if available
+                  const c = courses.find(c => c.id === val);
+                  if (c?.timeline_id) { setCalendarId(c.timeline_id); resetConfirm(); }
+                }}
+              >
+                <option value="">No course</option>
+                {courses.map(c => <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ''}</option>)}
+              </Select>
+            </Field>
+          </Row>
+        )}
+
+        {/* Type + prep */}
+        <Row icon={Icons.tag} label="Type">
+          <div className={styles.grid2}>
+            <Field label="Event type" htmlFor={`${ids}-type`}>
+              <Select id={`${ids}-type`} value={eventType} onChange={e => setEventType(e.target.value as typeof eventType)}>
+                <option value="">None</option>
+                <option value="lecture">Lecture</option>
+                <option value="lab">Lab</option>
+                <option value="office_hours">Office hours</option>
+                <option value="other">Other</option>
+              </Select>
+            </Field>
+            {eventType === 'lecture' && !allDay && (
+              <Field label="Prep before" htmlFor={`${ids}-prep`} hint="Minutes blocked before the lecture">
+                <Input id={`${ids}-prep`} type="number" min={0} step={5} placeholder="0" value={prepMinutes || ''} onChange={e => setPrepMinutes(Number(e.target.value))} />
+              </Field>
+            )}
+          </div>
+        </Row>
+
+        {/* Depends on */}
+        {allEvents.length > 0 && (
+          <Row icon={Icons.link} label="Depends on" active={!!dependsOnId}>
+            <div className={styles.dependsGrid}>
+              <Field label="Depends on" htmlFor={`${ids}-dep`}>
+                <Select id={`${ids}-dep`} value={dependsOnId ?? ''} onChange={e => setDependsOnId(Number(e.target.value) || null)}>
+                  <option value="">None</option>
+                  {allEvents.map(e => (
+                    <option key={e.id} value={e.id}>{e.title} ({e.start_time.slice(0, 10)})</option>
+                  ))}
+                </Select>
+              </Field>
+              {dependsOnId && (
+                <Field label="Offset (min)" htmlFor={`${ids}-offset`} hint="After the parent ends (+) or before it starts (−)">
+                  <Input id={`${ids}-offset`} type="number" value={dependsOffset} onChange={e => setDependsOffset(Number(e.target.value))} />
+                </Field>
+              )}
+            </div>
+          </Row>
+        )}
 
         {/* Checklist */}
-        <div className={styles.field}>
-          <FieldLabel>Checklist <span className={styles.sublabel}>· {checklist.filter(c=>c.done).length}/{checklist.length}</span></FieldLabel>
+        <Row icon={Icons.tasks} label="Checklist" active={checklist.length > 0}>
+          <div className={styles.rowHead}>
+            <span className={styles.rowLabel}>Checklist</span>
+            {checklist.length > 0 && (
+              <span className={styles.count}>{checklist.filter(c => c.done).length}/{checklist.length}</span>
+            )}
+          </div>
           {checklist.map((item, idx) => (
             <div key={idx} className={styles.checkRow}>
-              <button
-                className={styles.checkBtn}
-                style={{
-                  borderColor: item.done ? 'var(--success)' : 'var(--border-strong)',
-                  background: item.done ? 'var(--success)' : 'transparent',
-                }}
-                onClick={() => toggleChecklistItem(idx)}
-              >
-                {item.done && <Icon d={Icons.check} size={9} stroke="#0B1120" strokeWidth={3} />}
-              </button>
+              <Checkbox round checked={item.done} onChange={() => toggleChecklistItem(idx)} aria-label={item.text ? `Done: ${item.text}` : 'Done'} />
               <input
-                className={styles.checkInput}
-                style={{ color: item.done ? 'var(--text-muted)' : 'var(--text-main)', textDecoration: item.done ? 'line-through' : 'none' }}
+                className={[styles.checkText, item.done ? styles.checkTextDone : ''].join(' ')}
                 value={item.text}
                 onChange={e => updateChecklistText(idx, e.target.value)}
-                placeholder="Item…"
+                onKeyDown={e => { if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); addChecklistItem(); } }}
+                placeholder="Checklist item"
+                aria-label={`Checklist item ${idx + 1}`}
               />
-              <button className={styles.checkRemove} onClick={() => removeChecklistItem(idx)}>
-                <Icon d={Icons.x} size={11} />
-              </button>
+              <IconButton icon={Icons.x} label="Remove item" size="sm" className={styles.checkRemove} onClick={() => removeChecklistItem(idx)} />
             </div>
           ))}
-          <button className={styles.addItem} onClick={addChecklistItem}>+ Add item</button>
-        </div>
+          <div>
+            <Button variant="subtle" size="sm" icon={Icons.plus} onClick={addChecklistItem}>Add item</Button>
+          </div>
+        </Row>
 
-        {/* Clock-in / Clock-out */}
-        {isEdit && (
-          <div className={styles.clockRow}>
-            {!actualStart ? (
-              <button type="button" className={styles.clockBtn} onClick={() => handleClock('in')}>
-                <Icon d={Icons.play} size={12} /> Start Tracking
-              </button>
-            ) : !actualEnd ? (
-              <button type="button" className={`${styles.clockBtn} ${styles.clockBtnStop}`} onClick={() => handleClock('out')}>
-                <Icon d={Icons.stop} size={12} /> Stop Tracking
-              </button>
-            ) : (
-              <span className={styles.clockDone}>
-                Tracked: {Math.round((new Date(actualEnd).getTime() - new Date(actualStart).getTime()) / 60000)} min
-              </span>
+        {/* Notes */}
+        <Row icon={Icons.doc} label="Notes">
+          <Field label="Notes" htmlFor={`${ids}-notes`} hint="Markdown · type @ to mention another event">
+            <MentionTextarea id={`${ids}-notes`} value={description} onChange={setDescription} readOnly={isLocked} placeholder="Add notes" />
+          </Field>
+        </Row>
+
+        {/* Conflict verdict + alternatives */}
+        {conflictWarning && (
+          <div>
+            <ModalNotice tone="warning" icon={<Icon d={Icons.warning} size={13} />}>
+              {conflictWarning} Save anyway, or pick another time below.
+            </ModalNotice>
+            {suggestionsOpen && suggestions.length > 0 && (
+              <div className={styles.suggestions}>
+                <div className={styles.rowLabel}>Suggested alternatives</div>
+                {suggestions.map((s, i) => (
+                  <SuggestionChip key={i} suggestion={s} onClick={sug => { void applySuggestion(sug); }} />
+                ))}
+              </div>
             )}
           </div>
         )}
 
-        {conflictWarning && (
-          <div>
-            <div className={styles.conflictWarn}>{conflictWarning}</div>
-            {suggestionsOpen && suggestions.length > 0 && (
-              <div className={styles.suggestionBox}>
-                <div className={styles.suggestionHeader}>
-                  Suggested alternatives
-                </div>
-                <div className={styles.suggestionList}>
-                  {suggestions.map((s, i) => (
-                    <SuggestionChip
-                      key={i}
-                      suggestion={s}
-                      onClick={async (sug) => {
-                        const p = buildPayload();
-                        const updated = { ...p, start_time: sug.start, end_time: sug.end };
-                        if (isEdit && event) {
-                          const prev = event;
-                          await updateEvent(event.id, updated);
-                          pushUndo({
-                            label: `Reschedule "${prev.title}"`,
-                            undo: async () => { await updateEvent(event.id, prev as Parameters<typeof updateEvent>[1]); },
-                            redo: async () => { await updateEvent(event.id, updated); },
-                          });
-                        } else {
-                          const { event: created } = await createEvent(updated);
-                          pushUndo({
-                            label: `Create "${created.title}"`,
-                            undo: async () => { await deleteEvent(created.id); },
-                            redo: async () => {},
-                          });
-                        }
-                        setSuggestionsOpen(false);
-                        setConflictWarning('');
-                        onSaved();
-                        close();
-                      }}
-                    />
-                  ))}
-                </div>
+        {/* Metadata cluster */}
+        {isEdit && (
+          <div className={styles.meta}>
+            <SourceBadge variant="editor" connectionCalendarId={event?.connection_calendar_id} lastSyncedAt={event?.last_synced_at} />
+            {trackedMin != null && (
+              <div className={styles.metaRow}>
+                <Icon d={Icons.timer} size={13} />
+                <span>Tracked {trackedMin} min</span>
+              </div>
+            )}
+            {actualStart && !actualEnd && (
+              <div className={styles.metaRow}>
+                <Icon d={Icons.timer} size={13} />
+                <span>Tracking since {new Date(actualStart).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+              </div>
+            )}
+            {missedAt && (
+              <div className={styles.metaRow}>
+                <Badge tone="warning" size="sm" dot>Marked as missed</Badge>
+                <span className={styles.metaHint}>Saving clears the mark.</span>
+              </div>
+            )}
+            {isOnTaskBoard && (
+              <div className={styles.metaRow}>
+                <Badge tone="neutral" size="sm" icon={Icons.tasks}>On task board</Badge>
+              </div>
+            )}
+            {event?.external_uid && !event.connection_calendar_id && (
+              <div className={styles.metaRow}>
+                <Icon d={Icons.download} size={13} />
+                <span>Imported from a calendar file</span>
               </div>
             )}
           </div>
         )}
       </div>
 
-      <ModalFooter>
-        {templateNaming ? (
-          <div className={styles.templateNameRow}>
-            <input
-              className={`loom-field ${styles.templateNameInput}`}
-              placeholder="Template name"
-              value={templateName}
-              onChange={e => setTemplateName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveAsTemplate(); } }}
-              autoFocus
-            />
-            <button className="loom-btn-ghost" onClick={() => { setTemplateNaming(false); setTemplateName(''); }}>Cancel</button>
-            <button className="loom-btn-primary" onClick={handleSaveAsTemplate} disabled={!templateName.trim()}>Save template</button>
-          </div>
-        ) : (
+      <ModalFooter
+        left={(
           <>
-            {isEdit && (
-              <>
-                <button className="loom-btn-ghost" onClick={handleAddToTaskBoard}>
-                  {isOnTaskBoard
-                    ? <><Icon d={Icons.check} size={12} /> On Task Board</>
-                    : '+ Task Board'}
-                </button>
-                {instanceDate && (
-                  <button className="loom-btn-ghost" onClick={handleSkipDate}>
-                    Skip this date
-                  </button>
-                )}
-              </>
+            {isEdit && event && (
+              event.is_recurring ? (
+                <Menu
+                  items={deleteItems}
+                  side="top"
+                  trigger={({ toggle, ref, open: _open, ...a }) => (
+                    <Button ref={ref} variant="danger" icon={Icons.trash} iconRight={Icons.chevronUp} onClick={toggle} {...a}>Delete</Button>
+                  )}
+                />
+              ) : (
+                <Button variant="danger" icon={Icons.trash} onClick={() => { void handleDelete(); }}>Delete</Button>
+              )
             )}
-            <button className="loom-btn-ghost" onClick={() => setTemplateNaming(true)}>Save as template</button>
-            <div style={{ flex: 1 }} />
-            {(() => {
-              const missedBtn = getMissedButtonState(event, missedAt);
-              if (!isEdit || !missedBtn.visible) return null;
-              return (
-                <button className="loom-btn-ghost" onClick={handleMarkToggle}>
-                  {missedBtn.label}
-                </button>
-              );
-            })()}
-            {isEdit && (
-              <button className={styles.deleteBtn} onClick={handleDeleteClick}>
-                {confirmingDelete ? 'Really delete?' : 'Delete'}
-              </button>
+            {isEdit && !actualStart && (
+              <IconButton icon={Icons.play} label="Start tracking" variant="ghost" onClick={() => { void handleClock('in'); }} />
             )}
-            <button className="loom-btn-ghost" onClick={close}>Cancel</button>
-            <button
-              className="loom-btn-primary"
-              onClick={handleSubmit}
-              disabled={!title.trim() || endInvalid}
-              title={endInvalid ? 'End must be after start' : undefined}
-            >
-              {needsConfirm ? 'Save anyway' : isEdit ? 'Save changes' : 'Create event'}
-              <Kbd small>⏎</Kbd>
-            </button>
+            {isEdit && actualStart && !actualEnd && (
+              <IconButton icon={Icons.stop} label="Stop tracking" variant="ghost" onClick={() => { void handleClock('out'); }} />
+            )}
+            <Menu
+              items={moreItems}
+              side="top"
+              trigger={({ toggle, ref, open: _open, ...a }) => (
+                <IconButton ref={ref} icon={Icons.more} label="More actions" variant="ghost" onClick={toggle} {...a} />
+              )}
+            />
           </>
         )}
-
-        {deleteScopeOpen && (
-          <div className={styles.scopePopover} role="dialog" aria-label="Delete recurring event">
-            <div className={styles.scopeTitle}>Delete recurring event</div>
-            {instanceDate && (
-              <button
-                className={styles.scopeBtn}
-                onClick={() => { setDeleteScopeOpen(false); void doDeleteOccurrence(); }}
-              >
-                This occurrence
-              </button>
-            )}
-            <button
-              className={`${styles.scopeBtn} ${styles.scopeBtnDanger}`}
-              onClick={() => { setDeleteScopeOpen(false); void doDeleteAll(); }}
-            >
-              All occurrences
-            </button>
-            <button className={styles.scopeBtn} onClick={() => setDeleteScopeOpen(false)}>
-              Cancel
-            </button>
-          </div>
-        )}
+      >
+        <Button variant="ghost" onClick={close}>Cancel</Button>
+        <Button
+          variant="primary"
+          onClick={() => { void handleSubmit(); }}
+          disabled={!title.trim() || endInvalid}
+          loading={saving}
+          kbd={`${modKey()}↵`}
+          title={endInvalid ? 'End must be after start' : undefined}
+        >
+          {needsConfirm ? 'Save anyway' : isEdit ? 'Save changes' : 'Create event'}
+        </Button>
       </ModalFooter>
     </ModalShell>
   );

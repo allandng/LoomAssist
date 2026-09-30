@@ -1,11 +1,12 @@
-// Phase v3.0 §8 ride-along #3: a small monochrome "synced 3m ago" label,
-// shown only in time-grid views (Day / Week) when at least one connection
-// exists. Updates every 30s. Disappears entirely in local-only mode.
+// A small monochrome "synced 3m ago" label for external connections, shown
+// only in time-grid views (Day / Week) when at least one connection exists.
+// Updates every 30s. Disappears entirely in local-only mode.
 //
-// Anchored to the calendar's top-right corner via fixed positioning relative
-// to the calendar container. Subtle, no new color, no new accent.
+// Anchored to the grid's top-right corner (absolute inside the grid wrapper).
 
 import { useEffect, useState } from 'react';
+import styles from './TodayLineFreshness.module.css';
+import { Badge } from '../ui';
 import { useSync } from '../../contexts/SyncContext';
 import { useIsVisibleRef } from '../../hooks/usePageVisibility';
 
@@ -45,28 +46,15 @@ export function TodayLineFreshness({ view }: { view: string }) {
     .pop();
   if (!latest) return null;
 
-  const label = `synced ${relativeTime(latest)}`;
+  const label = `Synced ${relativeTime(latest)}`;
   return (
     <div
+      className={styles.freshness}
       role="status"
       aria-live="polite"
-      aria-label={`Calendar ${label}`}
-      style={{
-        position: 'absolute',
-        top: 12,
-        right: 16,
-        zIndex: 5,
-        pointerEvents: 'none',
-        fontSize: 10.5,
-        fontFamily: 'var(--font-mono)',
-        color: 'var(--text-dim)',
-        background: 'var(--bg-panel)',
-        padding: '3px 8px',
-        borderRadius: 999,
-        border: '1px solid var(--border)',
-      }}
+      aria-label={`Connections ${label.toLowerCase()}`}
     >
-      {label}
+      <Badge size="sm" dot tone="neutral" className={styles.badge}>{label}</Badge>
     </div>
   );
 }

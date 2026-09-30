@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
-import { ModalShell, ModalFooter } from './ModalShell';
+import { useState, useCallback, useEffect, useId } from 'react';
+import { ModalShell, ModalFooter, ModalStack } from './ModalShell';
+import { Button, IconButton, Field, Input, Select, Switch, Checkbox, Badge, Icon, Icons } from '../ui';
 import { useModal } from '../../contexts/ModalContext';
 import { useUndo } from '../../contexts/UndoContext';
 import { useNotifications } from '../../store/notifications';
@@ -18,13 +19,19 @@ const DURATION_OPTIONS = [30, 60, 90, 120];
 function formatBlockDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) +
-    ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    ' · ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatDeadline(ds: string): string {
+  const d = new Date(`${ds}T00:00`);
+  return isNaN(d.getTime()) ? ds : d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
 export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockModalProps) {
   const { close } = useModal();
   const { push: pushUndo } = useUndo();
   const { addNotification } = useNotifications();
+  const ids = useId();
 
   const [numSessions, setNumSessions]       = useState(5);
   const [sessionDuration, setSessionDuration] = useState(90);
@@ -62,7 +69,7 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
       setPreview(blocks);
       setSelected(new Set(blocks.map((_, i) => i)));
     } catch {
-      addNotification({ type: 'error', title: 'Preview failed', message: 'Could not generate preview.', autoRemoveMs: 4000 });
+      addNotification({ type: 'error', title: 'Preview failed', message: 'Could not generate a preview.', autoRemoveMs: 4000 });
     } finally {
       setLoading(false);
     }
@@ -86,10 +93,8 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
       const { created_count } = await confirmStudyBlocks(toCreate);
       onSaved();
 
-      // Capture created event ids by re-fetching isn't straightforward without ids returned —
-      // confirmStudyBlocks returns created_count but not ids in the simplified API type.
-      // We use the titles to build the undo label; actual undo re-fetches won't be exact,
-      // so we store a snapshot and offer a best-effort undo.
+      // confirmStudyBlocks returns a count, not ids — undo is best-effort and
+      // redo re-creates the same blocks.
       pushUndo({
         label: `Add ${created_count} study block${created_count !== 1 ? 's' : ''}`,
         undo: async () => { /* events were created without returned ids in this type */ },
@@ -103,106 +108,86 @@ export function StudyBlockModal({ deadlineEvent, subject, onSaved }: StudyBlockM
       });
       close();
     } catch {
-      addNotification({ type: 'error', title: 'Failed to schedule', message: 'Could not create study blocks.', autoRemoveMs: 4000 });
+      addNotification({ type: 'error', title: 'Failed to schedule', message: 'Could not create the study blocks.', autoRemoveMs: 4000 });
     } finally {
       setConfirming(false);
     }
   }, [preview, selected, onSaved, pushUndo, addNotification, close]);
 
   const selectedCount = selected.size;
+  const hourLabel = new Date(2000, 0, 1, preferredHour).toLocaleTimeString([], { hour: 'numeric' });
 
   return (
-    <ModalShell title={`Study Blocks — ${deadlineEvent.title}`} width={560} onClose={close}>
-      <div className={styles.body}>
-        <p className={styles.subtitle}>
-          Auto-generate spaced study sessions before <strong>{deadlineDate}</strong>.
+    <ModalShell
+      title="Plan study sessions"
+      subtitle={`${subject || deadlineEvent.title} · due ${formatDeadline(deadlineDate)}`}
+      size="md"
+      onClose={close}
+    >
+      <ModalStack>
+        <p className={styles.lede}>
+          Spaces sessions out before the deadline and drops them into free time on your calendar.
         </p>
 
         <div className={styles.settings}>
-          <label className={styles.settingItem}>
-            <span className={styles.settingLabel}>Sessions</span>
-            <div className={styles.stepper}>
-              <button className="loom-btn-ghost" onClick={() => setNumSessions(n => Math.max(2, n - 1))} disabled={numSessions <= 2}>−</button>
-              <span className={styles.stepperValue}>{numSessions}</span>
-              <button className="loom-btn-ghost" onClick={() => setNumSessions(n => Math.min(8, n + 1))} disabled={numSessions >= 8}>+</button>
+          <Field label="Sessions">
+            <div className={styles.stepper} role="group" aria-label="Number of sessions">
+              <IconButton icon={Icons.minus} label="Fewer sessions" variant="ghost" size="sm" onClick={() => setNumSessions(n => Math.max(2, n - 1))} disabled={numSessions <= 2} />
+              <span className={styles.stepperValue} aria-live="polite">{numSessions}</span>
+              <IconButton icon={Icons.plus} label="More sessions" variant="ghost" size="sm" onClick={() => setNumSessions(n => Math.min(8, n + 1))} disabled={numSessions >= 8} />
             </div>
-          </label>
+          </Field>
 
-          <label className={styles.settingItem}>
-            <span className={styles.settingLabel}>Duration</span>
-            <select
-              className={`loom-field ${styles.select}`}
-              value={sessionDuration}
-              onChange={e => setSessionDuration(Number(e.target.value))}
-            >
-              {DURATION_OPTIONS.map(m => (
-                <option key={m} value={m}>{m} min</option>
-              ))}
-            </select>
-          </label>
+          <Field label="Length" htmlFor={`${ids}-dur`}>
+            <Select id={`${ids}-dur`} value={sessionDuration} onChange={e => setSessionDuration(Number(e.target.value))}>
+              {DURATION_OPTIONS.map(m => <option key={m} value={m}>{m} min</option>)}
+            </Select>
+          </Field>
 
-          <label className={styles.settingItem}>
-            <span className={styles.settingLabel}>Preferred hour</span>
-            <input
-              type="number"
-              className={`loom-field ${styles.hourInput}`}
-              min={0}
-              max={23}
-              value={preferredHour}
-              onChange={e => setPreferredHour(Number(e.target.value))}
-            />
-          </label>
+          <Field label="Preferred start" htmlFor={`${ids}-hour`} hint={hourLabel}>
+            <Input id={`${ids}-hour`} type="number" min={0} max={23} value={preferredHour} onChange={e => setPreferredHour(Math.min(23, Math.max(0, Number(e.target.value))))} />
+          </Field>
 
-          <label className={styles.settingItem}>
-            <span className={styles.settingLabel}>Skip weekends</span>
-            <input
-              type="checkbox"
-              checked={skipWeekends}
-              onChange={e => setSkipWeekends(e.target.checked)}
-            />
-          </label>
+          <div className={styles.switchCell}>
+            <Switch checked={skipWeekends} onChange={setSkipWeekends} label="Skip weekends" />
+          </div>
         </div>
 
-        <button
-          className={`loom-btn-ghost ${styles.previewBtn}`}
-          onClick={handlePreview}
-          disabled={loading}
-        >
-          {loading ? 'Generating…' : preview ? 'Refresh preview' : 'Preview sessions'}
-        </button>
+        <div>
+          <Button variant="secondary" icon={preview ? Icons.refresh : Icons.sparkles} onClick={() => { void handlePreview(); }} loading={loading}>
+            {preview ? 'Refresh preview' : 'Preview sessions'}
+          </Button>
+        </div>
 
         {preview && (
-          <div className={styles.previewList}>
-            {preview.length === 0 ? (
-              <p className={styles.emptyMsg}>No sessions fit before the deadline with these settings.</p>
-            ) : (
-              preview.map((block, i) => (
-                <label key={i} className={styles.blockRow}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(i)}
-                    onChange={() => toggleBlock(i)}
-                  />
-                  <span className={styles.blockDate}>{formatBlockDate(block.start_time)}</span>
-                  <span className={styles.blockTitle}>{block.title}</span>
-                </label>
-              ))
-            )}
-          </div>
+          preview.length === 0 ? (
+            <div className={styles.emptyMsg}>
+              <Icon d={Icons.alertCircle} size={14} />
+              No sessions fit before the deadline with these settings. Try fewer or shorter sessions.
+            </div>
+          ) : (
+            <div className={styles.previewList} role="list" aria-label="Proposed sessions">
+              {preview.map((block, i) => {
+                const on = selected.has(i);
+                return (
+                  <div key={i} role="listitem" className={[styles.blockRow, on ? '' : styles.blockOff].join(' ')}>
+                    <Checkbox round checked={on} onChange={() => toggleBlock(i)} aria-label={`Include ${block.title}`} />
+                    <span className={styles.blockDate}>{formatBlockDate(block.start_time)}</span>
+                    <span className={styles.blockTitle}>{block.title}</span>
+                    <Badge size="sm">{sessionDuration} min</Badge>
+                  </div>
+                );
+              })}
+            </div>
+          )
         )}
-      </div>
+      </ModalStack>
 
-      <ModalFooter>
-        <button className="loom-btn-ghost" onClick={close}>Skip</button>
-        <div style={{ flex: 1 }} />
+      <ModalFooter left={<Button variant="subtle" onClick={close}>Skip for now</Button>}>
         {preview && preview.length > 0 && (
-          <button
-            className="loom-btn-primary"
-            onClick={handleConfirm}
-            disabled={confirming || selectedCount === 0}
-          >
-            {confirming ? 'Scheduling…' : `Schedule ${selectedCount} session${selectedCount !== 1 ? 's' : ''}`}
-          </button>
+          <Button variant="primary" icon={Icons.calendar} onClick={() => { void handleConfirm(); }} disabled={selectedCount === 0} loading={confirming}>
+            Schedule {selectedCount} session{selectedCount !== 1 ? 's' : ''}
+          </Button>
         )}
       </ModalFooter>
     </ModalShell>

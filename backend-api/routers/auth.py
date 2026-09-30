@@ -6,20 +6,31 @@ Hard rails (per LoomAssist_UIUX_Guardrail.md §6 + design doc §1):
   - Tokens live in macOS Keychain (frontend); never SQLite, never Account row.
   - Local mode is a first-class state — Account row absent ⇒ 204 from /auth/me.
 """
+import json
 from datetime import datetime
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.deps import get_db
+from core.oauth_page import render_oauth_callback_page
 from database import models
 from services.auth import supabase as supabase_auth
+from services.sync import keychain_bridge
 
 router = APIRouter(prefix="/auth")
+
+# Keychain slot shared with the Tauri side (lib/keychain.ts KeychainSlots.supabase).
+SUPABASE_KEYCHAIN_SLOT = "supabase"
+
+# Process-local memory of the OAuth round-trip so the desktop window (which
+# never sees the browser redirect) can find out that sign-in finished.
+_last_started_provider: Optional[str] = None
+_last_oauth_completion: dict = {"completed_at": None, "provider": None, "email": None}
 
 
 class OAuthStartResponse(BaseModel):
@@ -50,7 +61,10 @@ class OAuthCompleteRequest(BaseModel):
     frontend via the `keychain_set` Tauri command."""
     access_token: str
     refresh_token: Optional[str] = None
-    provider: str = "google"
+    # Optional: the callback page can't always tell which provider was used
+    # (Supabase doesn't echo it back), so we fall back to the provider passed
+    # to the most recent /auth/oauth/{provider}/start call, then "google".
+    provider: Optional[str] = None
 
 
 class AccountRead(BaseModel):
@@ -126,19 +140,48 @@ def _require_supabase():
 
 @router.post("/oauth/{provider}/start", response_model=OAuthStartResponse)
 def auth_oauth_start(provider: str):
+    global _last_started_provider
     _require_supabase()
     if provider not in supabase_auth.SUPPORTED_OAUTH_PROVIDERS:
         raise HTTPException(
             status_code=400,
             detail={"error": {"code": "unsupported_provider", "detail": provider}},
         )
+    _last_started_provider = provider
     return {"auth_url": supabase_auth.build_oauth_url(provider)}
+
+
+@router.get("/oauth/callback", response_class=HTMLResponse, include_in_schema=True)
+def auth_oauth_callback():
+    """Supabase redirect target (default SUPABASE_REDIRECT_URL).
+
+    Supabase puts `access_token` / `refresh_token` in the URL *fragment*, which
+    never reaches the server, so this serves a tiny page whose script reads
+    the fragment (or query) and POSTs it to /auth/oauth/complete, then tells
+    the user to return to the app. Mirrors AccountContext.completeOAuthFromFragment
+    for the desktop case where the browser — not the webview — gets the redirect.
+    """
+    return HTMLResponse(render_oauth_callback_page(
+        kind="supabase", complete_path="/auth/oauth/complete", title="Sign in",
+    ))
+
+
+@router.get("/oauth/status")
+def auth_oauth_status():
+    """Poll target for the desktop window after opening the system browser:
+    `completed_at` flips (and /auth/me returns the Account) once the callback
+    page has finished. Never returns tokens — those go to the keychain slot
+    `supabase` (service com.loomassist), readable via the Tauri keychain_get
+    command."""
+    return dict(_last_oauth_completion)
 
 
 @router.post("/oauth/complete", response_model=AccountRead)
 async def auth_oauth_complete(payload: OAuthCompleteRequest, db: Session = Depends(get_db)):
-    """Frontend calls this after extracting the Supabase access_token from the
-    OAuth redirect's URL fragment. Validates with Supabase, upserts Account."""
+    """Called by the frontend (fragment on the webview URL) OR by the
+    /auth/oauth/callback page (fragment on the browser URL). Validates with
+    Supabase, upserts Account, and stashes the session in the shared keychain
+    slot so it survives restarts on every platform."""
     _require_supabase()
     try:
         user = await supabase_auth.get_user(payload.access_token)
@@ -163,13 +206,28 @@ async def auth_oauth_complete(payload: OAuthCompleteRequest, db: Session = Depen
             detail={"error": {"code": "incomplete_user", "detail": "Supabase returned no id/email"}},
         )
 
+    provider = payload.provider or _last_started_provider or "google"
     acc = _upsert_account(
         db,
         supabase_user_id=sub,
         email=email,
         display_name=name,
-        auth_provider=payload.provider,
+        auth_provider=provider,
     )
+    # Persist the session for the desktop app (same slot the Tauri side
+    # reads with keychain_get('supabase')). Best-effort; never logged.
+    try:
+        keychain_bridge.set_secret(SUPABASE_KEYCHAIN_SLOT, json.dumps({
+            "access_token": payload.access_token,
+            "refresh_token": payload.refresh_token,
+        }))
+    except Exception:
+        pass
+    _last_oauth_completion.update({
+        "completed_at": datetime.utcnow().isoformat(),
+        "provider": provider,
+        "email": email,
+    })
     return _account_to_dict(acc)
 
 
@@ -281,4 +339,9 @@ def auth_logout(db: Session = Depends(get_db)):
     if acc:
         db.delete(acc)
         db.commit()
+    try:
+        keychain_bridge.clear_secret(SUPABASE_KEYCHAIN_SLOT)
+    except Exception:
+        pass
+    _last_oauth_completion.update({"completed_at": None, "provider": None, "email": None})
     return {"ok": True}

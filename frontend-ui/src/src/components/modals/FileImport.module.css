@@ -1,0 +1,146 @@
+/* Shared by ICSImportModal + SyllabusModal: drop zone, result summary, row list. */
+
+.dropZone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+
+.dropZone:hover { border-color: var(--accent); background: var(--accent-softer); }
+.dropZone:focus-within { outline: var(--focus-ring); outline-offset: 2px; }
+.dropZoneActive { border-color: var(--accent); border-style: solid; background: var(--accent-soft); }
+.dropZoneHasFile { border-style: solid; border-color: var(--border-strong); }
+
+.fileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.dropIcon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.dropZoneActive .dropIcon,
+.dropZone:hover .dropIcon { color: var(--accent-text); }
+
+.dropTitle {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-main);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropHint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ── Result summary ─────────────────────────────────────────────────────── */
+.result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.resultIcon { color: var(--success); display: grid; place-items: center; flex-shrink: 0; }
+
+.resultText { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+
+.resultTitle { font-size: var(--text-base); font-weight: 600; color: var(--text-main); }
+
+.resultHint { font-size: var(--text-xs); color: var(--text-muted); }
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ── Extracted rows (syllabus) ──────────────────────────────────────────── */
+.tableHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.tableTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.tableActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.rowItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.rowItem:last-child { border-bottom: none; }
+.rowItem:hover { background: var(--bg-hover); }
+
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-base);
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowOff .rowTitle { color: var(--text-muted); }
+
+.rowDate {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}

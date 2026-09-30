@@ -16,6 +16,20 @@ from sqlalchemy.orm import Session
 from database import models
 
 
+def parse_local(value: str) -> datetime:
+    """Parse an ISO timestamp into a naive LOCAL datetime.
+
+    Stored events are naive local strings, but clients may send offset-aware
+    values ("...Z" / "+00:00"). Comparing the two raises TypeError, so convert
+    aware inputs to the machine's local zone and drop tzinfo. Raises ValueError
+    on unparseable input (callers already handle that).
+    """
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00") if value.endswith("Z") else value)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
 def get_conflicts(
     start: str, end: str, calendar_id: int,
     exclude_event_id: int | None,
@@ -26,8 +40,8 @@ def get_conflicts(
     'travel' when the proposed window only intersects another event's travel
     buffer (the [event_start - travel_minutes, event_start) window)."""
     try:
-        start_dt = datetime.fromisoformat(start)
-        end_dt   = datetime.fromisoformat(end)
+        start_dt = parse_local(start)
+        end_dt   = parse_local(end)
     except ValueError:
         return []
     candidates = db.query(models.Event).filter(models.Event.calendar_id == calendar_id).all()
@@ -36,9 +50,9 @@ def get_conflicts(
         if exclude_event_id and ev.id == exclude_event_id:
             continue
         try:
-            ev_start = datetime.fromisoformat(ev.start_time)
-            ev_end   = datetime.fromisoformat(ev.end_time)
-        except ValueError:
+            ev_start = parse_local(ev.start_time)
+            ev_end   = parse_local(ev.end_time)
+        except (ValueError, TypeError):
             continue
         # Direct overlap
         if not (ev_end <= start_dt or ev_start >= end_dt):

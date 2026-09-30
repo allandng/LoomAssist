@@ -1,11 +1,24 @@
 """
 Demo seed script — populates LoomAssist with realistic sample data.
 
-Usage:
-    cd backend-api && source venv/bin/activate && python3 seed_demo.py
+Usage (any Python 3.13+ interpreter; the venv one is recommended):
+    Windows:      backend-api\\venv\\Scripts\\python.exe seed_demo.py
+    macOS/Linux:  backend-api/venv/bin/python seed_demo.py
 
-Run again to reset (drops all rows first, then re-inserts).
+Idempotent by default: if the database already holds data (any Calendar row),
+the script exits without touching it. Pass --reset to wipe the demo tables
+and re-insert everything.
 """
+
+import sys
+
+# Windows consoles default to a legacy code page (cp1252) which cannot encode
+# the "✓"/em-dash characters printed below. Reconfigure stdout to UTF-8 when
+# possible; fall back to ASCII-safe output otherwise.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 from database.database import SessionLocal, engine, run_migrations
 from database import models
@@ -13,10 +26,23 @@ from sqlmodel import SQLModel
 from datetime import datetime, timedelta, date
 import json
 
+RESET = "--reset" in sys.argv[1:]
+if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+    print(__doc__)
+    sys.exit(0)
+
 run_migrations()
 SQLModel.metadata.create_all(engine)
 
 db = SessionLocal()
+
+# ── idempotency guard ────────────────────────────────────────────────────────
+_existing_calendars = db.query(models.Calendar).count()
+if _existing_calendars and not RESET:
+    print(f"Database already contains {_existing_calendars} calendar(s); nothing seeded.")
+    print("Pass --reset to wipe the demo tables and re-seed.")
+    db.close()
+    sys.exit(0)
 
 # ── wipe existing demo data ──────────────────────────────────────────────────
 for model in [
@@ -433,5 +459,5 @@ db.commit()
 print(f"Templates: {len(templates)} inserted")
 
 db.close()
-print("\n✓ Demo data loaded successfully.")
-print("  Restart the backend to see all data in the app.")
+print("\n[OK] Demo data loaded successfully.")
+print("     Restart the backend to see all data in the app.")

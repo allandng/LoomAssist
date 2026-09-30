@@ -1,0 +1,42 @@
+.chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
+
+.chip:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.chip:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.icon { color: var(--text-muted); display: inline-grid; place-items: center; flex-shrink: 0; }
+
+.text { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; min-width: 0; }
+
+.range {
+  font-size: var(--text-base);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rationale {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: var(--leading-snug);
+}
+
+.arrow { color: var(--text-dim); display: inline-grid; place-items: center; flex-shrink: 0; }
+.chip:hover:not(:disabled) .arrow { color: var(--accent-text); }

@@ -1,7 +1,7 @@
 // TODO: when the P0 home page ships, this banner moves to the home page
 // exam-cluster widget. Tracked in LoomAssist_FutureFeatures.md.
 import styles from './ExamClusterBanner.module.css';
-import { Icon, Icons } from '../shared/Icon';
+import { IconButton, Icon, Icons } from '../ui';
 import type { WellnessWarning } from '../../types';
 
 const MAX_VISIBLE_TITLES = 3;
@@ -64,6 +64,7 @@ export function ExamClusterBanner({ warning, onDismiss }: ExamClusterBannerProps
 
   return (
     <div className={styles.banner} role="status">
+      <span className={styles.icon} aria-hidden="true"><Icon d={Icons.graduation} size={14} /></span>
       <div className={styles.body}>
         <div className={styles.headline}>{headline}</div>
         {titlesText && (
@@ -73,14 +74,7 @@ export function ExamClusterBanner({ warning, onDismiss }: ExamClusterBannerProps
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className={styles.dismiss}
-        onClick={onDismiss}
-        aria-label="Dismiss exam cluster warning"
-      >
-        <Icon d={Icons.x} size={12} />
-      </button>
+      <IconButton size="sm" icon={Icons.x} label="Dismiss exam cluster warning" onClick={onDismiss} />
     </div>
   );
 }

@@ -1,116 +1,88 @@
-.body {
-  padding: 20px 20px 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.subtitle {
+.lede {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: var(--leading-body);
 }
-
-/* ── Settings grid ── */
 
 .settings {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 20px;
-}
-
-.settingItem {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.settingLabel {
-  font-size: 13px;
-  color: var(--text-muted);
-  white-space: nowrap;
+  gap: var(--space-4) var(--space-5);
+  align-items: start;
 }
 
 .stepper {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
+  height: 32px;
 }
 
 .stepperValue {
-  min-width: 24px;
+  min-width: 28px;
   text-align: center;
-  font-size: 14px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--text-main);
 }
 
-.select {
-  font-size: 13px;
-  padding: 4px 6px;
-  height: 30px;
-}
-
-.hourInput {
-  width: 60px;
-  font-size: 13px;
-  padding: 4px 6px;
-  height: 30px;
-  text-align: center;
-}
-
-/* ── Preview ── */
-
-.previewBtn {
-  align-self: flex-start;
-  font-size: 13px;
+.switchCell {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  align-self: end;
 }
 
 .previewList {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 240px;
+  max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
 
 .blockRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-base);
 }
 
-.blockRow:hover {
-  background: var(--bg-panel);
-}
+.blockRow:last-child { border-bottom: none; }
+.blockRow:hover { background: var(--bg-hover); }
 
 .blockDate {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   color: var(--text-muted);
   white-space: nowrap;
-  min-width: 160px;
+  min-width: 150px;
 }
 
 .blockTitle {
-  color: var(--text-main);
   flex: 1;
+  min-width: 0;
+  color: var(--text-main);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.blockOff .blockTitle { color: var(--text-muted); }
+
 .emptyMsg {
-  margin: 0;
-  padding: 12px;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
   color: var(--text-muted);
-  text-align: center;
 }

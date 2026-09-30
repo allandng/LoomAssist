@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import styles from './DensityHeatmap.module.css';
 import type { Event } from '../../types';
+import { IconButton } from '../ui/Button';
+import { Icons } from './Icon';
 
 const INTENSITY = [
   styles.hmL0, styles.hmL1, styles.hmL2, styles.hmL3, styles.hmL4,
@@ -14,21 +16,57 @@ interface DensityHeatmapProps {
   range?: HeatmapRange;
 }
 
+function eventsLabel(n: number): string {
+  return `${n} event${n === 1 ? '' : 's'}`;
+}
+
+function dayLabel(d: Date): string {
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Month-at-a-glance (or trailing 12 weeks) event density grid. Every cell is a
+ * labelled button ("Mar 4: 3 events"); `onDayClick` receives the local date.
+ * Level classes `hmL0`–`hmL4` are shared with the Energy map widget.
+ */
 export function DensityHeatmap({ events, onDayClick, range = 'month' }: DensityHeatmapProps) {
   return range === 'trailing12w'
     ? <Trailing12W events={events} onDayClick={onDayClick} />
     : <MonthHeatmap events={events} onDayClick={onDayClick} />;
 }
 
+function Legend() {
+  return (
+    <div className={styles.legend} aria-hidden="true">
+      <span className={styles.legendLabel}>Less busy</span>
+      <div className={styles.legendSwatches}>
+        {INTENSITY.map((cls, i) => (
+          <span key={i} className={`${styles.legendSwatch} ${cls}`} />
+        ))}
+      </div>
+      <span className={styles.legendLabel}>More busy</span>
+    </div>
+  );
+}
+
 function MonthHeatmap({ events, onDayClick }: Omit<DensityHeatmapProps, 'range'>) {
   const [offset, setOffset] = useState(0);
 
-  const today = new Date();
-  const viewYear  = today.getFullYear();
-  const viewMonth = today.getMonth() + offset;
-  const anchor    = new Date(viewYear, viewMonth, 1);
-  const year      = anchor.getFullYear();
-  const month     = anchor.getMonth();
+  const view = useMemo(() => {
+    const today = new Date();
+    const anchor = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+    const year = anchor.getFullYear();
+    const month = anchor.getMonth();
+    return {
+      year,
+      month,
+      todayDate: today.getDate(),
+      daysInMonth: new Date(year, month + 1, 0).getDate(),
+      startDow: anchor.getDay(),
+      monthLabel: anchor.toLocaleString([], { month: 'long', year: 'numeric' }),
+    };
+  }, [offset]);
+  const { year, month, todayDate, daysInMonth, startDow, monthLabel } = view;
 
   const countByDay = useMemo(() => {
     const counts: Record<number, number> = {};
@@ -41,54 +79,45 @@ function MonthHeatmap({ events, onDayClick }: Omit<DensityHeatmapProps, 'range'>
     return counts;
   }, [events, year, month]);
 
-  const maxCount    = Math.max(...Object.values(countByDay), 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const startDow    = new Date(year, month, 1).getDay();
-  const isNow       = offset === 0;
-  const todayDate   = today.getDate();
-  const monthLabel  = anchor.toLocaleString('default', { month: 'long', year: 'numeric' });
+  const maxCount = Math.max(...Object.values(countByDay), 1);
+  const isNow    = offset === 0;
 
   return (
     <div className={styles.heatmap}>
       <div className={styles.heatmapHeader}>
-        <button className={styles.heatmapNav} onClick={() => setOffset(o => o - 1)}>‹</button>
+        <IconButton size="sm" icon={Icons.chevronLeft} label="Previous month" onClick={() => setOffset(o => o - 1)} />
         <span className={styles.heatmapMonth}>{monthLabel}</span>
-        <button className={styles.heatmapNav} onClick={() => setOffset(o => o + 1)}>›</button>
+        <IconButton size="sm" icon={Icons.chevronRight} label="Next month" onClick={() => setOffset(o => o + 1)} />
       </div>
-      <div className={styles.heatmapGrid}>
-        {['S','M','T','W','T','F','S'].map((d, i) => (
-          <div key={i} className={styles.heatmapDow}>{d}</div>
+      <div className={styles.heatmapGrid} role="grid" aria-label={`Events per day, ${monthLabel}`}>
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <div key={i} className={styles.heatmapDow} aria-hidden="true">{d}</div>
         ))}
         {Array.from({ length: startDow }, (_, i) => (
-          <div key={`pad${i}`} className={styles.heatmapEmpty} />
+          <div key={`pad${i}`} className={styles.heatmapEmpty} aria-hidden="true" />
         ))}
         {Array.from({ length: daysInMonth }, (_, i) => {
           const day     = i + 1;
+          const date    = new Date(year, month, day);
           const count   = countByDay[day] ?? 0;
           const level   = Math.min(4, Math.round((count / maxCount) * 4));
           const isToday = isNow && day === todayDate;
           return (
             <button
               key={day}
-              className={`${styles.heatmapCell} ${INTENSITY[level]}${isToday ? ` ${styles.heatmapToday}` : ''}`}
-              onClick={() => onDayClick?.(new Date(year, month, day))}
-              title={`${count} event${count !== 1 ? 's' : ''}`}
+              type="button"
+              className={[styles.heatmapCell, INTENSITY[level], isToday ? styles.heatmapToday : ''].join(' ')}
+              onClick={() => onDayClick?.(date)}
+              aria-label={`${dayLabel(date)}: ${eventsLabel(count)}${isToday ? ' (today)' : ''}`}
+              title={`${dayLabel(date)}: ${eventsLabel(count)}`}
+              aria-current={isToday ? 'date' : undefined}
             >
               {day}
             </button>
           );
         })}
       </div>
-
-      <div className={styles.legend}>
-        <span className={styles.legendLabel}>Less busy</span>
-        <div className={styles.legendSwatches}>
-          {INTENSITY.map((cls, i) => (
-            <span key={i} className={`${styles.legendSwatch} ${cls}`} />
-          ))}
-        </div>
-        <span className={styles.legendLabel}>More busy</span>
-      </div>
+      <Legend />
     </div>
   );
 }
@@ -97,7 +126,7 @@ function Trailing12W({ events, onDayClick }: Omit<DensityHeatmapProps, 'range'>)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Anchor on the most recent Sunday so columns align by week
+  // Anchor on the coming Saturday so columns align by week (Sun..Sat).
   const anchorEnd = new Date(today);
   anchorEnd.setDate(anchorEnd.getDate() + (6 - today.getDay()));
   const anchorStart = new Date(anchorEnd);
@@ -132,21 +161,21 @@ function Trailing12W({ events, onDayClick }: Omit<DensityHeatmapProps, 'range'>)
   weeks.forEach((week, col) => {
     const m = week[0].getMonth();
     if (m !== lastMonth) {
-      monthLabels.push({ col, label: week[0].toLocaleString('default', { month: 'short' }) });
+      monthLabels.push({ col, label: week[0].toLocaleString([], { month: 'short' }) });
       lastMonth = m;
     }
   });
 
   return (
     <div className={styles.heatmap}>
-      <div className={styles.tw12MonthRow}>
+      <div className={styles.tw12MonthRow} aria-hidden="true">
         {monthLabels.map(({ col, label }) => (
           <span key={col} className={styles.tw12MonthLabel} style={{ gridColumnStart: col + 1 }}>
             {label}
           </span>
         ))}
       </div>
-      <div className={styles.tw12Grid}>
+      <div className={styles.tw12Grid} role="grid" aria-label="Events per day, last 12 weeks">
         {weeks.map((week, w) =>
           week.map((day, d) => {
             const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
@@ -157,24 +186,23 @@ function Trailing12W({ events, onDayClick }: Omit<DensityHeatmapProps, 'range'>)
             return (
               <button
                 key={`${w}-${d}`}
-                className={`${styles.tw12Cell} ${INTENSITY[level]}${isToday ? ` ${styles.heatmapToday}` : ''}`}
+                type="button"
+                className={[
+                  styles.tw12Cell,
+                  INTENSITY[level],
+                  isToday ? styles.heatmapToday : '',
+                  isFuture ? styles.cellFuture : '',
+                ].join(' ')}
                 onClick={() => onDayClick?.(new Date(day))}
-                title={`${day.toLocaleDateString()} — ${count} event${count !== 1 ? 's' : ''}`}
-                style={isFuture ? { opacity: 0.35 } : undefined}
+                aria-label={`${dayLabel(day)}: ${eventsLabel(count)}${isToday ? ' (today)' : ''}`}
+                title={`${dayLabel(day)}: ${eventsLabel(count)}`}
+                aria-current={isToday ? 'date' : undefined}
               />
             );
-          })
+          }),
         )}
       </div>
-      <div className={styles.legend}>
-        <span className={styles.legendLabel}>Less busy</span>
-        <div className={styles.legendSwatches}>
-          {INTENSITY.map((cls, i) => (
-            <span key={i} className={`${styles.legendSwatch} ${cls}`} />
-          ))}
-        </div>
-        <span className={styles.legendLabel}>More busy</span>
-      </div>
+      <Legend />
     </div>
   );
 }

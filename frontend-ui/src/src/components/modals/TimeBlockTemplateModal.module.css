@@ -1,90 +1,59 @@
-.body {
-  padding: 20px 20px 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
 }
 
-.blocksHeader {
+.blocksHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 4px;
+  gap: var(--space-3);
 }
 
 .blocksTitle {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+}
+
+.count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  color: var(--text-dim);
 }
 
 .blockList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 300px;
+  gap: var(--space-2);
+  max-height: 320px;
   overflow-y: auto;
+  padding: var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
 
+.blockHeader,
 .blockRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) 84px 92px 92px minmax(0, 1.4fr) 26px;
+  gap: var(--space-2);
   align-items: center;
-  gap: 6px;
 }
 
-.blockTitle {
-  flex: 2;
-  min-width: 0;
-}
-
-.blockDay {
-  width: 72px;
-  flex-shrink: 0;
-}
-
-.blockTime {
-  width: 96px;
-  flex-shrink: 0;
-}
-
-.timeSep {
-  color: var(--text-muted);
-  flex-shrink: 0;
-  font-size: 14px;
-}
-
-.blockCal {
-  flex: 1;
-  min-width: 0;
-}
-
-.removeBtn {
-  flex-shrink: 0;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.removeBtn:hover {
-  color: var(--error);
-  background: var(--error-soft);
-}
-
-.emptyMsg {
-  margin: 0;
-  padding: 12px;
-  font-size: 13px;
-  color: var(--text-muted);
-  text-align: center;
+.blockHeader {
+  padding: 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
 }

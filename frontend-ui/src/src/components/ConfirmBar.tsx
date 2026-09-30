@@ -1,13 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './ConfirmBar.module.css';
+import { Icon, Icons } from './shared/Icon';
+import { Button } from './ui';
 import { pushEscapeHandler } from '../lib/escapeStack';
 
 /**
- * WS7 #1 — destructive confirmations live here, not in the transient toast
- * system. A fixed bottom-center bar with an explicit action sentence and
- * spatially-separated Cancel / Confirm buttons. No auto-dismiss: a bar survives
- * until the user answers it.
+ * WS7 #1 — confirmations for voice / AI intents live here, not in the
+ * transient toast system. A floating top-center bar with an explicit action
+ * sentence and spatially separated Cancel / Confirm buttons. No auto-dismiss:
+ * a bar survives until the user answers it.
  */
 export interface ConfirmBarItem {
   id: string;
@@ -53,26 +55,18 @@ function ConfirmRow({ item, onResolve, autoFocus }: {
   }, [item, onResolve]);
 
   return (
-    <div className={styles.bar} role="alertdialog" aria-label={item.message}>
+    <div className={[styles.bar, item.destructive ? styles.destructive : ''].join(' ')} role="alertdialog" aria-label={item.message}>
+      <span className={styles.icon} aria-hidden="true">
+        <Icon d={item.destructive ? Icons.warning : Icons.sparkles} size={15} />
+      </span>
       <span className={styles.message}>{item.message}</span>
       <div className={styles.actions}>
-        <button
-          ref={cancelRef}
-          type="button"
-          className={styles.cancel}
-          onClick={cancel}
-          disabled={busy}
-        >
+        <Button ref={cancelRef} variant="ghost" size="sm" onClick={cancel} disabled={busy}>
           {item.cancelLabel ?? 'Cancel'}
-        </button>
-        <button
-          type="button"
-          className={`${styles.confirm} ${item.destructive ? styles.destructive : ''}`}
-          onClick={confirm}
-          disabled={busy}
-        >
-          {busy ? 'Working…' : (item.confirmLabel ?? 'Confirm')}
-        </button>
+        </Button>
+        <Button variant={item.destructive ? 'danger' : 'primary'} size="sm" onClick={confirm} loading={busy}>
+          {item.confirmLabel ?? 'Confirm'}
+        </Button>
       </div>
     </div>
   );
@@ -81,15 +75,16 @@ function ConfirmRow({ item, onResolve, autoFocus }: {
 export function ConfirmBar({ items, onResolve }: ConfirmBarProps) {
   // Esc cancels the most-recent (top) bar via the shared escapeStack, so a
   // ConfirmBar sits above the calendar's clear-selection handler and dismisses
-  // one layer per press instead of being swallowed by a capture-phase consumer.
+  // one level per press.
+  const top = items[items.length - 1];
+
   useEffect(() => {
-    if (items.length === 0) return;
+    if (!top) return;
     return pushEscapeHandler(() => {
-      const top = items[items.length - 1];
       top.onCancel?.();
       onResolve(top.id);
     });
-  }, [items, onResolve]);
+  }, [top, onResolve]);
 
   if (items.length === 0) return null;
 

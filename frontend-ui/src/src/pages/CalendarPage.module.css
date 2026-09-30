@@ -1,37 +1,123 @@
-.page {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   CalendarPage — layout + FullCalendar theming (tokens only).
+   Layout: <Page bare> → [CalendarSidebar aside] [.main (grid)]
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 .main {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  background: var(--bg-main);
 }
 
-/* Override FullCalendar chrome to match design tokens */
+/* Wraps FullCalendar so Year view can hide it without unmounting. */
+.gridWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hidden {
+  display: none;
+}
+
+/* Re-open affordance when the context panel is collapsed to zero width. */
+.showPanelBtn {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: var(--z-sticky);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Floating "Save week as template" pill — absolute so it never shifts the grid. */
+.floatLeft {
+  position: absolute;
+  left: var(--space-5);
+  bottom: var(--space-6);
+  z-index: var(--z-sticky);
+}
+
+/* Bottom-center dock: contextual warnings stack + selection bar. Kept off the
+   bottom-right corner so it never overlaps the app Toaster. */
+.dock {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: calc(100% - var(--space-8));
+  z-index: var(--z-panel);
+  pointer-events: none;
+}
+
+.dock > * {
+  pointer-events: auto;
+}
+
+/* Empty-range overlay: sits over the grid without blanking it; dismissible. */
+.emptyOverlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+}
+
+.emptyCard {
+  pointer-events: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FullCalendar chrome
+   ═══════════════════════════════════════════════════════════════════════════ */
 :global(.fc) {
   --fc-border-color: var(--border);
-  --fc-today-bg-color: color-mix(in srgb, var(--accent) 6%, transparent);
+  --fc-today-bg-color: var(--accent-softer);
   --fc-event-bg-color: transparent;
   --fc-event-border-color: transparent;
   --fc-event-text-color: var(--text-main);
   --fc-page-bg-color: var(--bg-main);
   --fc-neutral-bg-color: var(--bg-panel);
-  --fc-list-event-hover-bg-color: var(--bg-elevated);
+  --fc-neutral-text-color: var(--text-muted);
+  --fc-list-event-hover-bg-color: var(--bg-hover);
   --fc-now-indicator-color: var(--error);
+  --fc-highlight-color: var(--accent-soft);
+  --fc-more-link-bg-color: var(--bg-subtle);
+  --fc-more-link-text-color: var(--text-muted);
+  --fc-non-business-color: transparent;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--text-base);
   height: 100%;
 }
 
-/* ── WS2: time-grid density + layered gridlines ──
-   24px per 30-min slot → 48px/hour, the desktop standard. */
+:global(.fc .fc-scrollgrid) {
+  border-color: var(--border);
+  border-left-width: 0;
+}
+
+:global(.fc .fc-scrollgrid-section-header > *) {
+  border-color: var(--border);
+}
+
+/* ── Time-grid density + layered gridlines ──
+   One 30-min slot = --space-6 (24px) → 48px/hour, the desktop standard. */
 :global(.fc .fc-timegrid-slot) {
-  height: 24px;
+  height: var(--space-6);
 }
 
 /* Two-weight line system: solid hour lines (--border), dotted + faded
@@ -41,23 +127,27 @@
   border-top-color: color-mix(in srgb, var(--border) 40%, transparent);
 }
 
-/* ── WS2: now-line — 2px, with a filled dot at the left terminus ── */
+/* ── Now-line: 2px, with a filled dot at the left terminus ── */
 :global(.fc .fc-timegrid-now-indicator-line) {
-  border-width: 2px;
+  border-width: 2px 0 0;
 }
 
 :global(.fc .fc-timegrid-now-indicator-line::before) {
   content: '';
   position: absolute;
-  left: -4px;
-  top: -3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  left: calc(-1 * var(--space-2));
+  top: calc(-1 * (var(--space-2) + 1px));
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-full);
   background: var(--error);
 }
 
-/* ── WS2: weekend wash (opt-out via body.loom-no-weekend-wash) ──
+:global(.fc .fc-timegrid-now-indicator-arrow) {
+  display: none;
+}
+
+/* ── Weekend wash (opt-out via body.loom-no-weekend-wash) ──
    Kept beneath the today tint via :not(.fc-day-today). */
 :global(body:not(.loom-no-weekend-wash) .fc .fc-day-sat:not(.fc-day-today) .fc-timegrid-col-frame),
 :global(body:not(.loom-no-weekend-wash) .fc .fc-day-sun:not(.fc-day-today) .fc-timegrid-col-frame),
@@ -68,57 +158,167 @@
 
 :global(body:not(.loom-no-weekend-wash) .fc .fc-col-header-cell.fc-day-sat .fc-col-header-cell-cushion),
 :global(body:not(.loom-no-weekend-wash) .fc .fc-col-header-cell.fc-day-sun .fc-col-header-cell-cushion) {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
-:global(.fc .fc-scrollgrid) {
-  border-color: var(--border);
-}
-
+/* ── Column headers: weekday small caps + day number; today in an accent disc ── */
 :global(.fc .fc-col-header-cell) {
   background: var(--bg-panel);
   border-color: var(--border);
+  vertical-align: middle;
 }
 
 :global(.fc .fc-col-header-cell-cushion) {
-  color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 8px 10px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
   text-decoration: none;
+  color: var(--text-dim);
 }
 
+.colDow {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  line-height: 1;
+}
+
+.colDowToday {
+  color: var(--accent-text);
+}
+
+.colNum {
+  width: calc(var(--space-6) + var(--space-2));
+  height: calc(var(--space-6) + var(--space-2));
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.colNumToday {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+/* Month-view headers carry only the weekday. */
+:global(.fc-dayGridMonth-view .fc-col-header-cell-cushion) {
+  padding: var(--space-3) var(--space-3);
+}
+
+/* ── Month cells ── */
 :global(.fc .fc-daygrid-day-number) {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 500;
   text-decoration: none;
-  padding: 6px 8px;
+  padding: var(--space-2) var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
+:global(.fc .fc-day-other .fc-daygrid-day-number) {
+  color: var(--text-dim);
+  opacity: 0.6;
 }
 
 :global(.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number) {
   background: var(--accent);
-  color: white;
+  color: var(--text-on-accent);
   font-weight: 700;
-  border-radius: 50%;
-  width: 22px;
-  height: 22px;
+  border-radius: var(--radius-full);
+  width: var(--space-6);
+  height: var(--space-6);
   display: grid;
   place-items: center;
   padding: 0;
-  margin: 4px;
+  margin: var(--space-2);
 }
 
 :global(.fc .fc-daygrid-day-top) {
   flex-direction: row;
 }
 
+:global(.fc .fc-daygrid-day-events) {
+  margin-top: 0;
+}
+
+:global(.fc .fc-daygrid-more-link) {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+}
+
+:global(.fc .fc-daygrid-more-link:hover) {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+/* ── Time axis labels ── */
 :global(.fc .fc-timegrid-slot-label-cushion) {
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+:global(.fc .fc-timegrid-axis-cushion) {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── All-day strip (time-grid views) ── */
+:global(.fc .fc-timegrid .fc-daygrid-body),
+:global(.fc .fc-timegrid .fc-daygrid-day-frame),
+:global(.fc .fc-timegrid-axis-frame) {
+  background: color-mix(in srgb, var(--bg-panel) 60%, var(--bg-main));
+}
+
+:global(.fc .fc-timegrid .fc-daygrid-day.fc-day-today) {
+  background: color-mix(in srgb, var(--accent-softer), var(--bg-panel));
+}
+
+:global(.fc .fc-timegrid-divider) {
+  padding: 0;
+  border-color: var(--border);
+  background: var(--border);
+}
+
+/* ── List (Agenda) view ── */
+:global(.fc .fc-list) {
+  border-color: var(--border);
+}
+
+:global(.fc .fc-list-day-cushion) {
+  background: var(--bg-panel);
+}
+
+:global(.fc .fc-list-day-text),
+:global(.fc .fc-list-day-side-text) {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+:global(.fc .fc-list-event-time) {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 :global(.fc .fc-list-event-title a) {
@@ -126,36 +326,89 @@
   text-decoration: none;
 }
 
-:global(.fc .fc-list-day-text),
-:global(.fc .fc-list-day-side-text) {
-  color: var(--text-muted);
-  text-decoration: none;
+:global(.fc .fc-list-event-graphic) {
+  display: none;
 }
 
 :global(.fc .fc-list-empty) {
-  background: var(--bg-panel);
+  background: var(--bg-main);
   color: var(--text-muted);
 }
 
-/* Event pill inside FullCalendar */
+/* ── "+N more" popover ── */
+:global(.fc .fc-popover) {
+  background: var(--bg-elevated);
+  border: none;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  z-index: var(--z-popover);
+}
+
+:global(.fc .fc-popover-header) {
+  background: var(--bg-panel);
+  color: var(--text-main);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+:global(.fc .fc-popover-close) {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+:global(.fc .fc-popover-body) {
+  padding: var(--space-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Events
+   ═══════════════════════════════════════════════════════════════════════════ */
+:global(.fc .fc-timegrid-event),
+:global(.fc .fc-daygrid-event) {
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+:global(.fc .fc-timegrid-event .fc-event-main),
 :global(.loom-event .fc-event-main) {
   padding: 0;
   overflow: hidden;
+  height: 100%;
+}
+
+:global(.fc .fc-timegrid-event) {
+  margin: 0 1px 1px 0;
+}
+
+:global(.fc .fc-daygrid-event) {
+  margin: 1px var(--space-1) 0;
+}
+
+:global(.fc .fc-daygrid-dot-event) {
+  padding: 0;
+}
+
+:global(.fc .fc-daygrid-dot-event:hover),
+:global(.fc .fc-daygrid-dot-event.fc-event-mirror) {
+  background: transparent;
+}
+
+:global(.fc .fc-daygrid-dot-event .fc-event-title) {
+  padding: 0;
 }
 
 :global(.loom-event-selected) {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 4px;
-}
-
-/* Month-view chips get a subtle radius (WS2 §9). */
-:global(.fc-daygrid-event) {
   border-radius: var(--radius-sm);
+  z-index: 1;
 }
 
-/* WS2 §6: past-event dimming. Swap the color treatment (desaturate the hue
-   wash + fade the type) rather than dropping whole-pill opacity. The
+/* Past-event dimming: desaturate the hue wash + fade the type. The
    .loom-event-past marker is set on FC's outer event element per occurrence. */
 :global(.loom-event-past) .pill {
   filter: saturate(0.6);
@@ -166,73 +419,152 @@
   opacity: 0.6;
 }
 
-/* WS2 §8: short events (< ~22px tall) drop the time label — vertical position
-   already encodes the start. */
+/* ── The pill ──
+   Tinted block: 18% timeline hue over the elevated surface, a 3px left bar in
+   the timeline color, title in --text-main, time in mono. `--tl` is set inline
+   per event (the only dynamic value). Row layout in month / list / short
+   events; two lines (title over time + chips) in taller time-grid events. */
+.pill {
+  --tl: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  min-height: var(--space-5);
+  box-sizing: border-box;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-left: 3px solid var(--tl);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--tl) 18%, var(--bg-elevated));
+  color: var(--text-main);
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.pill:hover {
+  background: color-mix(in srgb, var(--tl) 26%, var(--bg-elevated));
+}
+
+.pillTime {
+  grid-area: time;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.pillTime:empty {
+  display: none;
+}
+
+.pillTitle {
+  grid-area: title;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: var(--leading-snug);
+}
+
+.pillChips {
+  grid-area: chips;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  justify-self: end;
+}
+
+.pillChips:empty {
+  display: none;
+}
+
+/* Month view chips are the same block at 20px. */
+:global(.fc-daygrid-event) .pill {
+  height: calc(var(--space-5) + var(--space-2));
+}
+
+/* Agenda rows: natural height, roomier padding; FC's own time cell already
+   carries the start time. */
+:global(.fc-list-event) .pill {
+  height: auto;
+  padding: var(--space-1) var(--space-3);
+}
+
+:global(.fc-list-event) .pillTime {
+  display: none;
+}
+
+/* Taller time-grid events: title on top, time + chips beneath. */
+:global(.fc-timegrid-event:not(.fc-timegrid-event-short)) .pill {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'title title'
+    'time  chips';
+  align-content: start;
+  align-items: start;
+  row-gap: var(--space-1);
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  white-space: normal;
+}
+
+:global(.fc-timegrid-event:not(.fc-timegrid-event-short)) .pillTitle {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* Short events (< ~2 slots) drop the time label — vertical position already
+   encodes the start. */
 :global(.fc-timegrid-event-short) .pillTime {
   display: none;
 }
 
-/* Custom event pill */
-.pill {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 2px 6px;
-  border-radius: 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  width: 100%;
-  height: 100%;
-  min-height: 16px;
-}
-
-.pillTime {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  opacity: 0.75;
-  flex-shrink: 0;
-}
-
-.pillTitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-
+/* Chips inside the pill */
 .pillChk {
-  margin-left: auto;
-  font-size: 9px;
+  font-size: var(--text-2xs);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  padding: 0 4px;
-  border-radius: 3px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
 .deadlineChip {
   flex-shrink: 0;
-  display: inline-block;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-2xs);
   font-weight: 700;
   background: var(--warning);
-  color: #000; /* literal: readable text on the warning-colored chip */
+  color: var(--bg-main);
   letter-spacing: 0.02em;
   font-family: var(--font-mono);
 }
 
 .deadlineChipUrgent {
   background: var(--error);
-  color: #fff; /* literal: readable text on the error-colored chip */
-  animation: chipPulse 1.5s ease-in-out infinite;
+  color: var(--text-on-accent);
+  animation: chipPulse calc(var(--motion-slow) * 4) ease-in-out infinite;
 }
 
 /* Clamped floor of 0.75 — a critical (deadline) chip must never dip below its
-   contrast threshold, so the pulse only breathes the top quarter (WS2 §7). */
+   contrast threshold, so the pulse only breathes the top quarter. */
 @keyframes chipPulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.75; }
@@ -241,17 +573,17 @@
 .travelChip {
   flex-shrink: 0;
   display: inline-block;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 9px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-2xs);
   font-weight: 600;
   background: var(--bg-subtle);
   color: var(--text-muted);
   font-family: var(--font-mono);
   background-image: repeating-linear-gradient(
     45deg,
-    transparent 0 3px,
-    color-mix(in srgb, var(--text-main) 8%, transparent) 3px 5px
+    transparent 0 var(--space-1),
+    color-mix(in srgb, var(--text-main) 8%, transparent) var(--space-1) calc(var(--space-1) + var(--space-1))
   );
 }
 
@@ -260,20 +592,19 @@
   font-style: italic;
   background-image: repeating-linear-gradient(
     -45deg,
-    transparent 0 4px,
-    color-mix(in srgb, var(--text-main) 8%, transparent) 4px 6px
+    transparent 0 var(--space-2),
+    color-mix(in srgb, var(--text-main) 8%, transparent) var(--space-2) calc(var(--space-2) + var(--space-1))
   );
 }
 
 .clockDot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-full);
   background: var(--success);
-  margin-left: 4px;
   flex-shrink: 0;
-  animation: clockPulse 1.4s ease-in-out infinite;
+  animation: clockPulse calc(var(--motion-slow) * 4) ease-in-out infinite;
 }
 
 @keyframes clockPulse {
@@ -281,53 +612,9 @@
   50%       { opacity: 0.4; transform: scale(0.75); }
 }
 
-.weekToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 6px 12px 2px;
-  gap: 8px;
-}
-
-/* WS2 §11: one-time empty-grid overlay (month view, no events). Sits over the
-   grid without blanking it; dismissible. No illustration — copy only. */
-.emptyOverlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-  z-index: 5;
-}
-
-.emptyCard {
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  max-width: 340px;
-  padding: var(--space-6);
-  text-align: center;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
-.emptyText {
-  margin: 0;
-  font-size: var(--text-base);
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-
-.emptyKbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  color: var(--text-main);
+@media (prefers-reduced-motion: reduce) {
+  .deadlineChipUrgent,
+  .clockDot {
+    animation: none;
+  }
 }

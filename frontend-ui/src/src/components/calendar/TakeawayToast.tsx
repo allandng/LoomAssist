@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './TakeawayToast.module.css';
-import { Icon, Icons } from '../shared/Icon';
+import { Button, IconButton, Icons, Textarea } from '../ui';
 import { createJournalText } from '../../api';
 import { useNotifications } from '../../store/notifications';
 import { markPrompted, muteEvent } from '../../lib/takeawayDismissals';
+import { isMac } from '../../lib/platform';
 import type { Event } from '../../types';
 
 const MAX_CHARS = 280;
@@ -61,7 +62,7 @@ export function TakeawayToast({ event, occurrenceDate, onClose }: TakeawayToastP
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      handleSave();
+      void handleSave();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       close('skip');
@@ -75,45 +76,42 @@ export function TakeawayToast({ event, occurrenceDate, onClose }: TakeawayToastP
           <div className={styles.title}>{event.title} just ended</div>
           <div className={styles.prompt}>Two-line takeaway?</div>
         </div>
-        <button
-          className={styles.dismiss}
-          onClick={() => close('skip')}
-          aria-label="Dismiss takeaway prompt"
-        >
-          <Icon d={Icons.x} size={12} />
-        </button>
+        <IconButton size="sm" icon={Icons.x} label="Dismiss takeaway prompt" onClick={() => close('skip')} />
       </div>
-      <textarea
+      <Textarea
         ref={textareaRef}
-        className={styles.textarea}
         rows={2}
         maxLength={MAX_CHARS}
         placeholder="What stuck with you?"
+        aria-label="Takeaway"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKey}
       />
-      <div className={styles.counter}>
+      <div className={styles.counter} aria-live="polite">
         {text.length}/{MAX_CHARS}
       </div>
       <div className={styles.actions}>
-        <button
+        <Button
+          size="sm"
+          variant="subtle"
           className={styles.muteBtn}
           onClick={() => close('mute')}
           title="Never prompt for this event again"
         >
           Don't show again
-        </button>
-        <button className={styles.skipBtn} onClick={() => close('skip')}>
-          Skip
-        </button>
-        <button
-          className={styles.saveBtn}
-          onClick={handleSave}
-          disabled={saving || text.trim().length === 0}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => close('skip')}>Skip</Button>
+        <Button
+          size="sm"
+          variant="primary"
+          kbd={isMac ? '⌘↵' : 'Ctrl+↵'}
+          loading={saving}
+          disabled={text.trim().length === 0}
+          onClick={() => void handleSave()}
         >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+          Save
+        </Button>
       </div>
     </div>
   );

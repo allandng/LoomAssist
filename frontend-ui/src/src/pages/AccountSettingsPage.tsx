@@ -1,141 +1,231 @@
-// Phase v3.0 AccountSettingsPage — display name edit + sign-out + sign-in CTA.
+// Settings → Account → Profile.
 //
-// Sign-out copy is deliberate per design doc §11 R5: explicitly enumerates that
-// connections + events are preserved. Single-screen, no second confirm.
+// Local mode is a first-class state, not an error: the page still owns the
+// display name (used by the Home greeting) and offers sign-in as an option.
+// Sign-out is non-destructive and confirms through the shared dialog.
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAccount } from '../contexts/AccountContext';
+import {
+  PageHeader, Card, CardHeader, CardBody, Row, Avatar, Badge, Button, Input, Skeleton, Icon, Icons, confirm,
+} from '../components/ui';
+import { SettingsLayout } from '../components/settings/SettingsLayout';
+import { ProviderGlyph } from '../components/settings/ProviderGlyph';
+import { providerMeta } from '../components/settings/providers';
+import { errMessage } from '../components/settings/util';
 import styles from './AccountSettingsPage.module.css';
 
-function initials(input: string): string {
-  const parts = input.split(/[\s.@_-]/).filter(Boolean);
-  if (!parts.length) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
-}
+const LOCAL_NAME_KEY = 'loom_user_name';
 
 export function AccountSettingsPage() {
-  const navigate = useNavigate();
-  const { account, status, updateDisplayName, signOut } = useAccount();
+  const { account, status, error } = useAccount();
 
-  const [name, setName]   = useState(account?.display_name ?? '');
-  const [busy, setBusy]   = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [err, setErr]     = useState<string | null>(null);
-
-  // Sync the controlled input with whatever is in the Account when the page
-  // mounts or when the underlying display_name changes (e.g. after Save).
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setName(account?.display_name ?? ''); }, [account?.display_name]);
-
-  if (status === 'loading') {
-    return <div className={styles.page}>Loading account…</div>;
-  }
-
-  if (!account) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.localCard}>
-          <h2 className={styles.localCardTitle}>You're in local mode</h2>
-          <p className={styles.localCardLede}>
-            LoomAssist is fully functional without an account. Sign in if you want
-            your account preferences (display name, etc.) to follow you to another
-            device. Calendar data always stays local — signing in won't change that.
-          </p>
-          <button className="loom-btn-primary" onClick={() => navigate('/auth/sign-in')}>
-            Sign in or create an account
-          </button>
-        </div>
+  return (
+    <SettingsLayout>
+      <PageHeader
+        eyebrow="Account"
+        title="Profile"
+        description="Who LoomAssist greets, and whether that follows you to another device."
+      />
+      <div className={styles.stack}>
+        {status === 'loading' && <LoadingCard />}
+        {status === 'error' && (
+          <div className={styles.alert} role="alert">
+            <Icon d={Icons.alertCircle} size={14} className={styles.alertIcon} />
+            <span>Could not reach the local backend to read your account. {error}</span>
+          </div>
+        )}
+        {(status === 'local' || status === 'error') && <LocalProfile />}
+        {status === 'signedIn' && account && <SignedInProfile />}
       </div>
-    );
+    </SettingsLayout>
+  );
+}
+
+function LoadingCard() {
+  return (
+    <Card aria-busy="true">
+      <CardBody>
+        <div className={styles.identity}>
+          <Skeleton width={48} height={48} radius={24} />
+          <div className={styles.identityText}>
+            <Skeleton width={160} height={16} />
+            <Skeleton width={220} />
+          </div>
+        </div>
+        <div className={styles.skeletonRows}>
+          <Skeleton width="100%" height={32} />
+          <Skeleton width="100%" height={32} />
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+/* ── Local mode ─────────────────────────────────────────────────────────── */
+
+function LocalProfile() {
+  const navigate = useNavigate();
+  const [name, setName] = useState(() => localStorage.getItem(LOCAL_NAME_KEY) ?? '');
+  const [saved, setSaved] = useState(() => localStorage.getItem(LOCAL_NAME_KEY) ?? '');
+
+  function save() {
+    const trimmed = name.trim();
+    if (trimmed) localStorage.setItem(LOCAL_NAME_KEY, trimmed);
+    else localStorage.removeItem(LOCAL_NAME_KEY);
+    setSaved(trimmed);
+    setName(trimmed);
   }
+
+  return (
+    <>
+      <Card as="section" aria-labelledby="acct-local-title">
+        <CardBody>
+          <div className={styles.identity}>
+            <Avatar name={saved || null} size={48} />
+            <div className={styles.identityText}>
+              <div className={styles.identityName} id="acct-local-title">{saved || 'Using LoomAssist without an account'}</div>
+              <div className={styles.identityMeta}>
+                <Badge tone="neutral" dot>Local mode</Badge>
+                <span>Everything works offline and stays on this device.</span>
+              </div>
+            </div>
+          </div>
+          <Row label="Display name" description="Used for the greeting on Home." divider={false}>
+            <form className={styles.inlineForm} onSubmit={e => { e.preventDefault(); save(); }}>
+              <Input
+                aria-label="Display name"
+                className={styles.nameInput}
+                value={name}
+                placeholder="Your name"
+                autoComplete="nickname"
+                onChange={e => setName(e.target.value)}
+              />
+              <Button type="submit" variant="secondary" disabled={name.trim() === saved}>Save</Button>
+            </form>
+          </Row>
+        </CardBody>
+      </Card>
+
+      <Card as="section" aria-labelledby="acct-signin-title">
+        <CardHeader
+          title={<span id="acct-signin-title">Sign in</span>}
+          description="Optional. An account carries your display name and preferences between devices. Calendar data always stays local."
+          actions={<Button variant="primary" icon={Icons.logOut} onClick={() => navigate('/auth/sign-in?next=/settings/account')}>Sign in</Button>}
+        />
+      </Card>
+    </>
+  );
+}
+
+/* ── Signed in ──────────────────────────────────────────────────────────── */
+
+function SignedInProfile() {
+  const navigate = useNavigate();
+  const { account, updateDisplayName, signOut } = useAccount();
+  const current = account?.display_name ?? '';
+
+  const [name, setName]     = useState(current);
+  const [busy, setBusy]     = useState(false);
+  const [saved, setSaved]   = useState(false);
+  const [err, setErr]       = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  if (!account) return null;
+  const provider = providerMeta(account.auth_provider);
+  const dirty = name.trim() !== current;
 
   async function save() {
-    if (!account) return;
-    setBusy(true); setErr(null);
+    if (!dirty) return;
+    setBusy(true); setErr(null); setSaved(false);
     try {
-      await updateDisplayName(name);
+      await updateDisplayName(name.trim());
+      // Mirror to the local greeting so Home matches without a second field.
+      if (name.trim()) localStorage.setItem(LOCAL_NAME_KEY, name.trim());
       setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      window.setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(errMessage(e, 'Could not save your display name.'));
     } finally {
       setBusy(false);
     }
   }
 
   async function handleSignOut() {
-    setBusy(true); setErr(null);
+    const ok = await confirm({
+      title: 'Sign out of LoomAssist?',
+      description: 'Your events, tasks, timelines and calendar connections stay on this device exactly as they are. You can sign back in at any time.',
+      confirmLabel: 'Sign out',
+      icon: Icons.logOut,
+    });
+    if (!ok) return;
+    setSigningOut(true); setErr(null);
     try {
       await signOut();
-      navigate('/calendar');
+      navigate('/home');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(errMessage(e, 'Could not sign out.'));
     } finally {
-      setBusy(false);
+      setSigningOut(false);
     }
   }
 
   return (
-    <div className={styles.page}>
-      <div className={styles.headerRow}>
-        <div className={styles.avatar}>{initials(account.display_name || account.email)}</div>
-        <div className={styles.profileInfo}>
-          <div className={styles.profileName}>{account.display_name || account.email}</div>
-          <div className={styles.profileMeta}>
-            {account.email} · signed in with {account.auth_provider}
+    <>
+      <Card as="section" aria-labelledby="acct-profile-title">
+        <CardBody>
+          <div className={styles.identity}>
+            <Avatar name={account.display_name || account.email} size={48} />
+            <div className={styles.identityText}>
+              <div className={styles.identityName} id="acct-profile-title">{account.display_name || account.email}</div>
+              <div className={styles.identityMeta}>
+                <Badge tone="success" dot>Signed in</Badge>
+                <Badge tone="neutral" outline icon={<ProviderGlyph id={provider.id} size={11} />}>{provider.label}</Badge>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Profile</h2>
-        <p className={styles.sectionLede}>
-          Display name is editable. Email is managed at your sign-in provider.
-        </p>
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel} htmlFor="acct-display-name">Display name</label>
-          <input
-            id="acct-display-name"
-            className="loom-field"
-            type="text"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            disabled={busy}
-            placeholder={account.email.split('@')[0]}
-          />
-        </div>
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Email</label>
-          <input className="loom-field" type="email" value={account.email} disabled />
-        </div>
-        <div className={styles.actions}>
-          <button className="loom-btn-primary" onClick={save} disabled={busy || name === (account.display_name ?? '')}>
-            Save
-          </button>
-          {saved && <span className={styles.savedBadge}>Saved</span>}
-        </div>
-        {err && <div className={styles.errorBox}>{err}</div>}
-      </section>
+          <Row label="Display name" description="Shown on Home and on any device you sign in to.">
+            <form className={styles.inlineForm} onSubmit={e => { e.preventDefault(); save(); }}>
+              <Input
+                aria-label="Display name"
+                className={styles.nameInput}
+                value={name}
+                placeholder={account.email.split('@')[0]}
+                autoComplete="nickname"
+                disabled={busy}
+                onChange={e => { setName(e.target.value); setSaved(false); }}
+              />
+              <Button type="submit" variant="secondary" loading={busy} disabled={!dirty}>Save</Button>
+              {saved && <Badge tone="success" icon={Icons.check}>Saved</Badge>}
+            </form>
+          </Row>
+          <Row label="Email" description="Managed by your sign-in provider.">
+            <span className={styles.mono}>{account.email}</span>
+          </Row>
+          <Row label="Signed in with" divider={false}>
+            <span className={styles.providerCell}>
+              <ProviderGlyph id={provider.id} size={14} />
+              {provider.label}
+            </span>
+          </Row>
+          {err && (
+            <div className={styles.alert} role="alert">
+              <Icon d={Icons.alertCircle} size={14} className={styles.alertIcon} />
+              <span>{err}</span>
+            </div>
+          )}
+        </CardBody>
+      </Card>
 
-      <div className={styles.dangerZone}>
-        <div className={styles.dangerTitle}>Sign out</div>
-        <p className={styles.dangerLede}>
-          Signing out clears your LoomAssist account from this device. It does
-          <strong> not </strong>delete your local events, tasks, or anything else
-          you've created.
-        </p>
-        <div className={styles.signOutNotice}>
-          Your connections (Google, iCloud) will keep syncing as long as their tokens
-          remain valid. To stop a connection, disconnect it from Settings → Connections.
-        </div>
-        <div className={styles.actions}>
-          <button className="loom-btn-ghost" onClick={handleSignOut} disabled={busy}>
-            Sign out
-          </button>
-        </div>
-      </div>
-    </div>
+      <Card as="section" aria-labelledby="acct-signout-title">
+        <CardHeader
+          title={<span id="acct-signout-title">Sign out</span>}
+          description="Removes the account from this device only. Nothing you have created is deleted, and calendar connections keep syncing."
+          actions={<Button variant="ghost" icon={Icons.logOut} loading={signingOut} onClick={handleSignOut}>Sign out…</Button>}
+        />
+      </Card>
+    </>
   );
 }

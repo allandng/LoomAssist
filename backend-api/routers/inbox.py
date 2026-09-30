@@ -30,14 +30,19 @@ class InboxScheduleRequest(BaseModel):
     calendar_id: int
 
 
+class InboxPatchRequest(BaseModel):
+    """Partial update: edit the captured text and/or toggle `archived`
+    (archived=false un-archives an item so it shows in the inbox again)."""
+    text: Optional[str] = None
+    archived: Optional[bool] = None
+
+
 @router.get("", response_model=list[models.InboxItemRead])
-def list_inbox(db: Session = Depends(get_db)):
-    return (
-        db.query(models.InboxItem)
-        .filter(models.InboxItem.archived == False)  # noqa: E712
-        .order_by(models.InboxItem.id.desc())
-        .all()
-    )
+def list_inbox(include_archived: bool = False, db: Session = Depends(get_db)):
+    q = db.query(models.InboxItem)
+    if not include_archived:
+        q = q.filter(models.InboxItem.archived == False)  # noqa: E712
+    return q.order_by(models.InboxItem.id.desc()).all()
 
 
 @router.post("", response_model=models.InboxItemRead)
@@ -105,6 +110,23 @@ def schedule_inbox_item(item_id: int, body: InboxScheduleRequest, db: Session = 
 
     item.scheduled_event_id = db_event.id
     item.archived = True
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.patch("/{item_id}", response_model=models.InboxItemRead)
+def patch_inbox_item(item_id: int, body: InboxPatchRequest, db: Session = Depends(get_db)):
+    item = db.query(models.InboxItem).filter(models.InboxItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
+    if body.text is not None:
+        text_value = body.text.strip()
+        if not text_value:
+            raise HTTPException(status_code=400, detail={"error": {"code": "empty_text"}})
+        item.text = text_value
+    if body.archived is not None:
+        item.archived = body.archived
     db.commit()
     db.refresh(item)
     return item

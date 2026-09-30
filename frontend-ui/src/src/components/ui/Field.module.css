@@ -1,0 +1,114 @@
+/* ── Field wrapper ───────────────────────────────────────────────────────── */
+.field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.inline { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-5); }
+.inline .labelRow { flex: 1; min-width: 0; }
+.inline .control { flex: 0 0 auto; }
+.labelRow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.label { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); }
+.control { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.hint  { font-size: var(--text-xs); color: var(--text-dim); line-height: var(--leading-snug); }
+.error { font-size: var(--text-xs); color: var(--error); line-height: var(--leading-snug); }
+
+/* ── Input / Textarea / Select ───────────────────────────────────────────── */
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  font-size: var(--text-base);
+  font-family: inherit;
+  color: var(--text-main);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast);
+}
+.input::placeholder { color: var(--text-dim); }
+.input:hover:not(:disabled) { border-color: var(--border-strong); }
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--bg-elevated);
+}
+.input:disabled { opacity: 0.55; cursor: not-allowed; }
+.input[aria-invalid="true"] { border-color: var(--error); }
+.input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px var(--error-soft); }
+.sm { height: 26px; font-size: var(--text-sm); padding: 0 8px; border-radius: var(--radius-sm); }
+
+.textarea {
+  height: auto;
+  min-height: 72px;
+  padding: var(--space-3) 10px;
+  line-height: var(--leading-body);
+  resize: vertical;
+}
+
+.iconWrap { position: relative; display: flex; align-items: center; }
+.leadingIcon { position: absolute; left: 9px; color: var(--text-dim); pointer-events: none; }
+.withIcon { padding-left: 28px; }
+
+.selectWrap { position: relative; display: flex; align-items: center; }
+.select { appearance: none; padding-right: 28px; cursor: pointer; }
+.selectChevron { position: absolute; right: 9px; color: var(--text-dim); pointer-events: none; }
+
+/* ── Switch ──────────────────────────────────────────────────────────────── */
+.switchRow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); }
+.switchText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.switchLabel { font-size: var(--text-base); font-weight: 500; color: var(--text-main); cursor: pointer; }
+.switchDesc { font-size: var(--text-xs); color: var(--text-muted); line-height: var(--leading-snug); }
+
+.switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--motion-base) var(--ease-standard);
+}
+.switch:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform var(--motion-base) var(--ease-spring);
+}
+.switchOn { background: var(--accent); }
+.switchOn .thumb { transform: translateX(16px); }
+.switchSm { width: 30px; height: 17px; }
+.switchSm .thumb { width: 13px; height: 13px; }
+.switchSm.switchOn .thumb { transform: translateX(13px); }
+
+/* ── Checkbox ────────────────────────────────────────────────────────────── */
+.checkbox { display: inline-flex; align-items: center; gap: var(--space-3); cursor: pointer; user-select: none; }
+.checkboxInput { position: absolute; opacity: 0; width: 0; height: 0; }
+.box {
+  --cb-color: var(--accent);
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-subtle);
+  color: transparent;
+  flex-shrink: 0;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+.checkbox:hover .box { border-color: var(--text-dim); }
+.checkboxInput:checked + .box { background: var(--cb-color); border-color: var(--cb-color); color: #fff; }
+.checkboxInput:focus-visible + .box { outline: var(--focus-ring); outline-offset: 2px; }
+.checkboxInput:disabled + .box { opacity: 0.5; }
+.round .box { border-radius: 50%; width: 18px; height: 18px; }
+.checkboxLabel { font-size: var(--text-base); color: var(--text-main); }
+.checkboxInput:checked ~ .checkboxLabel { color: var(--text-muted); }
+.round .checkboxInput:checked ~ .checkboxLabel { text-decoration: line-through; }

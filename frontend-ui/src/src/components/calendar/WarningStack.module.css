@@ -1,12 +1,13 @@
 .stack {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  z-index: 50;
+  align-items: center;
+  gap: var(--space-3);
   pointer-events: none;
+}
+
+.stack:empty {
+  display: none;
 }
 
 .stack > * {

@@ -1,259 +1,176 @@
-.shell {
-  width: 540px;
-  max-width: 95vw;
-  max-height: 80vh;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  box-shadow: var(--shadow-modal);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.shellWide { width: 720px; }
-
-.header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.headerTitle {
-  flex: 1;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.closeBtn {
-  width: 26px;
-  height: 26px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  border-radius: 4px;
-}
-
-.closeBtn:hover {
-  background: var(--bg-subtle);
-  color: var(--text-main);
-}
-
-.body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   Connections — provider picker, CalDAV credentials, subscribe drawer.
+   Chrome comes from ModalShell; these are the bodies only.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 .lede {
-  font-size: 13px;
+  margin: 0;
+  font-size: var(--text-base);
   color: var(--text-muted);
-  margin: 0 0 16px;
-  line-height: 1.55;
+  line-height: var(--leading-body);
 }
 
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+}
+
+.headerGlyph {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.spin { animation: spin calc(var(--motion-slow) * 2.5) linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Provider grid ──────────────────────────────────────────────────────── */
 .providerGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .providerCard {
-  padding: 16px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  cursor: pointer;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-main);
+  font: inherit;
   text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
 }
 
-.providerCard:hover {
-  border-color: var(--accent);
-}
+.providerCard:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-softer); }
+.providerCard:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 
-.providerCardDisabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.providerCardDisabled:hover { border-color: var(--border); }
+.providerCardDisabled { opacity: 0.55; cursor: not-allowed; }
 
 .providerLogo {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  background: var(--bg-subtle);
-  color: var(--text-muted);
   display: grid;
   place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--text-main);
   flex-shrink: 0;
 }
 
+.providerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .providerName {
-  font-size: 13.5px;
-  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 600;
 }
 
 .providerSub {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
-  margin-top: 3px;
+  line-height: var(--leading-snug);
 }
 
-.soonChip {
-  font-size: 9.5px;
-  font-family: var(--font-mono);
+.providerArrow {
+  display: grid;
+  place-items: center;
+  align-self: center;
   color: var(--text-dim);
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
 }
 
-.fieldRow {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-bottom: 14px;
-}
+.providerCard:hover:not(:disabled) .providerArrow { color: var(--accent-text); }
 
-.fieldLabel {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.fieldHint {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin-top: 2px;
-  line-height: 1.5;
-}
-
-.fieldHint code {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  background: var(--bg-subtle);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-
+/* ── Credentials ────────────────────────────────────────────────────────── */
 .testRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 4px 0 14px;
-  font-size: 12px;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
-.testOk {
-  color: var(--success);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+/* ── Subscribe drawer ───────────────────────────────────────────────────── */
+.drawerBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
 }
 
-.testErr {
-  color: var(--error);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
-.errorBox {
-  padding: 10px 12px;
-  border-left: 3px solid var(--error);
-  background: color-mix(in srgb, var(--error) 8%, transparent);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--text-main);
-  margin-bottom: 14px;
-}
-
-.footer {
-  padding: 12px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-panel);
+.drawerToolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
-.spacer { flex: 1; }
+.drawerCount {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.calList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
 
 .calRow {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 8px;
-  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  flex-wrap: wrap;
 }
 
-.calCheckbox {
-  width: 16px;
-  height: 16px;
-  border: 1.5px solid var(--border-strong);
-  border-radius: 4px;
-  background: transparent;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.calCheckboxChecked {
-  background: var(--accent);
-  border-color: var(--accent);
-}
+.calRowOff .calName { color: var(--text-muted); }
 
 .calSwatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 
 .calName {
   flex: 1;
-  font-size: 13px;
+  min-width: 0;
+  font-size: var(--text-base);
   font-weight: 500;
-}
-
-.directionPicker {
-  display: flex;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px;
-}
-
-.directionPill {
-  padding: 4px 10px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.directionPillActive {
-  background: var(--bg-elevated);
   color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

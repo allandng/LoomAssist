@@ -1,0 +1,72 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.item:last-of-type { border-bottom: none; }
+.item:hover { background: var(--bg-hover); }
+
+.itemText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.itemTitle {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.itemWhen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.itemReason {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+.itemHint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.itemHintSlot { color: var(--accent-text); }
+
+.slot {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.spin { animation: spin calc(var(--motion-slow) * 2.5) linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.more {
+  padding: var(--space-3) var(--space-6);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}

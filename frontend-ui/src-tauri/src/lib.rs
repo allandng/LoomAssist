@@ -1,19 +1,22 @@
-use std::{env, fs, panic, process::Command, sync::{Arc, Mutex}, thread, time::{SystemTime, UNIX_EPOCH, Duration}};
+use std::{fs, panic, process::Command, sync::{Arc, Mutex}, thread, time::{SystemTime, UNIX_EPOCH, Duration}};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Listener, Manager, WindowEvent,
+    AppHandle, Emitter, Listener, Manager, WindowEvent,
 };
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+/// Local backend origin. 127.0.0.1 (not `localhost`) so Windows never tries
+/// the IPv6 loopback first and stalls when uvicorn binds IPv4 only.
+const BACKEND_BASE: &str = "http://127.0.0.1:8000";
 
-// ── Phase v3.0: macOS Keychain (OAuth tokens / CalDAV passwords) ────────────
+// ── Phase v3.0: OS credential store (OAuth tokens / CalDAV passwords) ────────
 //
-// Slot format: `com.loomassist.{kind}` where kind is `supabase` or
-// `connection.{uuid}`. Tokens NEVER touch SQLite or disk — only the Keychain.
+// Slot format: `com.loomassist` service + `{kind}` account where kind is
+// `supabase` or `connection.{uuid}`. Tokens NEVER touch SQLite or disk — only
+// the platform store (Windows Credential Locker, macOS Keychain, Linux Secret
+// Service — see the `keyring` features in Cargo.toml). The Python backend
+// reads the same service/account pair through the `keyring` package.
 
 const KEYCHAIN_SERVICE: &str = "com.loomassist";
 
@@ -33,21 +36,6 @@ fn keychain_get(slot: String) -> Result<Option<String>, String> {
     }
 }
 
-/// Speak the given text via the macOS `say` command. Future-features 2C
-/// (daily morning briefing). Spawns and detaches; the frontend doesn't block
-/// on this — playback continues even if the call returns immediately.
-#[tauri::command]
-fn speak_briefing(text: String) -> Result<(), String> {
-    if text.trim().is_empty() {
-        return Ok(());
-    }
-    Command::new("say")
-        .arg(text)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 #[tauri::command]
 fn keychain_delete(slot: String) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &slot).map_err(|e| e.to_string())?;
@@ -58,38 +46,126 @@ fn keychain_delete(slot: String) -> Result<(), String> {
     }
 }
 
-fn loom_log_dir() -> std::path::PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    std::path::Path::new(&home).join("Library/Logs/LoomAssist")
+// ── Text-to-speech (Future-features 2C: daily morning briefing) ──────────────
+//
+// Spawns and detaches the platform TTS engine; the frontend doesn't block on
+// this. Never panics — every failure is returned as `Err(String)` so the UI can
+// fall back to the Web Speech API.
+
+/// Speak the given text with the platform's built-in speech engine.
+#[tauri::command]
+fn speak_briefing(text: String) -> Result<(), String> {
+    let text = text.trim().to_owned();
+    if text.is_empty() {
+        return Ok(());
+    }
+    spawn_tts(&text)
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_tts(text: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // Text travels through an environment variable so quoting can never break
+    // the command line or inject script.
+    let script = "Add-Type -AssemblyName System.Speech; \
+                  $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+                  $s.Speak($env:LOOM_SPEAK_TEXT); $s.Dispose()";
+    Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
+        .env("LOOM_SPEAK_TEXT", text)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("PowerShell speech synthesis unavailable: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_tts(text: &str) -> Result<(), String> {
+    Command::new("say")
+        .arg(text)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("`say` unavailable: {e}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_tts(text: &str) -> Result<(), String> {
+    // speech-dispatcher first (respects the user's configured voice), then
+    // espeak-ng / espeak.
+    for bin in ["spd-say", "espeak-ng", "espeak"] {
+        if Command::new(bin).arg(text).spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    Err("No speech engine found (install speech-dispatcher or espeak-ng)".to_owned())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+fn spawn_tts(_text: &str) -> Result<(), String> {
+    Err("Speech synthesis is not supported on this platform".to_owned())
+}
+
+// ── Logging location ─────────────────────────────────────────────────────────
+
+/// Tauri's per-platform log dir for this app id (Windows
+/// `%LOCALAPPDATA%\<id>\logs`, macOS `~/Library/Logs/<id>`, Linux
+/// `$XDG_DATA_HOME/<id>/logs`). Falls back to the OS temp dir.
+fn loom_log_dir(app: &AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_log_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("LoomAssist").join("logs"))
+}
+
+// ── Tray: next event ─────────────────────────────────────────────────────────
+
+/// Parse an event `start_time` as the backend stores it.
+///
+/// The backend writes naive local ISO strings (`2026-04-25T09:00:00`). Those
+/// are interpreted in the machine's local time zone; strings that carry an
+/// explicit offset or `Z` are honoured as absolute instants.
+fn parse_event_start(s: &str) -> Option<DateTime<Local>> {
+    let s = s.trim();
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Local));
+    }
+    // Drop fractional seconds for the naive forms.
+    let core = s.split('.').next().unwrap_or(s);
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(core, fmt) {
+            let local = Local.from_local_datetime(&naive);
+            return local.single().or_else(|| local.earliest());
+        }
+    }
+    None
 }
 
 /// Fetch the title of the next upcoming event from the local backend.
 fn fetch_next_event_title() -> String {
-    match ureq::get("http://localhost:8000/events/").call() {
+    match ureq::get(&format!("{BACKEND_BASE}/events/")).call() {
         Ok(response) => {
             if let Ok(body) = response.into_string() {
                 if let Ok(events) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
-                    let now_secs = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let mut upcoming: Vec<(u64, String)> = events
+                    let now = Local::now();
+                    let mut upcoming: Vec<(DateTime<Local>, String)> = events
                         .iter()
                         .filter_map(|e| {
+                            if !e["deleted_at"].is_null() {
+                                return None; // soft-deleted
+                            }
                             let start = e["start_time"].as_str()?;
                             let title = e["title"].as_str()?;
-                            // Parse ISO datetime to seconds since epoch (simple approach)
-                            let dt = chrono_or_simple_parse(start)?;
-                            if dt > now_secs { Some((dt, title.to_owned())) } else { None }
+                            let dt = parse_event_start(start)?;
+                            if dt > now { Some((dt, title.to_owned())) } else { None }
                         })
                         .collect();
                     upcoming.sort_by_key(|(t, _)| *t);
                     if let Some((ts, title)) = upcoming.first() {
-                        let diff_mins = (ts - now_secs) / 60;
+                        let diff_mins = (*ts - now).num_minutes().max(0);
                         return if diff_mins < 60 {
                             format!("Next: {} in {}m", title, diff_mins)
                         } else {
-                            format!("Next: {}", title)
+                            format!("Next: {} at {}", title, ts.format("%H:%M"))
                         };
                     }
                 }
@@ -100,32 +176,13 @@ fn fetch_next_event_title() -> String {
     }
 }
 
-/// Very lightweight ISO 8601 datetime parser → Unix seconds (no external dep).
-fn chrono_or_simple_parse(s: &str) -> Option<u64> {
-    // Expect: YYYY-MM-DDTHH:MM:SS or similar
-    let s = s.trim_end_matches('Z');
-    let parts: Vec<&str> = s.split('T').collect();
-    if parts.len() < 2 { return None; }
-    let date_parts: Vec<u32> = parts[0].split('-')
-        .filter_map(|p| p.parse().ok()).collect();
-    let time_parts: Vec<u32> = parts[1][..8.min(parts[1].len())].split(':')
-        .filter_map(|p| p.parse().ok()).collect();
-    if date_parts.len() < 3 || time_parts.len() < 2 { return None; }
-    let (y, m, d) = (date_parts[0] as i64, date_parts[1] as i64, date_parts[2] as i64);
-    let (h, min) = (time_parts[0] as i64, time_parts[1] as i64);
-    // Rough seconds-since-epoch (ignores leap seconds, good enough for ordering)
-    let days = (y - 1970) * 365 + (y - 1969) / 4 + // rough leap years
-        [0i64,31,59,90,120,151,181,212,243,273,304,334][(m-1) as usize] + (d - 1);
-    Some((days * 86400 + h * 3600 + min * 60) as u64)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let log_dir = loom_log_dir();
+            let log_dir = loom_log_dir(&handle);
             let _ = fs::create_dir_all(&log_dir);
 
             // Panic hook
@@ -164,7 +221,7 @@ pub fn run() {
             let next_item   = MenuItem::with_id(app, "next", "No upcoming events", false, None::<&str>)?;
             let pomo_item   = MenuItem::with_id(app, "pomo", "Pomodoro: idle",      false, None::<&str>)?;
             let sep         = PredefinedMenuItem::separator(app)?;
-            let open_item   = MenuItem::with_id(app, "open", "Open Loom",           true,  None::<&str>)?;
+            let open_item   = MenuItem::with_id(app, "open", "Open LoomAssist",     true,  None::<&str>)?;
             let quit_item   = MenuItem::with_id(app, "quit", "Quit",                true,  None::<&str>)?;
 
             let menu = Menu::with_items(app, &[&next_item, &pomo_item, &sep, &open_item, &quit_item])?;
@@ -173,10 +230,10 @@ pub fn run() {
             let pomo_clone2 = pomo_item.clone();
 
             // Build tray
-            let _tray = TrayIconBuilder::new()
+            let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("LoomAssist")
                 .on_menu_event({
                     let handle3 = handle.clone();
                     move |_tray, event| {
@@ -184,6 +241,7 @@ pub fn run() {
                             "open" => {
                                 if let Some(win) = handle3.get_webview_window("main") {
                                     let _ = win.show();
+                                    let _ = win.unminimize();
                                     let _ = win.set_focus();
                                 }
                             }
@@ -191,8 +249,11 @@ pub fn run() {
                             _ => {}
                         }
                     }
-                })
-                .build(app)?;
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let _tray = tray_builder.build(app)?;
 
             // Background thread: poll every 60 seconds
             thread::spawn(move || {
@@ -219,7 +280,6 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             keychain_set,
             keychain_get,
             keychain_delete,

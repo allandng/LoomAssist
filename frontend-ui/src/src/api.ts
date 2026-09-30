@@ -318,11 +318,27 @@ export const clearLogs = (): Promise<void> =>
 
 // ---- Admin ----
 
-export const backupDatabase = (): Promise<{ path: string }> =>
-  req('POST', '/admin/backup', {});
+/** GET /admin/backup — the raw SQLite file as a Blob (Content-Disposition: attachment). */
+export async function backupDatabase(): Promise<Blob> {
+  const res = await fetch(`${BASE}/admin/backup`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(err?.detail?.error?.detail ?? err?.error?.detail ?? `Backup failed (${res.status})`), { status: res.status });
+  }
+  return res.blob();
+}
 
-export const restoreDatabase = (backupPath: string): Promise<void> =>
-  req('POST', '/admin/restore', { path: backupPath });
+/** POST /admin/restore — multipart upload; the backend expects the part named `file`. */
+export async function restoreDatabase(file: File): Promise<{ status: string; message: string }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const res = await fetch(`${BASE}/admin/restore`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(err?.detail?.error?.detail ?? err?.error?.detail ?? `Restore failed (${res.status})`), { status: res.status });
+  }
+  return res.json();
+}
 
 // ---- Study Block Auto-Generator ----
 
@@ -823,3 +839,101 @@ export const cloudLock = (): Promise<{ status: string }> =>
 
 export const cloudSyncRun = (): Promise<CloudSyncSummary> =>
   req('POST', '/cloud/sync/run', {});
+
+// ── Phase v3.0: subscribed calendars for a connection (Settings → Connections → detail) ──
+// GET /connections/{id}/calendars?subscribed=true returns the ConnectionCalendar join
+// rows (same payload as /connections/{id}/subscriptions); without the flag the route
+// lists the provider's remote calendars — see types.ts `ConnectionCalendar`.
+
+export const listConnectionCalendars = (id: string): Promise<import('./types').ConnectionCalendar[]> =>
+  req('GET', `/connections/${id}/calendars?subscribed=true`);
+
+// ---- Inbox (v3 redesign — Scheduled / Archived filters) ----
+// GET /inbox currently returns open items only; `include_archived` is the
+// query flag the Inbox page asks for so its Scheduled / Archived filters can be
+// served. Until the backend honors it the page filters client-side and those
+// two tabs stay empty.
+export const listInboxAll = (): Promise<InboxItem[]> =>
+  req('GET', '/inbox?include_archived=true');
+
+// ---- Timeline export (v3 redesign — calendar panel) ----
+// The backend route requires an explicit `calendar_ids` list and a `format`;
+// the older `exportTimelines()` above sends neither. This variant exports the
+// given timelines as a single .ics blob for a browser download.
+export async function exportTimelinesICS(calendarIds: number[]): Promise<Blob> {
+  const ids = calendarIds.map(id => String(id)).join(',');
+  const res = await fetch(`${BASE}/export/timelines/?calendar_ids=${encodeURIComponent(ids)}&format=ics`);
+  if (!res.ok) throw new Error(`export-timelines → ${res.status}`);
+  return res.blob();
+}
+
+// ---- Inbox (v3 redesign — partial update) ----
+// PATCH /inbox/{id}: edit the captured text and/or set `archived`
+// (archived=false restores an archived item to the open list).
+export const patchInboxItem = (
+  id: number,
+  patch: { text?: string; archived?: boolean },
+): Promise<InboxItem> =>
+  req('PATCH', `/inbox/${id}`, patch);
+
+// ---- Journal (v3 redesign — audio playback) ----
+// GET /journal/{id}/audio streams the saved recording; used as an <audio> src.
+export const journalAudioUrl = (entryId: number): string =>
+  `${BASE}/journal/${entryId}/audio`;
+
+// ─── Backend cross-platform pass (appended; routes documented in the backend report) ───
+
+export interface OAuthStatus {
+  completed_at: string | null;
+  provider: string | null;
+  email: string | null;
+}
+
+/** Poll after opening the Supabase OAuth URL in the system browser: `completed_at`
+ *  flips once GET /auth/oauth/callback has POSTed the tokens to /auth/oauth/complete.
+ *  Then call getMe(). The session JSON is in the keychain slot `supabase`. */
+export const getOAuthStatus = (): Promise<OAuthStatus> =>
+  req('GET', '/auth/oauth/status');
+
+export interface GoogleConnectionStatus {
+  completed_at: string | null;
+  connection_id: string | null;
+  email: string | null;
+}
+
+/** Same idea for Google Calendar connections (GET /connections/google/callback). */
+export const getGoogleConnectionStatus = (): Promise<GoogleConnectionStatus> =>
+  req('GET', '/connections/google/status');
+
+/** ConnectionCalendar rows subscribed under a connection (local pairs). For the
+ *  provider's remote list use `listRemoteCalendars`. */
+export const listSubscribedCalendars = (connection_id: string): Promise<import('./types').ConnectionCalendar[]> =>
+  req('GET', `/connections/${connection_id}/subscriptions`);
+
+/** Undo a voice `cancel_event` (clears the deleted_at tombstone). */
+export const restoreEvent = (event_id: number): Promise<{ status: string; restored: boolean; event: Event }> =>
+  req('POST', `/events/${event_id}/restore`);
+
+// `journalAudioUrl` and `patchInboxItem` are defined once above (Inbox / Journal sections).
+
+export const updateEventTemplate = (id: number, payload: Partial<TemplateCreate>): Promise<EventTemplate> =>
+  req('PUT', `/templates/${id}`, payload);
+
+export const updateTaskTemplate = (
+  id: number,
+  payload: Partial<Omit<import('./types').TaskTemplate, 'id' | 'created_at'>>,
+): Promise<import('./types').TaskTemplate> =>
+  req('PUT', `/task-templates/${id}`, payload);
+
+/** Set / correct a paired LAN peer's address; used by /sync/now and auto-sync. */
+export const patchPeerAddress = (
+  peer_id: number,
+  payload: { host?: string; port?: number },
+): Promise<import('./types').PeerWithAddress> =>
+  req('PATCH', `/pair/peers/${peer_id}`, payload);
+
+export const syncReviewBulk = (
+  item_ids: string[],
+  action: 'approve' | 'reject',
+): Promise<{ resolved: number; skipped: number; event_ids: number[] }> =>
+  req('POST', '/sync/review/bulk', { item_ids, action });

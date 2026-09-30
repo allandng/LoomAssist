@@ -48,16 +48,34 @@ LoomAssist (v2.4) is a **local-first desktop calendar app** (Tauri 2 + React 19 
 
 ## Running the App
 
+The app is cross-platform (Windows, macOS, Linux). The backend launchers create the venv, install
+requirements and start uvicorn on `127.0.0.1:8000`:
+
 ```bash
-# Terminal 1 — backend
-cd backend-api && source venv/bin/activate && python3 -m uvicorn main:app --reload
+# Terminal 1 — backend (macOS / Linux)
+cd backend-api && ./run.sh --reload
 
-# Terminal 2 — frontend
-cd frontend-ui && npm run tauri dev
+# Terminal 1 — backend (Windows PowerShell)
+cd backend-api; .\run.ps1 -Reload
 
-# Optional: load demo data
-cd backend-api && source venv/bin/activate && python3 seed_demo.py
+# Terminal 2 — frontend (Tauri window)
+cd frontend-ui/src && npm install && npm run tauri dev
+
+# Frontend in a plain browser (Vite only, no Tauri) — what the .claude/launch.json preview uses
+cd frontend-ui/src && npm run dev      # http://localhost:5173
+
+# Optional: load demo data (idempotent; --reset wipes first)
+cd backend-api && venv/bin/python seed_demo.py          # Windows: venv\Scripts\python.exe seed_demo.py
 ```
+
+`requirements.txt` uses platform markers (`uvloop` is skipped on Windows). If a pinned version has
+no wheel for your Python, install with the pins relaxed — the launchers do this for you.
+
+Optional env vars (all have sensible defaults; see `backend-api/core/paths.py`): `LOOM_DB_PATH`,
+`LOOM_DATA_DIR`, `LOOM_JOURNAL_AUDIO_DIR`, `LOOM_CERTS_DIR`, `LOOM_LOG_DIR`
+(Windows `%LOCALAPPDATA%\LoomAssist\logs`, macOS `~/Library/Logs/LoomAssist`, Linux
+`~/.local/state/loomassist`), `LOOM_SECRETS_DIR` (keyring fallback), `SUPABASE_REDIRECT_URL`,
+`GOOGLE_OAUTH_REDIRECT`.
 
 ## Testing & Linting
 
@@ -95,11 +113,11 @@ cd ios-app && xcodebuild -project LoomAssist.xcodeproj -scheme LoomAssist \
   -destination 'platform=iOS Simulator,name=iPhone 17' build
 ```
 
-**Important:** Never run `pytest tests/` together — each test file patches the DB engine before importing `main`, and cross-file ordering causes conflicts. Always run one file at a time with `-v`.
+**Important:** Never run `pytest tests/` together — each test file patches the DB engine before importing `main`, and cross-file ordering causes conflicts. Always run one file at a time with `-v` (a shell loop over `tests/test_*.py` is the full-suite equivalent; 34 files / ~360 tests as of v3.0). Frontend baseline as of v3.0: `npm run lint` 0 errors, `npx tsc -b` clean, Vitest 16 files / 162 tests.
 
 ## Backend Architecture
 
-**Single file** — `backend-api/main.py` (215 lines) contains all routes, Pydantic request models, and business logic. backend-api/main.py is the thin entry point: it registers routers via app.include_router() and owns the lifespan context manager. New routes go in backend-api/routers/<domain>.py; each router file owns its own Pydantic models.
+**Routers, not a single file** — `backend-api/main.py` (~215 lines) is the thin entry point: it registers routers via `app.include_router()` and owns the lifespan context manager. Every route lives in `backend-api/routers/<domain>.py` (25 routers, ~150 routes); each router file owns its own Pydantic models. Cross-platform path anchors live in `backend-api/core/paths.py` — never use CWD-relative paths (`./loom.sqlite3`, `./certs`) in new code.
 
 **Service modules** live in `backend-api/services/`:
 - `scraper.py` — PDF/syllabus scraper
@@ -111,7 +129,8 @@ cd ios-app && xcodebuild -project LoomAssist.xcodeproj -scheme LoomAssist \
 - `sync/caldav.py` (v2.2) — iCloud / generic CalDAV via the `caldav` Python library. Raises `CalDAVAuthError` on 401/403 and `CalDAVConflict` on 412.
 - `sync/ics_normalize.py` (v2.2) — iCal ↔ event-payload conversion. Reused by both CalDAV and the existing ICS importer path.
 - `sync/runner.py` (v2.2) — single asyncio task started in FastAPI `lifespan`. Iterates enabled connections every 5 min; broadcasts `{conn_id, phase, review_count}` over the SSE stream. The **only place** that creates `SyncReviewItem` rows. Uses `_pull_google_paginated` (8 pages × 250 events per cycle).
-- `sync/keychain_bridge.py` (v2.2) — in-memory token cache populated by the frontend via `POST /connections/{id}/token`. Falls back to a `security find-generic-password` shell-out on macOS so tokens survive a backend restart.
+- `sync/keychain_bridge.py` (v3.0) — token cache populated by the frontend via `POST /connections/{id}/token`, persisted through the cross-platform `keyring` package (Windows Credential Locker / macOS Keychain / Linux Secret Service) under service `com.loomassist`, account `connection.{id}` — the same slot the Tauri `keyring` crate writes — with an AES-GCM file fallback in `LOOM_SECRETS_DIR`. Connections survive a backend restart on every OS.
+- `core/oauth_page.py` (v3.0) — the self-contained HTML served by `GET /auth/oauth/callback` and `GET /connections/google/callback`; it reads tokens from the query or fragment, POSTs them to the matching `/complete` route and tells the user to return to the app. The frontend then polls `GET /auth/oauth/status` / `GET /connections/google/status`.
 - `exam_cluster.py` (Feature 3) — pure-function exam-window detector. `detect_exam_clusters()` + `is_exam_like(title)`. Folds into `_exam_cluster_warnings` consumed by `/schedule/analyze`.
 - `crypto/vault.py` (v3.0 Stage 2) — pure KEK/DEK primitives: scrypt-derived KEK (`n=2^17, r=8, p=1`) wraps a random DEK; per-record AES-256-GCM. No DB/transport coupling.
 - `cloudsync/session.py` (v3.0 Stage 2) — in-memory Cognito session + vault keys singleton (`current`). **Keys never touch SQLite or disk**; backend restart requires re-unlock (correct E2E behavior). Holds the deployed API/pool coordinates (env-overridable).
@@ -660,13 +679,40 @@ Distinct from `/sync/*` (v2.2 provider sync) and `/auth/*` (Supabase identity �
 | POST | `/availability/{token}/respond-amendment` | Sender accepts/declines/counters |
 | GET | `/availability/{token}/view` | Serves `availability_receiver.html` to recipient |
 
+### v3.0 additions (cross-platform + feature fixes)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/auth/oauth/callback` | HTML page that completes Supabase OAuth (reads query/fragment, POSTs to `/auth/oauth/complete`) |
+| GET | `/auth/oauth/status` | `{completed_at, provider, email}` — the frontend polls this after opening the browser |
+| GET | `/connections/google/callback` | Same pattern for Google Calendar (→ `POST /connections/google/complete`) |
+| GET | `/connections/google/status` | `{completed_at, connection_id, email}` |
+| GET | `/connections/{id}/subscriptions` | Subscribed `ConnectionCalendar` rows (alias: `/connections/{id}/calendars?subscribed=true`) |
+| PATCH | `/connections/{id}/calendars/{cc_id}` | Now also accepts `enabled` (runner skips disabled pairs) |
+| GET | `/admin/backup` | `FileResponse` snapshot download (`loom-backup.sqlite3`) |
+| POST | `/admin/restore` | Multipart upload, field `file`; Windows-safe replace with retries, `409 db_locked` if held |
+| PATCH | `/pair/peers/{id}` | `{host, port}` — LAN peer address; `/sync/now/{id}` pulls **and** pushes to `http://host:port` |
+| POST | `/sync/review/bulk` | `approve` implemented → `{resolved, skipped, event_ids}` |
+| POST | `/events/{id}/restore` | Clears the `deleted_at` tombstone set by a soft voice `cancel_event` (`GET /events/?include_deleted=true` shows them) |
+| GET | `/journal/{id}/audio` | Streams a saved recording (path confined to the audio dir) |
+| POST | `/journal/transcribe` | Whisper-only transcription (`audio`/`file` field) → `{text, duration_seconds}`; no intents |
+| PUT | `/journal/{id}` | Edit transcript / mood / event_id (`exclude_unset`; explicit null clears) |
+| PATCH | `/inbox/{id}` | `{text?, archived?}`; `GET /inbox?include_archived=true` lists archived items |
+| PUT | `/templates/{id}`, `/task-templates/{id}` | Edit event / task templates |
+| PUT | `/assignments/{id}` | Now `exclude_unset` so score / max_score / category can be cleared |
+
 ## Frontend Architecture
 
 **Source root** is `frontend-ui/src/src/` (double `src/` — the outer one is the Tauri project root).
 
+**Design system (v3.0)** — read [frontend-ui/DESIGN.md](frontend-ui/DESIGN.md) before touching any `.tsx`/`.module.css`. It is the contract: semantic tokens only (`styles/tokens.css`; dark default, `body.light-mode` and `body.high-contrast` override the same names, so components never branch on theme), the shared primitive kit in `components/ui/` (`Button`, `IconButton`, `Field`/`Input`/`Select`/`Switch`/`Checkbox`, `Card`, `Page`/`PageHeader`/`Section`/`EmptyState`/`StatTile`/`Row`, `Segmented`/`Tabs`/`Badge`/`Avatar`/`ProgressRing`, `Menu`/`Popover`, `Tooltip`/`Skeleton`/`Spinner`), and the imperative `confirm()` / `prompt()` dialogs (`components/ui/dialogStore.ts`, host mounted once in `App.tsx`) that replace every `window.confirm` / `window.prompt`. Global class equivalents (`loom-btn-*`, `loom-field`, `loom-card`, …) live in `styles/primitives.css`. Rules of thumb: no literal colors/sizes/radii/durations in modules, no inline `style` except dynamic values, every icon-only button has a `label`, no emoji in chrome, cross-platform copy (`lib/platform.ts` → `isMac`, `modKey`; `lib/time.ts` → `relativeTime`).
+
+**Layout grammar (v3.0)** — `components/shell/Sidebar.tsx` (labeled groups Plan / Do / Learn, collapses to a rail; state `loom:sidebar:collapsed`) + `components/shared/TopBar.tsx` (calendar routes: date-title button → JumpToDate, Today/chevrons, `Segmented` view switcher; every other route: page title) + page content. Pages with their own left panel (Calendar, Tasks, Focus, Courses, Settings) render `<Page bare>` with a `--panel-w` aside persisted under `loom:panel:<page>`; `B` toggles the sidebar and dispatches `loom-panel-toggle` for the page panel. Editors open as right-side sheets (`<ModalShell variant="sheet">`), not centered modals.
+
+**Window events (v3.0)** — `loom-panel-toggle` (`detail.page?`), `loom-inbox-changed` (refresh the sidebar badge), `loom-open-inbox` (cancelable; App claims it and opens the capture panel), `loom-export-ics` (`detail.timelineId?`), `loom-focus-changed`, `loom-theme-changed`, plus the calendar ones (`loom-jump-date`, `loom-delete-selected`, `loom-snooze-selected`, `loom-event-nav`, `loom-event-edit`). Focus/Tasks localStorage: `loom:tasks:groupBy`, `loom:tasks:view`, `loom:focus:activeTaskId`, `loom:focus:pinned`, `loom:focus:doneAt`, `loom:focus:sessions`, `loom:focus:pomodoro`.
+
 **Visibility-aware polling (v2.4):** Polling intervals (`setInterval` callbacks that call `setState`) must early-return when `document.hidden`. Use `useIsVisibleRef()` from [hooks/usePageVisibility.ts](frontend-ui/src/src/hooks/usePageVisibility.ts). Currently applied at TodayLineFreshness (30s freshness label), PomodoroPanel (1s wall-clock display), CalendarPage (30s sync-label refresh). **Do not gate active timers** (Pomodoro countdown, recording auto-stop) — those must keep advancing in the background. SyncContext's `onFocus` handler is debounced + in-flight-guarded for the same reason: rapid tab-out/tab-in flicker used to stack pending `runAllSync` calls.
 
-**Pages** — `CalendarPage`, `TaskBoardPage`, `FocusPage`, `InboxPage`, `CoursesPage`, `JournalPage`, `SettingsPage`. v2.2 adds: `SignInPage`, `OnboardingPage`, `AccountSettingsPage`, `ConnectionsSettingsPage`, `ConnectionDetailPage`, `SyncReviewPage`. Each shell page exports a sidebar content component (e.g. `JournalSidebarContent`) that `App.tsx` mounts in `ContextSidebar`.
+**Pages** — `HomePage`, `CalendarPage`, `TaskBoardPage`, `FocusPage`, `InboxPage`, `CoursesPage`, `JournalPage`, `SettingsPage` (+ `AccountSettingsPage`, `ConnectionsSettingsPage`, `ConnectionDetailPage` under `/settings/*`, all wrapped by `components/settings/SettingsLayout` with its own grouped nav), `SyncReviewPage`, and the full-bleed `SignInPage` / `OnboardingPage`. Pages own their left panels; the shell no longer mounts a `ContextSidebar` for them (`ContextSidebar` is still the shared collapsible panel component pages use internally).
 
 **v2.2 routing layout:** `<App/>` mounts an outer `<Routes>` with two full-bleed routes (`/auth/sign-in`, `/onboarding`) that bypass `<Shell/>` entirely (no app drawer / no top bar). Everything else routes through `<Shell/>`. Inside Shell:
 - `/calendar/sync-review` → `<SyncReviewPage/>` — sub-route of Calendar (drawer + sidebar still visible).
@@ -701,19 +747,19 @@ For multipart or binary responses (backup export, journal audio), use raw `fetch
 1. Add its name to the `ModalName` union in `ModalContext.tsx`
 2. Add an opener function to `ModalContextValue` and implement it in the provider
 3. Register it in `ModalRoot.tsx`
-4. Wrap the component in `<ModalShell>` and `<ModalFooter>` from `./ModalShell`
+4. Wrap the component in `<ModalShell>` and `<ModalFooter>` from `./ModalShell`. `ModalShell` takes `variant='dialog'|'sheet'` and `size='sm'|'md'|'lg'|'xl'` (400/520/680/880); sheets slide in from the right at `--sheet-w` and keep the same focus trap, escape stack, invoker restore and discard bar. Every modal (including the connections ones) renders through it — there is no second shell.
 
-Current modal names: `event-editor`, `availability`, `availability-response`, `ics-import`, `syllabus`, `settings`, `timeline-editor`, `template-editor`, `weekly-review`, `study-block`, `time-block-template`, `autopilot-review`, `sync-merge` (v2.2), `provider-picker` (v2.2), `caldav-credentials` (v2.2), `subscribe-drawer` (v2.2), `missed-events` (Feature 7).
+Current modal names: `event-editor` (sheet), `timeline-editor` (sheet), `subscribe-drawer` (sheet), `template-manager` (v3.0 — apply/delete saved event templates), `availability`, `availability-response`, `ics-import`, `syllabus`, `weekly-review`, `study-block`, `time-block-template`, `autopilot-review`, `sync-merge`, `provider-picker`, `caldav-credentials`, `missed-events`.
 
-**Notification system** — non-React pub/sub in `store/notifications.tsx`. Call `addNotification({ type, title, message, autoRemoveMs?, collapseKey? })` from anywhere — no hook needed. Types: `info` | `success` | `warning` | `error` | `progress`. Actionable notifications accept `actionLabel` + `actionFn`. v2.2: pass `collapseKey` (e.g. the connection's display name) to coalesce noisy sources — three or more sharing a key collapse into a single summary row.
+**Notification system** — non-React pub/sub in `store/notifications.tsx`. Call `addNotification({ type, title, message, autoRemoveMs?, collapseKey? })` from anywhere — no hook needed. Types: `info` | `success` | `warning` | `error` | `progress`. Actionable notifications accept `actionLabel` + `actionFn`. Pass `collapseKey` (e.g. the connection's display name) to coalesce noisy sources — three or more sharing a key collapse into a single summary row. **v3.0 toasts:** `components/shell/Toaster.tsx` renders transient notifications bottom-right (rule in `isToast()`: has `autoRemoveMs`, has an undo/action, or is `success`/`error`); hover pauses the timer; the bell panel (`NotifPanel`, a `Popover` under the bell) keeps history. Ambient notifications still auto-remove.
 
 **Undo system** — `useUndo().push({ label, undo, redo })` where both functions are `async () => void`. Trim any existing redoable future entries when pushing. Wired to Cmd+Z / Shift+Z globally.
 
-**App destinations** — the `Destination` type is exported from `AppDrawer.tsx` (not defined locally in `App.tsx`). Current destinations: `calendar`, `tasks`, `focus`, `inbox`, `courses`, `journal`, `settings`. v2.2 added several **sub-routes** (Sync Review under Calendar; Account / Connections / Connection Detail under Settings) — these don't change the drawer geometry; the path-root lookup keeps the destination context unchanged.
+**App destinations** — the `Destination` type is exported from `components/shell/Sidebar.tsx` (re-exported by `components/shared/index.ts`; `AppDrawer` is gone). Current destinations: `home`, `calendar`, `tasks`, `focus`, `inbox`, `courses`, `journal`, `settings`. Sub-routes (Sync Review under Calendar; Account / Connections / Connection Detail under Settings) don't change the sidebar geometry; the path-root lookup keeps the destination context unchanged, and `TopBar` has a title for every destination plus `sync-review`.
 
 **Voice intent flow** — `App.tsx:handleMic()` records via `MediaRecorder`, calls `transcribeAudio()`, then iterates `execution_results`. Non-create intents (`move_event`, `cancel_event`, `resize_event`) that return `status: "pending_confirm"` trigger actionable notification toasts. Confirmed intents call `applyVoiceIntent()` then reload the calendar via `setReloadKey`.
 
-**Semantic search** — toggled by `semanticEnabled` state in `App.tsx`. When on, `TopBar`'s search bar routes queries to `/search/semantic` and results appear as notifications. The toggle icon is rendered next to the search bar.
+**Semantic search** — toggled by `semanticEnabled` state in `App.tsx` (the sparkles `IconButton` next to the search field). When on, `TopBar`'s search routes queries to `/search/semantic`; results render in `components/topbar/SearchDropdown.tsx` under the input with similarity percentages.
 
 **DragShader** — `components/calendar/DragShader.tsx` injects a `<style>` tag that tints `.fc-event-mirror` and `.fc-highlight` based on whether the dragged slot overlaps existing events (red = conflict, green = free). v2.2 adds a second mode keyed off `selectRange` for drag-to-create: overlapping selections render with a 2px `--warning` left edge.
 
@@ -751,10 +797,12 @@ Current modal names: `event-editor`, `availability`, `availability-response`, `i
 
 **Scroll-wheel navigation** — `CalendarPage.tsx`: Ctrl/Cmd+scroll zooms granularity; plain scroll on `dayGridMonth`/`listWeek` navigates periods. Time-grid views let native scrolling pass through.
 
-**Pomodoro ↔ Tray** — `FocusPage/PomodoroPanel.tsx` emits a Tauri event `pomodoro-state-change` via `window.__TAURI_INTERNALS__.emit` on phase transitions; the Rust tray listener updates the menu item label.
+**Pomodoro ↔ Tray** — `components/focus/PomodoroPanel.tsx` emits a Tauri event `pomodoro-state-change` on phase transitions via a dynamic `import('@tauri-apps/api/event')` wrapped in try/catch (so the browser preview keeps working); the Rust tray listener updates the menu item label. Session state lives in `components/focus/focusStore.ts` (localStorage ledger that also feeds the Home "Focus this week" tile).
 
 **Tauri commands (v2.2)** — `src-tauri/src/lib.rs` registers three new commands via the `keyring` crate:
-- `keychain_set(slot, value)` / `keychain_get(slot)` / `keychain_delete(slot)` — all scoped to service `com.loomassist` so iCloud / Google tokens live alongside other LoomAssist secrets and survive backend restarts (the `services/sync/keychain_bridge.py` shell-out fallback uses the same service name).
+- `keychain_set(slot, value)` / `keychain_get(slot)` / `keychain_delete(slot)` — all scoped to service `com.loomassist` so iCloud / Google tokens live alongside other LoomAssist secrets and survive backend restarts. The `keyring` crate is built with the `windows-native`, `apple-native` and `sync-secret-service` features (v3.0) so it is a real store on every OS, and `services/sync/keychain_bridge.py` reads the same slots through the Python `keyring` package. Other v3.0 Tauri changes: `speak_briefing` uses PowerShell SAPI on Windows / `say` on macOS / `spd-say` or `espeak` on Linux; panic logs go to Tauri's `app_log_dir()`; the tray parses naive event times as local; `productName` / window title are "LoomAssist" (1280×820, min 960×640).
+
+**Timestamps are naive local ISO.** Every `start_time` / `end_time` written by the frontend is `YYYY-MM-DDTHH:mm:ss` in the machine's local zone (no `Z`, no offset) — the same shape as the seed data, ICS import and the tray/iOS clients. `services/scheduling/conflicts.py:parse_local()` tolerates offset-aware input by converting it to local naive; new comparisons should go through it rather than raw `datetime.fromisoformat`.
 
 ## iOS App (v3.0 Stage 3 — read + light edits + voice)
 

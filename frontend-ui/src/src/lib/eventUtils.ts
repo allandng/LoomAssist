@@ -1,6 +1,6 @@
 import type { EventInput } from '@fullcalendar/core';
 import type { Event, Calendar } from '../types';
-import { DEFAULT_TIMELINE_COLOR, tint } from './colors';
+import { DEFAULT_TIMELINE_COLOR } from './colors';
 
 /** Build a CSS color for a FullCalendar event based on its timeline. */
 export function timelineColor(timelines: Calendar[], calendarId: number): string {
@@ -54,12 +54,13 @@ function toDateStr(d: Date): string {
 export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
   const color = timelineColor(timelines, event.calendar_id);
 
+  // The pill (CalendarPage EventPill) owns every color via `--tl`; FC's own
+  // event box stays transparent so no literal hue leaks past the theme tokens.
   const base: Partial<EventInput> = {
     title: event.title,
-    extendedProps: { event },
-    backgroundColor: tint(color, 13),
-    borderColor: color,
-    textColor: color,
+    extendedProps: { event, timelineColor: color },
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
     classNames: ['loom-event'],
   };
 
@@ -71,9 +72,6 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
         id: String(event.id),
         start: event.start_time.split('T')[0],
         allDay: true,
-        backgroundColor: color,
-        textColor: '#fff',
-        borderColor: color,
       }];
     }
     const out: EventInput[] = [{
@@ -90,11 +88,8 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
         id: `${event.id}_prep`,
         start: prepStart.toISOString(),
         end: occStart.toISOString(),
-        backgroundColor: tint(color, 8),
-        borderColor: color,
-        textColor: color,
         classNames: ['loom-event', 'loom-prep-block'],
-        extendedProps: { event, isPrepBlock: true },
+        extendedProps: { event, timelineColor: color, isPrepBlock: true },
         editable: false,
       });
     }
@@ -153,7 +148,7 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
           id: `${event.id}_${dateStr}`,
           start: occStart.toISOString(),
           end: occEnd.toISOString(),
-          extendedProps: { event, instanceDate: dateStr },
+          extendedProps: { event, timelineColor: color, instanceDate: dateStr },
         });
 
         if (event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0 && !event.is_all_day) {
@@ -163,11 +158,8 @@ export function toFCEvents(event: Event, timelines: Calendar[]): EventInput[] {
             id: `${event.id}_${dateStr}_prep`,
             start: prepStart.toISOString(),
             end: occStart.toISOString(),
-            backgroundColor: tint(color, 8),
-            borderColor: color,
-            textColor: color,
             classNames: ['loom-event', 'loom-prep-block'],
-            extendedProps: { event, instanceDate: dateStr, isPrepBlock: true },
+            extendedProps: { event, timelineColor: color, instanceDate: dateStr, isPrepBlock: true },
             editable: false,
           });
         }

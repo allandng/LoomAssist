@@ -1,88 +1,185 @@
-import { useState, useEffect, useCallback } from 'react';
-import { listJournal, deleteJournalEntry } from '../api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import styles from './JournalPage.module.css';
+import {
+  Badge, Button, Card, EmptyState, Icons, Page, PageHeader, Section, Skeleton, Switch, confirm,
+} from '../components/ui';
+import { listJournal, deleteJournalEntry, listEvents } from '../api';
 import type { JournalEntry } from '../types';
-import { JournalRecorder } from '../components/journal/JournalRecorder';
-import { Icon, Icons } from '../components/shared/Icon';
+import { useNotifications } from '../store/notifications';
+import { JournalRecorder, RECORD_BUTTON_ID } from '../components/journal/JournalRecorder';
+import { JournalEntryRow } from '../components/journal/JournalEntryRow';
+import { MoodTimeline } from '../components/journal/MoodTimeline';
+import { dayHeading } from '../components/inbox/timeFormat';
 
-const MOOD_ICON: Record<string, string> = { great: '😊', ok: '😐', rough: '😔' };
+const SAVE_AUDIO_KEY = 'loom_journal_save_audio';
+
+function readSaveAudio(): boolean {
+  try { return localStorage.getItem(SAVE_AUDIO_KEY) === 'true'; } catch { return false; }
+}
 
 export function JournalPage() {
-  const [entries, setEntries]     = useState<JournalEntry[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [saveAudio, setSaveAudio] = useState(
-    () => localStorage.getItem('loom_journal_save_audio') === 'true',
-  );
+  const { addNotification } = useNotifications();
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [saveAudio, setSaveAudio] = useState(readSaveAudio);
+  const [eventTitles, setEventTitles] = useState<Record<number, string>>({});
 
-  const load = useCallback(() => {
-    setLoading(true);
-    listJournal().then(setEntries).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  // State is only set inside promise callbacks so the mount effect never sets
+  // state synchronously (react-hooks/set-state-in-effect).
+  const fetchEntries = useCallback(() =>
+    listJournal()
+      .then(rows => { setEntries(rows); setError(null); })
+      .catch(() => { setError('Could not load journal entries. Is the backend running?'); })
+      .finally(() => { setLoading(false); }),
+  []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
-  function toggleSaveAudio() {
-    setSaveAudio(v => {
-      const next = !v;
-      localStorage.setItem('loom_journal_save_audio', next ? 'true' : 'false');
-      return next;
-    });
+  function retry() { setLoading(true); fetchEntries(); }
+
+  // Resolve linked event titles once, only when some entry points at an event.
+  const needsEvents = useMemo(() => entries.some(e => e.event_id != null), [entries]);
+  useEffect(() => {
+    if (!needsEvents) return;
+    let cancelled = false;
+    listEvents()
+      .then(evs => {
+        if (cancelled) return;
+        const map: Record<number, string> = {};
+        for (const ev of evs) map[ev.id] = ev.title;
+        setEventTitles(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [needsEvents]);
+
+  function toggleSaveAudio(next: boolean) {
+    setSaveAudio(next);
+    try { localStorage.setItem(SAVE_AUDIO_KEY, next ? 'true' : 'false'); } catch { /* storage unavailable */ }
   }
 
-  async function handleDelete(id: number) {
-    await deleteJournalEntry(id);
-    load();
-  }
+  const handleSaved = useCallback((entry: JournalEntry) => {
+    setEntries(prev => [entry, ...prev.filter(e => e.id !== entry.id)]);
+    addNotification({ type: 'success', title: 'Entry saved', message: entry.transcript ? undefined : 'No speech was detected.', autoRemoveMs: 3500 });
+  }, [addNotification]);
+
+  const removeEntry = useCallback(async (entry: JournalEntry, ask: boolean): Promise<boolean> => {
+    if (ask) {
+      const ok = await confirm({
+        title: 'Delete this entry?',
+        description: `The transcript${entry.audio_path ? ' and its audio file' : ''} will be removed. This cannot be undone.`,
+        destructive: true,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return false;
+    }
+    setDeletingId(entry.id);
+    try {
+      await deleteJournalEntry(entry.id);
+      setEntries(prev => prev.filter(e => e.id !== entry.id));
+      return true;
+    } catch {
+      addNotification({ type: 'error', title: 'Could not delete the entry', autoRemoveMs: 5000 });
+      return false;
+    } finally {
+      setDeletingId(null);
+    }
+  }, [addNotification]);
+
+  const handleDiscard = useCallback((entry: JournalEntry) => removeEntry(entry, true), [removeEntry]);
+  const handleDelete = useCallback((entry: JournalEntry) => { removeEntry(entry, true); }, [removeEntry]);
+
+  const groups = useMemo(() => {
+    const sorted = [...entries].sort((a, b) => (b.date.localeCompare(a.date)) || b.created_at.localeCompare(a.created_at));
+    const out: { date: string; rows: JournalEntry[] }[] = [];
+    for (const e of sorted) {
+      const last = out[out.length - 1];
+      if (last && last.date === e.date) last.rows.push(e);
+      else out.push({ date: e.date, rows: [e] });
+    }
+    return out;
+  }, [entries]);
 
   return (
-    <div style={{ maxWidth: 680, margin: '0 auto', padding: '32px 24px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>Voice Journal</h1>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={saveAudio} onChange={toggleSaveAudio} />
-          Save audio files
-        </label>
-      </div>
+    <Page narrow>
+      <PageHeader
+        title="Journal"
+        description="A one-minute reflection a day. Everything stays on this device."
+        actions={<Switch checked={saveAudio} onChange={toggleSaveAudio} label="Save audio files" size="sm" />}
+      />
 
-      <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 24 }}>
-        <JournalRecorder saveAudio={saveAudio} onSaved={entry => { setEntries(prev => [entry, ...prev]); }} />
-      </div>
+      <div className={styles.stack}>
+        <JournalRecorder saveAudio={saveAudio} onSaved={handleSaved} onDiscard={handleDiscard} />
 
-      {loading && <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>Loading…</div>}
-
-      {!loading && entries.length === 0 && (
-        <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', marginTop: 40 }}>
-          No journal entries yet. Record your first reflection above.
-        </div>
-      )}
-
-      {/* Mood timeline */}
-      {entries.length > 0 && (
-        <div style={{ display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap' }}>
-          {entries.slice(0, 14).map(e => (
-            <div key={e.id} title={`${e.date}: ${e.mood ?? 'no mood'}`} style={{ fontSize: 18 }}>
-              {e.mood ? MOOD_ICON[e.mood] : '⬜'}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {entries.map(entry => (
-          <div key={entry.id} style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>{entry.date}</span>
-                {entry.mood && <span style={{ fontSize: 16 }}>{MOOD_ICON[entry.mood]}</span>}
+        {!loading && entries.length > 0 && (
+          <Section title="Mood" description="Last 30 days" small>
+            <Card>
+              <div className={styles.timelineBody}>
+                <MoodTimeline entries={entries} />
               </div>
-              <button onClick={() => handleDelete(entry.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-                <Icon d={Icons.x} size={14} />
-              </button>
+            </Card>
+          </Section>
+        )}
+
+        {loading && (
+          <Section title="Entries" small>
+            <Card flush>
+              <div aria-busy="true">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className={styles.skeletonRow}>
+                    <div className={styles.skeletonMeta}>
+                      <Skeleton width={64} height={17} radius={999} />
+                      <Skeleton width={48} height={11} />
+                    </div>
+                    <Skeleton width="92%" height={13} />
+                    <Skeleton width="70%" height={13} />
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </Section>
+        )}
+
+        {!loading && error && (
+          <Card>
+            <div className={styles.errorRow}>
+              <Badge tone="error" dot>{error}</Badge>
+              <Button size="sm" variant="subtle" onClick={retry}>Retry</Button>
             </div>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-main)', lineHeight: 1.6 }}>{entry.transcript || <em style={{ color: 'var(--text-muted)' }}>No transcript</em>}</p>
-            {entry.audio_path && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-dim)' }}>Audio saved</div>}
-          </div>
+          </Card>
+        )}
+
+        {!loading && !error && entries.length === 0 && (
+          <Card>
+            <EmptyState
+              icon={Icons.journal}
+              title="No entries yet"
+              description="Record your first reflection above, or write one down."
+              action={{ label: 'Record', icon: Icons.mic, onClick: () => document.getElementById(RECORD_BUTTON_ID)?.focus() }}
+            />
+          </Card>
+        )}
+
+        {!loading && groups.map(group => (
+          <Section key={group.date} title={dayHeading(group.date)} small>
+            <Card flush>
+              <ul className={styles.entryList}>
+                {group.rows.map(entry => (
+                  <JournalEntryRow
+                    key={entry.id}
+                    entry={entry}
+                    eventTitle={entry.event_id != null ? eventTitles[entry.event_id] ?? null : null}
+                    onDelete={handleDelete}
+                    deleting={deletingId === entry.id}
+                  />
+                ))}
+              </ul>
+            </Card>
+          </Section>
         ))}
       </div>
-    </div>
+    </Page>
   );
 }

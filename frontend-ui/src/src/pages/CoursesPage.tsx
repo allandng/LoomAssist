@@ -1,220 +1,450 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import styles from './CoursesPage.module.css';
 import {
-  listCourses, createCourse, deleteCourse,
+  Badge, Button, EmptyState, IconButton, Icons, Page, Skeleton, Tabs, TLDot, confirm,
+} from '../components/ui';
+import {
+  listCourses, createCourse, updateCourse, deleteCourse,
   listAssignments, createAssignment, updateAssignment, deleteAssignment,
-  getCourseGrade,
+  getCourseGrade, listCalendars, listEvents,
 } from '../api';
-import type { Course, Assignment, GradeWeight } from '../types';
-import { Icon, Icons } from '../components/shared/Icon';
-import { projectCourseGrade } from '../lib/gradeProjection';
+import type { Assignment, Calendar, Course, Event } from '../types';
+import { useModal } from '../contexts/ModalContext';
+import { useNotifications } from '../store/notifications';
+import { CourseForm, type CoursePayload } from '../components/courses/CourseForm';
+import { AssignmentsTab } from '../components/courses/AssignmentsTab';
+import { GradesTab, type GradeResult } from '../components/courses/GradesTab';
+import { SyllabusTab } from '../components/courses/SyllabusTab';
+import type { AssignmentPayload } from '../components/courses/AssignmentForm';
+import { openAssignmentCount, overdueCount } from '../components/courses/courseUtils';
+
+type Tab = 'assignments' | 'grades' | 'syllabus';
+type Mode = { kind: 'view' } | { kind: 'create' } | { kind: 'edit' };
+
+const PANEL_KEY = 'loom:panel:courses';
+const SELECTED_KEY = 'loom:courses:selected';
+
+function readBool(key: string): boolean {
+  try { return localStorage.getItem(key) === '1'; } catch { return false; }
+}
+function readNumber(key: string): number | null {
+  try { const v = localStorage.getItem(key); return v ? Number(v) : null; } catch { return null; }
+}
 
 export function CoursesPage() {
-  const [courses, setCourses]           = useState<Course[]>([]);
-  const [selectedId, setSelectedId]     = useState<number | null>(null);
-  const [assignments, setAssignments]   = useState<Assignment[]>([]);
-  const [grade, setGrade]               = useState<{ grade: number | null; breakdown: Record<string, number | null> } | null>(null);
-  const [adding, setAdding]             = useState(false);
-  const [newName, setNewName]           = useState('');
-  const [newCode, setNewCode]           = useState('');
-  const [assumedPct, setAssumedPct]     = useState(80);
+  const { openSyllabus, modal } = useModal();
+  const { addNotification } = useNotifications();
 
-  const loadCourses = useCallback(() => { listCourses().then(setCourses).catch(() => {}); }, []);
-  useEffect(() => { loadCourses(); }, [loadCourses]);
+  const [courses, setCourses] = useState<Course[] | null>(null);
+  const [coursesError, setCoursesError] = useState<string | null>(null);
+  const [assignments, setAssignments] = useState<Assignment[] | null>(null);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+  const [timelines, setTimelines] = useState<Calendar[]>([]);
+  const [events, setEvents] = useState<Event[] | null>(null);
+  const [eventsError, setEventsError] = useState<string | null>(null);
 
-  const selected = courses.find(c => c.id === selectedId) ?? null;
+  // The user's preferred course; the effective selection is derived below so
+  // it stays valid without an effect that writes state.
+  const [selectedPref, setSelectedPref] = useState<number | null>(readNumber(SELECTED_KEY));
+  const [tab, setTab] = useState<Tab>('assignments');
+  const [mode, setMode] = useState<Mode>({ kind: 'view' });
+  const [collapsed, setCollapsed] = useState(() => readBool(PANEL_KEY));
+  const [saving, setSaving] = useState(false);
 
-  async function loadCourseDetail(id: number) {
-    const [asgns, g] = await Promise.all([listAssignments({ course_id: id }), getCourseGrade(id)]);
-    setAssignments(asgns);
-    setGrade(g);
+  // Grade for exactly one course; "loading" = no result for the selected one yet.
+  const [gradeState, setGradeState] = useState<{ courseId: number; grade: GradeResult | null; error: string | null } | null>(null);
+  const [assumedPct, setAssumedPct] = useState(80);
+
+  /* ── Loading (state is set only inside promise callbacks) ─────────────── */
+  const loadCourses = useCallback(() =>
+    listCourses()
+      .then(rows => { setCourses(rows); setCoursesError(null); })
+      .catch(() => { setCourses(prev => prev ?? []); setCoursesError('Could not load courses. Is the backend running?'); }),
+  []);
+
+  const loadAssignments = useCallback(() =>
+    listAssignments()
+      .then(rows => { setAssignments(rows); setAssignmentsError(null); })
+      .catch(() => { setAssignments(prev => prev ?? []); setAssignmentsError('Could not load assignments.'); }),
+  []);
+
+  const loadEvents = useCallback(() =>
+    listEvents()
+      .then(rows => { setEvents(rows); setEventsError(null); })
+      .catch(() => { setEvents(prev => prev ?? []); setEventsError('Could not load events.'); }),
+  []);
+
+  const fetchGrade = useCallback((courseId: number) =>
+    getCourseGrade(courseId)
+      .then(g => { setGradeState({ courseId, grade: g, error: null }); })
+      .catch(() => { setGradeState({ courseId, grade: null, error: 'Could not compute the grade.' }); }),
+  []);
+
+  useEffect(() => {
+    loadCourses();
+    loadAssignments();
+    listCalendars().then(setTimelines).catch(() => {});
+  }, [loadCourses, loadAssignments]);
+
+  /* ── Derived ─────────────────────────────────────────────────────────── */
+  const selectedId = useMemo<number | null>(() => {
+    if (!courses) return selectedPref;
+    if (selectedPref != null && courses.some(c => c.id === selectedPref)) return selectedPref;
+    return courses[0]?.id ?? null;
+  }, [courses, selectedPref]);
+
+  const selected = useMemo(() => courses?.find(c => c.id === selectedId) ?? null, [courses, selectedId]);
+  const grade = gradeState && gradeState.courseId === selectedId ? gradeState.grade : null;
+  const gradeError = gradeState && gradeState.courseId === selectedId ? gradeState.error : null;
+  const gradeLoading = selectedId != null && (gradeState === null || gradeState.courseId !== selectedId);
+
+  // Lazy: events are only needed by the Syllabus tab.
+  useEffect(() => {
+    if (tab === 'syllabus' && events === null && !eventsError) loadEvents();
+  }, [tab, events, eventsError, loadEvents]);
+
+  useEffect(() => {
+    try {
+      if (selectedId == null) localStorage.removeItem(SELECTED_KEY);
+      else localStorage.setItem(SELECTED_KEY, String(selectedId));
+    } catch { /* storage unavailable */ }
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (selectedId != null) fetchGrade(selectedId);
+  }, [selectedId, fetchGrade]);
+
+  // The syllabus scanner is a global modal; refresh when it closes.
+  const prevModal = useRef(modal.name);
+  useEffect(() => {
+    if (prevModal.current === 'syllabus' && modal.name !== 'syllabus') {
+      loadCourses();
+      loadAssignments();
+      loadEvents();
+      if (selectedId != null) fetchGrade(selectedId);
+    }
+    prevModal.current = modal.name;
+  }, [modal.name, loadCourses, loadAssignments, loadEvents, fetchGrade, selectedId]);
+  const courseAssignments = useMemo(
+    () => (assignments ?? []).filter(a => a.course_id === selectedId),
+    [assignments, selectedId],
+  );
+
+  /* ── Actions ─────────────────────────────────────────────────────────── */
+  function toggleCollapsed() {
+    setCollapsed(v => {
+      const next = !v;
+      try { localStorage.setItem(PANEL_KEY, next ? '1' : '0'); } catch { /* storage unavailable */ }
+      return next;
+    });
   }
 
-  async function handleSelectCourse(id: number) {
-    setSelectedId(id);
+  function selectCourse(id: number) {
+    setSelectedPref(id);
+    setMode({ kind: 'view' });
     setAssumedPct(80);
-    await loadCourseDetail(id);
   }
 
-  async function handleAddCourse() {
-    if (!newName.trim()) return;
-    await createCourse({ name: newName.trim(), code: newCode.trim() || null, instructor: null, syllabus_path: null, timeline_id: null, grade_weights: '[]', color: '#6366f1' });
-    setNewName(''); setNewCode(''); setAdding(false);
-    loadCourses();
+  async function handleCreateCourse(payload: CoursePayload) {
+    setSaving(true);
+    try {
+      const created = await createCourse(payload);
+      await loadCourses();
+      setSelectedPref(created.id);
+      setMode({ kind: 'view' });
+      setTab('assignments');
+      addNotification({ type: 'success', title: 'Course created', message: created.name, autoRemoveMs: 3500 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not create the course', autoRemoveMs: 6000 });
+    } finally {
+      setSaving(false);
+    }
   }
 
-  async function handleDeleteCourse(id: number) {
-    await deleteCourse(id);
-    if (selectedId === id) { setSelectedId(null); setAssignments([]); setGrade(null); }
-    loadCourses();
+  async function handleUpdateCourse(payload: CoursePayload) {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      await updateCourse(selected.id, payload);
+      await loadCourses();
+      await fetchGrade(selected.id);
+      setMode({ kind: 'view' });
+      addNotification({ type: 'success', title: 'Course updated', autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not save the course', autoRemoveMs: 6000 });
+    } finally {
+      setSaving(false);
+    }
   }
 
-  async function handleScoreChange(a: Assignment, score: string) {
-    await updateAssignment(a.id, { score: score === '' ? null : Number(score) });
-    if (selectedId) loadCourseDetail(selectedId);
+  async function handleDeleteCourse() {
+    if (!selected) return;
+    const ok = await confirm({
+      title: `Delete "${selected.name}"?`,
+      description: 'Its assignments and grades will no longer be shown. Events on the linked timeline are kept.',
+      destructive: true,
+      confirmLabel: 'Delete course',
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await deleteCourse(selected.id);
+      setMode({ kind: 'view' });
+      await loadCourses();
+      addNotification({ type: 'success', title: 'Course deleted', message: selected.name, autoRemoveMs: 3500 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not delete the course', autoRemoveMs: 6000 });
+    } finally {
+      setSaving(false);
+    }
   }
 
-  async function handleDeleteAssignment(id: number) {
-    await deleteAssignment(id);
-    if (selectedId) loadCourseDetail(selectedId);
+  async function refreshAfterAssignmentChange() {
+    await loadAssignments();
+    if (selectedId != null) await fetchGrade(selectedId);
   }
 
-  async function handleAddAssignment(courseId: number) {
-    const title    = window.prompt('Assignment title:');
-    if (!title?.trim()) return;
-    const due_date = window.prompt('Due date (YYYY-MM-DD):') ?? '';
-    await createAssignment({ course_id: courseId, title: title.trim(), due_date, weight_category: null, score: null, max_score: null, event_id: null });
-    loadCourseDetail(courseId);
+  async function handleCreateAssignment(payload: AssignmentPayload) {
+    if (!selected) return;
+    try {
+      await createAssignment({ course_id: selected.id, ...payload, event_id: null });
+      await refreshAfterAssignmentChange();
+      addNotification({ type: 'success', title: 'Assignment added', message: payload.title, autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not add the assignment', autoRemoveMs: 6000 });
+      throw new Error('create failed');
+    }
   }
+
+  async function handleUpdateAssignment(a: Assignment, payload: AssignmentPayload) {
+    try {
+      await updateAssignment(a.id, payload);
+      await refreshAfterAssignmentChange();
+      addNotification({ type: 'success', title: 'Assignment updated', autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not save the assignment', autoRemoveMs: 6000 });
+      throw new Error('update failed');
+    }
+  }
+
+  async function handleDeleteAssignment(a: Assignment) {
+    try {
+      await deleteAssignment(a.id);
+      await refreshAfterAssignmentChange();
+      addNotification({ type: 'success', title: 'Assignment deleted', message: a.title, autoRemoveMs: 3000 });
+    } catch {
+      addNotification({ type: 'error', title: 'Could not delete the assignment', autoRemoveMs: 6000 });
+    }
+  }
+
+  /* ── Render ──────────────────────────────────────────────────────────── */
+  const loadingCourses = courses === null;
+  const list = courses ?? [];
 
   return (
-    <div style={{ display: 'flex', height: '100%', background: 'var(--bg-main)' }}>
-      {/* Course list */}
-      <div style={{ width: 240, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-        <div style={{ padding: '16px 16px 8px', fontWeight: 700, fontSize: 14, color: 'var(--text-main)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          Courses
-          <button onClick={() => setAdding(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)' }}>
-            <Icon d={Icons.plus} size={16} />
-          </button>
+    <Page bare className={styles.page}>
+      <aside className={[styles.panel, collapsed ? styles.panelCollapsed : ''].join(' ')} aria-label="Courses">
+        <div className={styles.panelHead}>
+          {!collapsed && (
+            <div className={styles.panelTitleRow}>
+              <h2 className={styles.panelTitle}>Courses</h2>
+              {list.length > 0 && <Badge size="sm" tone="neutral">{list.length}</Badge>}
+            </div>
+          )}
+          <div className={styles.panelActions}>
+            {!collapsed && (
+              <IconButton icon={Icons.plus} label="Add course" size="sm" onClick={() => setMode({ kind: 'create' })} active={mode.kind === 'create'} />
+            )}
+            <IconButton
+              icon={collapsed ? Icons.chevronsRight : Icons.chevronsLeft}
+              label={collapsed ? 'Expand course list' : 'Collapse course list'}
+              size="sm"
+              onClick={toggleCollapsed}
+              aria-expanded={!collapsed}
+            />
+          </div>
         </div>
 
-        {adding && (
-          <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <input className="loom-field" placeholder="Course name" value={newName} onChange={e => setNewName(e.target.value)} style={{ fontSize: 12 }} autoFocus />
-            <input className="loom-field" placeholder="Code (e.g. CS107)" value={newCode} onChange={e => setNewCode(e.target.value)} style={{ fontSize: 12 }} />
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className="loom-btn-primary" style={{ fontSize: 11, flex: 1 }} onClick={handleAddCourse}>Add</button>
-              <button className="loom-btn-ghost" style={{ fontSize: 11 }} onClick={() => setAdding(false)}>✕</button>
-            </div>
-          </div>
-        )}
-
-        {courses.map(c => (
-          <div
-            key={c.id}
-            onClick={() => handleSelectCourse(c.id)}
-            style={{
-              padding: '10px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: c.id === selectedId ? 'var(--accent-soft)' : 'transparent',
-              borderLeft: c.id === selectedId ? '3px solid var(--accent)' : '3px solid transparent',
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-main)' }}>{c.name}</div>
-              {c.code && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{c.code}</div>}
-            </div>
-            <button onClick={e => { e.stopPropagation(); handleDeleteCourse(c.id); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-              <Icon d={Icons.x} size={12} />
-            </button>
-          </div>
-        ))}
-
-        {courses.length === 0 && !adding && (
-          <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>No courses yet</div>
-        )}
-      </div>
-
-      {/* Detail */}
-      {selected ? (
-        <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 20, color: 'var(--text-main)' }}>
-            {selected.name}{selected.code ? ` — ${selected.code}` : ''}
-          </h2>
-          {selected.instructor && <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>Instructor: {selected.instructor}</div>}
-
-          {/* Grade summary */}
-          {grade && (() => {
-            const weights: GradeWeight[] = (() => { try { return JSON.parse(selected.grade_weights); } catch { return []; } })();
-            const projection = projectCourseGrade(assignments, weights, assumedPct);
-            return (
-              <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)', marginBottom: 8 }}>
-                  Current Grade: <span style={{ color: grade.grade !== null && grade.grade >= 70 ? 'var(--success)' : 'var(--error)' }}>{grade.grade !== null ? `${grade.grade}%` : 'N/A'}</span>
+        <div className={styles.panelBody}>
+          {loadingCourses && (
+            <div aria-busy="true" className={styles.panelSkeletons}>
+              {[0, 1, 2].map(i => (
+                <div key={i} className={styles.panelSkeletonRow}>
+                  <Skeleton width={8} height={8} radius={4} />
+                  {!collapsed && <Skeleton width="70%" height={13} />}
                 </div>
-                {Object.entries(grade.breakdown).map(([cat, pct]) => (
-                  <div key={cat} style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 }}>
-                    {cat}: {pct !== null ? `${pct}%` : '—'}
-                  </div>
-                ))}
+              ))}
+            </div>
+          )}
 
-                {/* Projection */}
-                <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 10 }}>
-                  {projection.remainingCount > 0 ? (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 150 }}>
-                          If I score {assumedPct}% on remaining
-                        </span>
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          step={1}
-                          value={assumedPct}
-                          onChange={e => setAssumedPct(Number(e.target.value))}
-                          aria-label="Assumed score on remaining work"
-                          style={{ flex: 1, accentColor: 'var(--accent)' }}
-                        />
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-main)' }}>
-                        Projected final:{' '}
-                        <span style={{ color: projection.projected !== null && projection.projected >= 70 ? 'var(--success)' : 'var(--error)' }}>
-                          {projection.projected !== null ? `${projection.projected}%` : 'N/A'}
-                        </span>
-                        <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>
-                          ({projection.remainingCount} remaining)
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                      All assignments scored — projection equals current grade.
-                    </div>
-                  )}
+          {!loadingCourses && coursesError && !collapsed && (
+            <div className={styles.panelError}>
+              <Badge tone="error" dot>{coursesError}</Badge>
+              <Button size="sm" variant="subtle" onClick={loadCourses}>Retry</Button>
+            </div>
+          )}
+
+          {!loadingCourses && !coursesError && list.length === 0 && !collapsed && (
+            <EmptyState
+              compact
+              icon={Icons.graduation}
+              title="No courses yet"
+              description="Add a course or scan a syllabus."
+              action={{ label: 'Add course', icon: Icons.plus, onClick: () => setMode({ kind: 'create' }) }}
+              secondary={{ label: 'Scan syllabus', onClick: openSyllabus }}
+            />
+          )}
+
+          {list.length > 0 && (
+            <ul className={styles.courseList} role="list">
+              {list.map(c => {
+                const open = assignments ? openAssignmentCount(assignments, c.id) : 0;
+                const overdue = assignments ? overdueCount(assignments, c.id) : 0;
+                const active = c.id === selectedId && mode.kind !== 'create';
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      className={[styles.courseRow, active ? styles.courseRowActive : ''].join(' ')}
+                      onClick={() => selectCourse(c.id)}
+                      aria-current={active ? 'true' : undefined}
+                      title={collapsed ? c.name : undefined}
+                    >
+                      <TLDot color={c.color} size={collapsed ? 12 : 8} />
+                      {!collapsed && (
+                        <>
+                          <span className={styles.courseText}>
+                            <span className={styles.courseName}>{c.name}</span>
+                            {c.code && <span className={styles.courseCode}>{c.code}</span>}
+                          </span>
+                          {overdue > 0 ? (
+                            <Badge size="sm" tone="error">{overdue} overdue</Badge>
+                          ) : open > 0 ? (
+                            <Badge size="sm" tone="neutral">{open} due</Badge>
+                          ) : null}
+                        </>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </aside>
+
+      <main className={styles.detail}>
+        <div className={styles.detailInner}>
+          {mode.kind === 'create' ? (
+            <CourseForm
+              key="create"
+              timelines={timelines}
+              submitting={saving}
+              onSubmit={handleCreateCourse}
+              onCancel={() => setMode({ kind: 'view' })}
+            />
+          ) : loadingCourses ? (
+            <div className={styles.detailSkeleton} aria-busy="true">
+              <div className={styles.detailSkeletonHead}>
+                <Skeleton width={14} height={14} radius={7} />
+                <Skeleton width={220} height={24} />
+              </div>
+              <Skeleton width={160} height={13} />
+              <Skeleton width="100%" height={36} />
+              <Skeleton width="100%" height={160} radius={12} />
+            </div>
+          ) : !selected ? (
+            <EmptyState
+              icon={Icons.graduation}
+              title={list.length === 0 ? 'No courses yet' : 'Pick a course'}
+              description={list.length === 0
+                ? 'Add a course by hand, or scan a syllabus to set one up with its due dates.'
+                : 'Choose a course on the left to see its assignments, grades and syllabus.'}
+              action={{ label: 'Add course', icon: Icons.plus, onClick: () => setMode({ kind: 'create' }) }}
+              secondary={{ label: 'Scan syllabus', onClick: openSyllabus }}
+            />
+          ) : mode.kind === 'edit' ? (
+            <CourseForm
+              key={`edit-${selected.id}`}
+              initial={selected}
+              timelines={timelines}
+              submitting={saving}
+              onSubmit={handleUpdateCourse}
+              onCancel={() => setMode({ kind: 'view' })}
+              onDelete={handleDeleteCourse}
+            />
+          ) : (
+            <>
+              <header className={styles.detailHead}>
+                <div className={styles.detailTitleBlock}>
+                  <div className={styles.detailTitleRow}>
+                    <span className={styles.swatch} style={{ background: selected.color }} aria-hidden="true" />
+                    <h1 className={styles.detailTitle}>{selected.name}</h1>
+                    {selected.code && <Badge tone="accent">{selected.code}</Badge>}
+                  </div>
+                  <p className={styles.detailMeta}>
+                    {selected.instructor ? selected.instructor : <span className={styles.detailMetaDim}>No instructor listed</span>}
+                  </p>
                 </div>
+                <div className={styles.detailActions}>
+                  <Button variant="ghost" icon={Icons.pencil} onClick={() => setMode({ kind: 'edit' })}>Edit</Button>
+                </div>
+              </header>
 
-                {weights.length > 0 && (
-                  <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
-                    Weights: {weights.map(w => `${w.name} ${w.weight}%`).join(' · ')}
-                  </div>
+              <Tabs<Tab>
+                aria-label="Course sections"
+                value={tab}
+                onChange={setTab}
+                items={[
+                  { value: 'assignments', label: 'Assignments', icon: Icons.tasks, count: courseAssignments.length },
+                  { value: 'grades', label: 'Grades', icon: Icons.chart },
+                  { value: 'syllabus', label: 'Syllabus', icon: Icons.doc },
+                ]}
+              />
+
+              <div className={styles.tabPanel} role="tabpanel">
+                {tab === 'assignments' && (
+                  <AssignmentsTab
+                    course={selected}
+                    assignments={courseAssignments}
+                    loading={assignments === null}
+                    error={assignmentsError}
+                    onReload={loadAssignments}
+                    onCreate={handleCreateAssignment}
+                    onUpdate={handleUpdateAssignment}
+                    onDelete={handleDeleteAssignment}
+                    onScanSyllabus={openSyllabus}
+                  />
+                )}
+                {tab === 'grades' && (
+                  <GradesTab
+                    course={selected}
+                    assignments={courseAssignments}
+                    grade={grade}
+                    loading={gradeLoading || assignments === null}
+                    error={gradeError}
+                    onReload={() => { setGradeState(null); fetchGrade(selected.id); }}
+                    assumedPct={assumedPct}
+                    onAssumedPct={setAssumedPct}
+                    onEditWeights={() => setMode({ kind: 'edit' })}
+                  />
+                )}
+                {tab === 'syllabus' && (
+                  <SyllabusTab
+                    course={selected}
+                    timelines={timelines}
+                    events={events}
+                    eventsError={eventsError}
+                    onReloadEvents={loadEvents}
+                    onScan={openSyllabus}
+                    onEdit={() => setMode({ kind: 'edit' })}
+                  />
                 )}
               </div>
-            );
-          })()}
-
-          {/* Assignments */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>Assignments</span>
-            <button className="loom-btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => handleAddAssignment(selected.id)}>
-              + Add
-            </button>
-          </div>
-          {assignments.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No assignments yet.</div>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {assignments.map(a => (
-              <div key={a.id} style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, color: 'var(--text-main)' }}>{a.title}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Due: {a.due_date}{a.weight_category ? ` · ${a.weight_category}` : ''}</div>
-                </div>
-                <input
-                  type="number" placeholder="Score"
-                  defaultValue={a.score ?? ''}
-                  onBlur={e => handleScoreChange(a, e.target.value)}
-                  style={{ width: 70, fontSize: 12, padding: '2px 6px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-main)' }}
-                />
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>/ {a.max_score ?? '?'}</span>
-                <button onClick={() => handleDeleteAssignment(a.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-                  <Icon d={Icons.x} size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
-      ) : (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
-          Select a course
-        </div>
-      )}
-    </div>
+      </main>
+    </Page>
   );
 }

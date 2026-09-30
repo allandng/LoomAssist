@@ -1,326 +1,228 @@
+/* ── Trigger ─────────────────────────────────────────────────────────────── */
 .trigger {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  height: 28px;
-  border-radius: 7px;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
   background: transparent;
-  border: 1px solid transparent;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
   flex-shrink: 0;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
+.trigger:hover { background: var(--bg-hover); color: var(--text-main); }
+.trigger:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.triggerActive,
+.triggerActive:hover { background: var(--accent-soft); color: var(--accent-text); }
 
-.trigger:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border);
+.dot {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 2px var(--bg-main);
 }
+.dotOk      { background: var(--success); }
+.dotError   { background: var(--error); }
+.dotOff     { background: var(--text-dim); }
+.dotSyncing { background: var(--accent); animation: pulse 1.4s var(--ease-standard) infinite; }
 
-.triggerActive {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.triggerDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  flex-shrink: 0;
-}
-
-.triggerDotPulse {
-  background: var(--accent);
-  animation: triggerPulse 1.4s ease-in-out infinite;
-}
-
-.triggerDotError { background: var(--error); }
-
-@keyframes triggerPulse {
+@keyframes pulse {
   0%, 100% { opacity: 0.4; }
-  50%       { opacity: 1; }
+  50%      { opacity: 1; }
+}
+
+.spin { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dotSyncing, .spin { animation: none; }
 }
 
 .triggerBadge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  background: var(--warning);
-  color: white;
-  font-size: 9.5px;
-  font-weight: 700;
-  border-radius: 999px;
+  top: calc(var(--space-1) * -1);
+  right: calc(var(--space-1) * -1);
+  min-width: var(--space-5);
+  height: var(--space-5);
+  padding: 0 var(--space-1);
   display: grid;
   place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--warning);
+  color: var(--text-on-accent);
+  font-size: var(--text-2xs);
+  font-weight: 700;
   line-height: 1;
 }
 
-.popoverWrap {
-  position: relative;
-}
-
-.popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 380px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  box-shadow: var(--shadow-popover);
-  overflow: hidden;
-  z-index: 50;
+/* ── Popover contents (positioning comes from the Popover primitive) ─────── */
+.popover.popover {
   display: flex;
   flex-direction: column;
-  max-height: 480px;
+  padding: 0;
+  overflow: hidden;
+  max-height: min(480px, calc(100vh - var(--topbar-h) - var(--space-6)));
 }
 
 .header {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .headerTitle {
-  font-size: 13px;
+  margin: 0;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text-main);
 }
 
-.spacer { flex: 1; }
-
-.syncAllBtn {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.syncAllBtn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.empty {
-  padding: 28px 18px;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.emptyAction {
-  margin-top: 14px;
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-weight: 500;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
 .connList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
 .connRow {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
 }
-
 .connRow:last-child { border-bottom: none; }
 
 .connRowMain {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .connKindIcon {
+  display: inline-grid;
+  place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  display: grid;
-  place-items: center;
   flex-shrink: 0;
 }
 
 .connInfo {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .connName {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-main);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-main);
+  min-width: 0;
+}
+.connNameText {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.connEmail {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 2px;
-}
-
-.connRight {
-  text-align: right;
+.connMeta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.connTimestamp {
-  font-size: 10px;
-  font-family: var(--font-mono);
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 0;
+}
+.connEmail {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.connAction {
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  border-radius: 4px;
+.connActions {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
 }
 
-.connAction:hover {
-  background: var(--bg-subtle);
-  color: var(--text-main);
+.connError {
+  padding-left: calc(28px + var(--space-3));
+  font-size: var(--text-xs);
+  color: var(--error);
+  overflow-wrap: anywhere;
 }
 
-/* Status pills */
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  font-size: 10.5px;
-  font-weight: 600;
-  border-radius: 999px;
-  background: var(--bg-subtle);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-}
-
-.pillSuccess  { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); background: color-mix(in srgb, var(--success) 10%, transparent); }
-.pillError    { color: var(--error);   border-color: color-mix(in srgb, var(--error) 40%, transparent);   background: color-mix(in srgb, var(--error) 10%, transparent); }
-.pillSyncing  { color: var(--accent);  border-color: color-mix(in srgb, var(--accent) 40%, transparent);  background: var(--accent-soft); }
-.pillWarning  { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
-
+/* Indeterminate progress while a first sync runs. */
 .progressTrack {
-  height: 2px;
+  height: var(--space-1);
+  margin-left: calc(28px + var(--space-3));
   background: var(--bg-subtle);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   overflow: hidden;
-  margin-top: 4px;
 }
-
 .progressFill {
   height: 100%;
-  background: var(--accent);
   width: 30%;
-  animation: progressShimmer 1.4s ease-in-out infinite;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+  animation: progressShimmer 1.4s var(--ease-standard) infinite;
 }
-
 @keyframes progressShimmer {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
 
-/* WS6 §6 — reduce ≠ remove. The shimmer *means* "syncing"; under reduced-motion
-   the animation is clamped to nothing, so swap the moving bar for a static
-   "Syncing…" label instead of a frozen, meaningless stripe. */
+/* Reduce ≠ remove. The shimmer *means* "syncing"; under reduced-motion swap the
+   moving bar for a static label so the state is still communicated. */
 @media (prefers-reduced-motion: reduce) {
   .progressFill { display: none; }
   .progressTrack {
     height: auto;
+    margin-top: 0;
     background: transparent;
     overflow: visible;
-    margin-top: 2px;
   }
   .progressTrack::before {
     content: 'Syncing…';
     font-size: var(--text-2xs);
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-text);
   }
 }
 
 .footer {
-  padding: 10px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-panel);
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 11.5px;
-}
-
-.footerLink {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 500;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  font-size: 12px;
-}
-
-.footerLink:hover { color: var(--accent-hover); }
-
-.footerSecondary {
-  display: block;
-  padding: 8px 16px 12px;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
-  font-size: 11.5px;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border);
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
+  flex-shrink: 0;
 }
 
-.footerSecondary:hover { color: var(--text-main); }
+.footerNote {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

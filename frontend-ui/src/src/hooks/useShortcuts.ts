@@ -59,6 +59,10 @@ export function useShortcuts(
         if (!s.force && isTyping()) continue;
 
         s.handler(e);
+        // A matched shortcut owns the key: stop the browser's default so a
+        // handler that focuses or opens a text field (N → new event, / →
+        // search) doesn't also type the character into it.
+        e.preventDefault();
         break;
       }
     }

@@ -1,0 +1,112 @@
+.page { display: flex; }
+
+/* ── Left panel ──────────────────────────────────────────────────────────── */
+.panel {
+  width: var(--panel-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  transition: width var(--motion-base) var(--ease-standard);
+}
+.panelCollapsed { width: var(--rail-w); }
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 48px;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.panelCollapsed .panelHead { justify-content: center; padding: var(--space-3); }
+.panelTitleRow { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.panelTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+.panelActions { display: flex; align-items: center; gap: var(--space-1); }
+
+.panelBody { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2) 0; }
+.panelSkeletons { display: flex; flex-direction: column; }
+.panelSkeletonRow { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); }
+.panelCollapsed .panelSkeletonRow { justify-content: center; padding: var(--space-3); }
+.panelError { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-5); }
+
+.courseList { margin: 0; padding: 0 var(--space-2); list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.courseRow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.courseRow:hover { background: var(--bg-hover); }
+.courseRow:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.courseRowActive,
+.courseRowActive:hover { background: var(--accent-soft); }
+.panelCollapsed .courseRow { justify-content: center; padding: var(--space-3); }
+.courseText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.courseName { font-size: var(--text-base); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.courseRowActive .courseName { color: var(--accent-text); }
+.courseCode { font-size: var(--text-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+/* ── Detail ──────────────────────────────────────────────────────────────── */
+.detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--bg-main);
+  container-type: inline-size;
+}
+.detailInner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-7) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.detailHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.detailTitleBlock { min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.detailTitleRow { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.swatch { width: 14px; height: 14px; border-radius: var(--radius-full); flex-shrink: 0; box-shadow: inset 0 0 0 1px var(--border-strong); }
+.detailTitle {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: var(--leading-tight);
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detailMeta { margin: 0; font-size: var(--text-md); color: var(--text-muted); }
+.detailMetaDim { color: var(--text-dim); }
+.detailActions { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
+
+.tabPanel { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.detailSkeleton { display: flex; flex-direction: column; gap: var(--space-4); }
+.detailSkeletonHead { display: flex; align-items: center; gap: var(--space-3); }

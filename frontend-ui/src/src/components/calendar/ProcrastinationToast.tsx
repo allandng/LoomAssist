@@ -1,5 +1,5 @@
 import styles from './WellnessToast.module.css';
-import { Icon, Icons } from '../shared/Icon';
+import { IconButton, Icon, Icons } from '../ui';
 import type { ProcrastinationWarning } from '../../types';
 
 interface ProcrastinationToastProps {
@@ -11,19 +11,13 @@ export function ProcrastinationToast({ warning, onDismiss }: ProcrastinationToas
   const title = warning.course_name || warning.title;
 
   return (
-    <div className={styles.toast}>
-      <span className={styles.icon}>⚠</span>
+    <div className={`${styles.toast} ${styles.warning}`} role="status">
+      <span className={styles.icon} aria-hidden="true"><Icon d={Icons.alarm} size={14} /></span>
       <div className={styles.body}>
         <div className={styles.title}>{title}</div>
         <div className={styles.message}>{warning.message}</div>
       </div>
-      <button
-        className={styles.dismiss}
-        onClick={onDismiss}
-        aria-label="Dismiss procrastination warning"
-      >
-        <Icon d={Icons.x} size={12} />
-      </button>
+      <IconButton size="sm" icon={Icons.x} label="Dismiss procrastination warning" onClick={onDismiss} />
     </div>
   );
 }

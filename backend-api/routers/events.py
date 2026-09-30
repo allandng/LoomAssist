@@ -110,8 +110,14 @@ def create_event(event: models.EventBase, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=list[models.EventRead])
-def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(models.Event).offset(skip).limit(limit).all()
+def read_events(skip: int = 0, limit: int = 100, include_deleted: bool = False, db: Session = Depends(get_db)):
+    """List events. Soft-deleted rows (`deleted_at` tombstones written by the
+    voice cancel intent and by LAN-sync peers) are hidden unless
+    `?include_deleted=true`; POST /events/{id}/restore brings one back."""
+    q = db.query(models.Event)
+    if not include_deleted:
+        q = q.filter(models.Event.deleted_at.is_(None))
+    return q.offset(skip).limit(limit).all()
 
 
 @router.get("/missed", response_model=MissedEventsResponse)
@@ -229,6 +235,28 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
     except Exception:
         pass
     return {"status": "success", "message": "Event deleted"}
+
+
+@router.post("/{event_id}/restore")
+def restore_event(event_id: int, db: Session = Depends(get_db)):
+    """Undo a soft delete (clears the `deleted_at` tombstone set by the voice
+    `cancel_event` intent). Idempotent: restoring a live event is a no-op.
+    Response: {status, restored: bool, event}."""
+    db_event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not db_event:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "not_found", "detail": "Event not found"}}
+        )
+    restored = False
+    if db_event.deleted_at is not None:
+        from datetime import datetime as _dt
+        db_event.deleted_at = None
+        db_event.last_modified = _dt.utcnow().isoformat()
+        db.commit()
+        db.refresh(db_event)
+        restored = True
+    return {"status": "success", "restored": restored, "event": db_event.model_dump()}
 
 
 @router.post("/{event_id}/skip-date")

@@ -1,14 +1,27 @@
 .peek {
   position: fixed;
-  width: 280px;
+  width: var(--panel-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: 14px;
-  z-index: 200;
-  box-shadow: var(--shadow-popover), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
-  /* WS5 #1 — no longer pointer-events:none: hover peek needs to stay alive while
-     the cursor is over it, and the pinned peek is fully interactive. */
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  z-index: var(--z-popover);
+  box-shadow: var(--shadow-popover);
+  /* Hover peek stays alive while the cursor is over it; the pinned peek is
+     fully interactive, so no pointer-events:none here. */
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .peek {
+    animation: peekIn var(--motion-base) var(--ease-decel);
+  }
+}
+
+@keyframes peekIn {
+  from { opacity: 0; transform: translateY(var(--space-1)); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .peek:focus-visible {
@@ -16,36 +29,128 @@
   outline-offset: 2px;
 }
 
-/* Pinned mode leaves room at the top-right for the action row. */
+/* Pinned mode reserves the top-right corner for the action row. */
 .peekPinned {
-  padding-right: 16px;
+  padding-top: var(--space-8);
 }
 
 .actions {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--space-3);
+  right: var(--space-3);
   display: flex;
-  gap: 2px;
+  gap: var(--space-1);
   z-index: 1;
 }
 
-.actionBtn {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+.deleteBtn:hover:not(:disabled) {
+  color: var(--error);
+  background: var(--error-soft);
 }
 
-.actionBtn:hover {
-  background: var(--bg-subtle);
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--leading-snug);
   color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.time {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.timeMono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+.metaList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.metaRow svg {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.desc {
+  font-size: var(--text-sm);
+  color: var(--text-main);
+  line-height: var(--leading-body);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.desc a {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+:global(.loom-mention) {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+}
+
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.checklistHeader {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.checkItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  padding: var(--space-1) 0;
+  color: var(--text-main);
+}
+
+.checkText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkItemDone {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .checkToggle {
@@ -57,102 +162,34 @@
   place-items: center;
   cursor: pointer;
   flex-shrink: 0;
+  border-radius: var(--radius-xs);
 }
 
-.meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-
-.tlName {
-  font-size: 10px;
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
-}
-
-.title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin-bottom: 2px;
-}
-
-.time {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.metaRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.metaRow:last-of-type {
-  margin-bottom: 10px;
-}
-
-.desc {
-  font-size: 11.5px;
-  color: var(--text-main);
-  line-height: 1.5;
-  padding: 8px 10px;
-  background: var(--bg-subtle);
-  border-radius: 6px;
-  margin-bottom: 10px;
-}
-
-.desc a {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
-:global(.loom-mention) {
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: 0 4px;
-  border-radius: 3px;
-}
-
-.checklistHeader {
-  font-size: 10px;
-  color: var(--text-dim);
-  letter-spacing: 0.06em;
-  margin-bottom: 6px;
-}
-
-.checkItem {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11.5px;
-  padding: 3px 0;
-  color: var(--text-main);
-}
-
-.checkItemDone {
-  color: var(--text-muted);
-  text-decoration: line-through;
+.checkToggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .checkBox {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-xs);
   border: 1.5px solid var(--border-strong);
+  background: transparent;
+  color: var(--bg-main);
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+
+.checkBoxDone {
+  background: var(--text-dim);
+  border-color: var(--text-dim);
 }
 
 .checkMore {
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   color: var(--text-dim);
-  padding: 3px 0;
+  padding: var(--space-1) 0;
 }

@@ -1,109 +1,125 @@
-// Phase v3.0: Settings → Connections.
+// Settings → Account → Connections.
 //
-// Per mockup-accounts.jsx: list of connections with status pills + Manage btn.
-// "Add connection" CTA opens the ProviderPicker modal.
-//
-// Per design doc §11 R5 + §10 Q7: privacy reminder at the bottom enumerates
-// the local-first guarantees.
+// One card per provider connection with a human status, last-sync time and the
+// quick actions (Sync now / Pause / Open). "Add connection" opens the provider
+// picker. Sync runs device ↔ provider; disconnecting never touches the provider.
 
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSync } from '../contexts/SyncContext';
 import { useModal } from '../contexts/ModalContext';
-import { Icon, Icons } from '../components/shared/Icon';
-import type { Connection, ConnectionStatus } from '../api';
+import { useNotifications } from '../store/notifications';
+import type { Connection } from '../api';
+import { PageHeader, Card, Badge, Button, EmptyState, Icon, Icons } from '../components/ui';
+import { SettingsLayout } from '../components/settings/SettingsLayout';
+import { ProviderGlyph } from '../components/settings/ProviderGlyph';
+import { providerMeta } from '../components/settings/providers';
+import { statusMeta } from '../components/settings/connectionStatus';
+import { errMessage, relativeTime } from '../components/settings/util';
 import styles from './ConnectionsPages.module.css';
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return 'never synced';
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return 'never synced';
-  const ms = Date.now() - t;
-  if (ms < 60_000)     return 'just now';
-  if (ms < 3_600_000)  return `${Math.round(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-  return `${Math.round(ms / 86_400_000)}d ago`;
-}
-
-function statusInfo(s: ConnectionStatus) {
-  switch (s) {
-    case 'connected':    return { cls: styles.pillSuccess, label: 'Connected' };
-    case 'paused':       return { cls: styles.pill,        label: 'Paused' };
-    case 'auth_expired': return { cls: styles.pillError,   label: 'Reconnect needed' };
-    case 'error':        return { cls: styles.pillError,   label: 'Error' };
-    default:             return { cls: styles.pill,        label: s };
-  }
-}
 
 export function ConnectionsSettingsPage() {
   const navigate = useNavigate();
   const { connections } = useSync();
   const { openProviderPicker } = useModal();
+  const hasAny = connections.length > 0;
 
   return (
-    <div className={styles.page}>
-      <div className={styles.headerRow}>
-        <h2 className={styles.headerTitle}>Connections</h2>
-        <span className={styles.spacer} />
-        <button className="loom-btn-primary" onClick={() => openProviderPicker()}>
-          <Icon d={Icons.plus} size={12} /> Add connection
-        </button>
-      </div>
-      <p className={styles.lede}>
-        Each connection syncs directly between this device and the provider.
-        Disconnecting keeps your local events; the provider is never modified.
-      </p>
+    <SettingsLayout>
+      <PageHeader
+        eyebrow="Account"
+        title="Connections"
+        description="Each connection syncs directly between this device and the provider. Disconnecting keeps your local events."
+        actions={hasAny && <Button variant="primary" icon={Icons.plus} onClick={() => openProviderPicker()}>Add connection</Button>}
+      />
 
-      {connections.length === 0 ? (
-        <div className={styles.empty}>
-          <h3 className={styles.emptyTitle}>No connections yet</h3>
-          <p className={styles.emptyLede}>
-            Connect Google Calendar or iCloud to mirror events into LoomAssist.
-            All sync is direct device ↔ provider — no event data ever traverses
-            a LoomAssist server.
-          </p>
-          <button className="loom-btn-primary" onClick={() => openProviderPicker()}>
-            <Icon d={Icons.plus} size={12} /> Add your first connection
-          </button>
-        </div>
-      ) : (
-        <div className={styles.list}>
-          {connections.map(c => <Row key={c.id} c={c} onClick={() => navigate(`/settings/connections/${c.id}`)} />)}
-        </div>
-      )}
+      <div className={styles.stack}>
+        {!hasAny ? (
+          <Card>
+            <EmptyState
+              icon={Icons.cloud}
+              title="No connections yet"
+              description="Connect Google Calendar, iCloud or any CalDAV server to mirror events into LoomAssist."
+              action={{ label: 'Add connection', icon: Icons.plus, onClick: () => openProviderPicker() }}
+            />
+          </Card>
+        ) : (
+          connections.map(c => (
+            <ConnectionCard key={c.id} conn={c} onOpen={() => navigate(`/settings/connections/${c.id}`)} />
+          ))
+        )}
 
-      <div className={styles.privacyNote}>
-        <Icon d={Icons.user} size={14} stroke="var(--success)" />
-        <span>
-          OAuth tokens and CalDAV passwords are stored in the macOS Keychain,
-          scoped per-connection. Calendar data lives in local SQLite — no event
-          ever leaves this device en route to a LoomAssist server.
-        </span>
+        <div className={styles.note}>
+          <Icon d={Icons.lock} size={14} className={styles.noteIcon} />
+          <span>
+            Sign-in tokens and CalDAV passwords are stored in your system keychain, scoped per connection.
+            Calendar data lives in the local database and never passes through a LoomAssist server.
+          </span>
+        </div>
       </div>
-    </div>
+    </SettingsLayout>
   );
 }
 
-function Row({ c, onClick }: { c: Connection; onClick: () => void }) {
-  const info = statusInfo(c.status);
+function ConnectionCard({ conn, onOpen }: { conn: Connection; onOpen: () => void }) {
+  const { runOne, pause, resume } = useSync();
+  const { addNotification } = useNotifications();
+  const [busy, setBusy] = useState<'sync' | 'pause' | null>(null);
+
+  const provider = providerMeta(conn.kind);
+  const status = statusMeta(conn.status);
+  const paused = conn.status === 'paused';
+  const canSync = conn.status === 'connected' || conn.status === 'error';
+
+  async function handleSync() {
+    setBusy('sync');
+    try {
+      await runOne(conn.id);
+      addNotification({ type: 'info', title: `Syncing ${conn.display_name}`, severity: 'ambient', autoRemoveMs: 4000 });
+    } catch (e) {
+      addNotification({ type: 'error', title: 'Sync failed', message: errMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handlePauseResume() {
+    setBusy('pause');
+    try {
+      if (paused) await resume(conn.id); else await pause(conn.id);
+    } catch (e) {
+      addNotification({ type: 'error', title: paused ? 'Could not resume' : 'Could not pause', message: errMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
-    <button
-      type="button"
-      className={styles.row}
-      style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', width: '100%', textAlign: 'left', cursor: 'pointer' }}
-      onClick={onClick}
-    >
-      <div className={styles.rowKindIcon}>
-        <Icon d={c.kind === 'google' ? Icons.mail : c.kind === 'caldav_icloud' ? Icons.upload : Icons.doc} size={18} />
-      </div>
-      <div className={styles.rowInfo}>
-        <div className={styles.rowName}>
-          {c.display_name}
+    <Card as="article" aria-label={conn.display_name}>
+      <div className={styles.connRow}>
+        <span className={styles.glyph} aria-hidden="true"><ProviderGlyph id={provider.id} size={18} /></span>
+        <div className={styles.connMain}>
+          <div className={styles.connTitleRow}>
+            <span className={styles.connName}>{conn.display_name}</span>
+            <Badge tone={status.tone} dot size="sm" title={conn.last_error ?? undefined}>{status.label}</Badge>
+          </div>
+          <div className={styles.connMeta}>
+            <span>{conn.account_email}</span>
+            <span aria-hidden="true">·</span>
+            <span>{provider.label}</span>
+            <span aria-hidden="true">·</span>
+            <span>Last synced {relativeTime(conn.last_synced_at, 'never')}</span>
+          </div>
+          {conn.last_error && conn.status === 'error' && (
+            <div className={styles.connError} title={conn.last_error}>{conn.last_error}</div>
+          )}
         </div>
-        <div className={styles.rowEmail}>{c.account_email}</div>
-        <div className={styles.rowMeta}>last synced {relativeTime(c.last_synced_at)}</div>
+        <div className={styles.connActions}>
+          <Button size="sm" variant="secondary" icon={Icons.sync} loading={busy === 'sync'} disabled={!canSync || busy !== null} onClick={handleSync}>Sync now</Button>
+          <Button size="sm" variant="ghost" icon={paused ? Icons.play : Icons.pause} loading={busy === 'pause'} disabled={busy !== null} onClick={handlePauseResume}>{paused ? 'Resume' : 'Pause'}</Button>
+          <Button size="sm" variant="ghost" iconRight={Icons.chevronRight} onClick={onOpen}>Open</Button>
+        </div>
       </div>
-      <span className={`${styles.pill} ${info.cls}`}>{info.label}</span>
-      <Icon d={Icons.chevronRight} size={14} stroke="var(--text-muted)" />
-    </button>
+    </Card>
   );
 }

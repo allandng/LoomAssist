@@ -365,3 +365,47 @@ export interface PairStartResult {
   code: string;
   expires: string;
 }
+
+// ─── Backend cross-platform pass (appended; see backend report) ─────────────
+
+/** Peer rows now carry the paired device's network address (nullable until
+ *  learned at pairing time or via mDNS). Superset of `Peer`. */
+export interface PeerWithAddress extends Peer {
+  host: string | null;
+  port: number | null;
+}
+
+/** Response of POST /intent/apply with action "cancel_event" (soft delete). */
+export interface CancelEventResult {
+  status: 'deleted';
+  soft: true;
+  event_id: number;
+  event: Event;
+  restore: { method: 'POST'; path: string };
+}
+
+/** A local<->remote calendar pair (ConnectionCalendar row) as returned by
+ *  GET /connections/{id}/subscriptions and GET /connections/{id}/calendars?subscribed=true.
+ *  Canonical columns mirror backend ConnectionCalendarRead; the alias keys carry the
+ *  same values under the names the Settings UI used earlier. */
+export interface ConnectionCalendar {
+  id: string;
+  connection_id: string;
+  local_calendar_id: number;
+  remote_calendar_id: string;
+  remote_display_name: string;
+  remote_color?: string | null;
+  sync_direction: 'both' | 'pull' | 'push';
+  sync_token: string | null;
+  caldav_ctag: string | null;
+  last_full_sync_at: string | null;
+  created_at: string;
+  enabled?: boolean;
+  // aliases (same values)
+  remote_id?: string;
+  name?: string;
+  color?: string | null;
+  timeline_id?: number;
+  calendar_id?: number;
+  last_synced_at?: string | null;
+}

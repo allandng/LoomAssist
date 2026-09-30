@@ -1,66 +1,109 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import styles from './WeeklyReviewWidget.module.css';
 import { getCachedWeeklyReview, generateWeeklyReview } from '../../api';
-import { lastMonday, renderDescription, relativeTime } from '../../lib/eventUtils';
+import { lastMonday, renderDescription } from '../../lib/eventUtils';
+import { relativeTime } from '../../lib/time';
 import { useNotifications } from '../../store/notifications';
+import { useModal } from '../../contexts/ModalContext';
+import { Card, CardHeader, CardBody, CardFooter, Button, Badge, EmptyState, Skeleton, Icons } from '../ui';
+import { addDays } from '../tasks/taskUtils';
 
 export function WeeklyReviewWidget() {
   const { addNotification } = useNotifications();
+  const { openWeeklyReview } = useModal();
   const [text, setText]               = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
-  const [loading, setLoading]         = useState(false);
-  const [tried, setTried]             = useState(false);
+  const [loading, setLoading]         = useState(true);
+  const [generating, setGenerating]   = useState(false);
+  const [error, setError]             = useState(false);
 
-  const weekStart = lastMonday().toISOString();
+  const weekStart = useMemo(() => lastMonday(), []);
+  const weekStartISO = weekStart.toISOString();
+  const rangeLabel = `${weekStart.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${addDays(weekStart, 6).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
 
   useEffect(() => {
     let alive = true;
-    getCachedWeeklyReview(weekStart)
+    getCachedWeeklyReview(weekStartISO)
       .then(row => {
         if (!alive) return;
         if (row) { setText(row.markdown); setGeneratedAt(row.generated_at); }
-        setTried(true);
+        setLoading(false);
       })
-      .catch(() => { if (alive) setTried(true); });
+      .catch(() => {
+        if (!alive) return;
+        setError(true);
+        setLoading(false);
+      });
     return () => { alive = false; };
-  }, [weekStart]);
+  }, [weekStartISO]);
 
   async function generate() {
-    setLoading(true);
+    setGenerating(true);
     try {
-      const row = await generateWeeklyReview(weekStart);
+      const row = await generateWeeklyReview(weekStartISO);
       setText(row.markdown);
       setGeneratedAt(row.generated_at);
+      setError(false);
     } catch {
       addNotification({ type: 'error', title: 'Review failed', message: 'Is Ollama running?' });
     } finally {
-      setLoading(false);
+      setGenerating(false);
     }
   }
 
   return (
-    <section className={styles.widget}>
-      <h2 className={styles.heading}>Last Week in Review</h2>
-      {text ? (
-        <>
-          <div
-            className={styles.body}
-            dangerouslySetInnerHTML={{ __html: renderDescription(text) }}
-          />
-          {generatedAt && (
-            <div className={styles.meta}>Generated {relativeTime(new Date(generatedAt))}</div>
-          )}
-        </>
-      ) : (
-        <div className={styles.emptyRow}>
-          <p className={styles.empty}>{tried ? 'No review yet for last week.' : 'Loading…'}</p>
-          {tried && (
-            <button className="loom-btn-primary" onClick={generate} disabled={loading}>
-              {loading ? 'Generating…' : 'Generate now'}
-            </button>
-          )}
-        </div>
+    <Card>
+      <CardHeader
+        title="Weekly review"
+        description={`Last week · ${rangeLabel}`}
+        actions={
+          text ? (
+            <Button size="sm" variant="subtle" iconRight={Icons.arrowRight} onClick={() => openWeeklyReview(text, weekStartISO)}>
+              Open
+            </Button>
+          ) : undefined
+        }
+      />
+      <CardBody>
+        {error && (
+          <div className={styles.errorRow} role="alert">
+            <Badge tone="error" icon={Icons.alertCircle}>Couldn't load the review</Badge>
+          </div>
+        )}
+        {loading ? (
+          <div className={styles.skeleton} aria-hidden="true">
+            <Skeleton width="95%" height={12} />
+            <Skeleton width="88%" height={12} />
+            <Skeleton width="70%" height={12} />
+          </div>
+        ) : text ? (
+          <>
+            <div className={styles.excerpt} dangerouslySetInnerHTML={{ __html: renderDescription(text) }} />
+            {generatedAt && <div className={styles.meta}>Generated {relativeTime(generatedAt)}</div>}
+          </>
+        ) : (
+          <>
+            <EmptyState
+              compact
+              icon={Icons.sparkles}
+              title="No review yet"
+              description="Summarize last week's events and tasks with the local model."
+            />
+            <div className={styles.center}>
+              <Button variant="primary" size="sm" icon={Icons.sparkles} loading={generating} onClick={generate}>
+                Generate review
+              </Button>
+            </div>
+          </>
+        )}
+      </CardBody>
+      {text && (
+        <CardFooter>
+          <Button size="sm" variant="ghost" icon={Icons.refresh} loading={generating} onClick={generate}>
+            Regenerate
+          </Button>
+        </CardFooter>
       )}
-    </section>
+    </Card>
   );
 }

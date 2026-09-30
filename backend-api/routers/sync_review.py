@@ -96,17 +96,11 @@ def sync_review_get(item_id: str, db: Session = Depends(get_db)):
     return _review_to_dict(item, conn.display_name)
 
 
-@router.post("/{item_id}/approve")
-def sync_review_approve(item_id: str, db: Session = Depends(get_db)):
-    """User says 'these are different events' — apply the incoming payload as
-    a brand-new local event (not merged into the candidate)."""
-    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
-    if not item or item.resolved_at:
-        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
-    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
-    if not cc:
-        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
-    p = json.loads(item.incoming_payload)
+def _approve_item(db: Session, item: models.SyncReviewItem, cc: models.ConnectionCalendar) -> int:
+    """Shared by the single-item and bulk approve routes: insert the incoming
+    payload as a brand-new local event bound to `cc`, mark the item
+    approved_new, and return the new event id. Does NOT commit."""
+    p = json.loads(item.incoming_payload) if item.incoming_payload else {}
     new_ev = models.Event(
         title=p.get("title") or "(Untitled)",
         start_time=p.get("start_time") or datetime.utcnow().isoformat(),
@@ -124,8 +118,22 @@ def sync_review_approve(item_id: str, db: Session = Depends(get_db)):
     db.add(new_ev)
     db.flush()
     _resolve_item(item, "approved_new", {"event_id": new_ev.id})
+    return new_ev.id
+
+
+@router.post("/{item_id}/approve")
+def sync_review_approve(item_id: str, db: Session = Depends(get_db)):
+    """User says 'these are different events' — apply the incoming payload as
+    a brand-new local event (not merged into the candidate)."""
+    item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == item_id).first()
+    if not item or item.resolved_at:
+        raise HTTPException(status_code=404, detail={"error": {"code": "review_resolved_or_missing"}})
+    cc = db.query(models.ConnectionCalendar).filter(models.ConnectionCalendar.id == item.connection_calendar_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail={"error": {"code": "cc_not_found"}})
+    event_id = _approve_item(db, item, cc)
     db.commit()
-    return {"event_id": new_ev.id}
+    return {"event_id": event_id}
 
 
 @router.post("/{item_id}/merge")
@@ -236,15 +244,34 @@ def sync_review_reject(item_id: str, body: RejectRequest, db: Session = Depends(
 
 @router.post("/bulk")
 def sync_review_bulk(body: BulkActionRequest, db: Session = Depends(get_db)):
+    """Bulk resolve. `approve` applies exactly the same resolution as the
+    single-item approve route (insert incoming as a new local event);
+    `reject` marks each item rejected without a SyncIgnoreRule.
+
+    Response: {resolved, skipped, event_ids} — event_ids lists the new
+    local events created by approve (empty for reject)."""
     if body.action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail={"error": {"code": "bad_bulk_action"}})
     n = 0
+    skipped = 0
+    event_ids: List[int] = []
     for iid in body.item_ids:
         item = db.query(models.SyncReviewItem).filter(models.SyncReviewItem.id == iid).first()
         if not item or item.resolved_at:
+            skipped += 1
             continue
         if body.action == "reject":
             _resolve_item(item, "rejected")
             n += 1
+            continue
+        # approve
+        cc = db.query(models.ConnectionCalendar).filter(
+            models.ConnectionCalendar.id == item.connection_calendar_id
+        ).first()
+        if not cc:
+            skipped += 1
+            continue
+        event_ids.append(_approve_item(db, item, cc))
+        n += 1
     db.commit()
-    return {"resolved": n}
+    return {"resolved": n, "skipped": skipped, "event_ids": event_ids}

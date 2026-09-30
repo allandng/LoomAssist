@@ -207,7 +207,8 @@ async def _run_google(db: Session, conn) -> None:
     access_token = tok["access_token"]
 
     cc_rows = db.query(models.ConnectionCalendar).filter(
-        models.ConnectionCalendar.connection_id == conn.id
+        models.ConnectionCalendar.connection_id == conn.id,
+        models.ConnectionCalendar.enabled != False,  # noqa: E712  (NULL ⇒ legacy rows ⇒ enabled)
     ).all()
 
     for cc in cc_rows:
@@ -290,7 +291,8 @@ async def _run_caldav(db: Session, conn) -> None:
 
     base_url = conn.caldav_base_url or _caldav.ICLOUD_DEFAULT_BASE
     cc_rows = db.query(models.ConnectionCalendar).filter(
-        models.ConnectionCalendar.connection_id == conn.id
+        models.ConnectionCalendar.connection_id == conn.id,
+        models.ConnectionCalendar.enabled != False,  # noqa: E712  (NULL ⇒ legacy rows ⇒ enabled)
     ).all()
 
     for cc in cc_rows:

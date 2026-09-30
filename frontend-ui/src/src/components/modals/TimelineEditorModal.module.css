@@ -1,0 +1,73 @@
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.swatch {
+  --swatch: var(--accent);
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--swatch);
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.swatch:hover { transform: scale(1.06); }
+.swatch:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+
+.swatchOn {
+  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--text-main);
+}
+
+.swatchCustom {
+  display: grid;
+  place-items: center;
+  background: var(--swatch);
+  overflow: hidden;
+}
+
+.colorInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.customGlyph {
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-on-accent);
+  mix-blend-mode: difference;
+  pointer-events: none;
+}
+
+.courseBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.courseFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}

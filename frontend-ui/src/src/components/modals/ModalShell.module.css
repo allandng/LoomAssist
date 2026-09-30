@@ -1,94 +1,216 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ModalShell — one chrome for every modal.
+   `dialog`: centered panel over a scrim.  `sheet`: right-side editor panel
+   that slides in and keeps the page readable behind a lighter scrim.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Dialog backdrop ─────────────────────────────────────────────────────── */
 .backdrop {
   position: fixed;
   inset: 0;
+  z-index: var(--z-modal);
   background: var(--overlay-scrim);
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(4px);
   display: grid;
   place-items: center;
-  padding: 20px;
-  z-index: 500;
+  padding: var(--space-6);
+  animation: fadeIn var(--motion-fast) var(--ease-decel);
 }
 
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── Sheet root + scrim ──────────────────────────────────────────────────── */
+.sheetRoot {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-sheet);
+}
+
+.sheetScrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--overlay-scrim) 40%, transparent);
+  animation: fadeIn var(--motion-fast) var(--ease-decel);
+}
+
+/* ── Panel (shared) ──────────────────────────────────────────────────────── */
 .panel {
-  max-width: 100%;
-  max-height: calc(100vh - 40px);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-modal);
+  min-width: 0;
+  overflow: hidden;
+  outline: none;
+  color: var(--text-main);
 }
 
+.dialog {
+  --modal-w: 520px;
+  width: min(var(--modal-w), 100%);
+  max-height: calc(100vh - var(--space-8));
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  animation: panelIn var(--motion-modal) var(--ease-decel);
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+.sheet {
+  --modal-w: var(--sheet-w);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(var(--modal-w), 100vw);
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-modal);
+  animation: sheetIn var(--motion-modal) var(--ease-decel);
+}
+
+@keyframes sheetIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop, .sheetScrim, .dialog, .sheet { animation: none; }
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
 .header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6) var(--space-4);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
+.headerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .title {
-  font-size: 14px;
+  margin: 0;
+  font-size: var(--text-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: var(--leading-snug);
   color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.closeBtn {
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
-  border: none;
-  background: transparent;
+.subtitle {
+  font-size: var(--text-sm);
   color: var(--text-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
+  line-height: var(--leading-snug);
 }
 
-.closeBtn:hover {
-  background: var(--bg-elevated);
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
 }
 
+/* ── Body ────────────────────────────────────────────────────────────────── */
 .body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  padding: var(--space-5) var(--space-6);
 }
 
-/* ModalFooter */
+.flush { padding: 0; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
 .footer {
   display: flex;
-  gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-subtle);
   align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-subtle) 55%, transparent);
   flex-shrink: 0;
-  position: relative; /* anchor for footer-scoped popovers (e.g. delete scope) */
+  flex-wrap: wrap;
+  position: relative; /* anchor for footer-scoped popovers */
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-right: auto;
   flex-wrap: wrap;
 }
 
-/* FieldLabel */
-.fieldLabel {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 5px;
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
 }
 
-/* WS5 #2 — inline discard-guard bar shown when a dirty modal is dismissed via
-   backdrop click / Escape, instead of silently destroying the form. */
+/* ── FieldLabel (matches Field primitive) ───────────────────────────────── */
+.fieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.fieldLabel {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ── Stack / notice helpers ─────────────────────────────────────────────── */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--info);
+  background: var(--info-soft);
+  font-size: var(--text-sm);
+  color: var(--text-main);
+  line-height: var(--leading-snug);
+}
+
+.notice_info    { border-left-color: var(--info);    background: var(--info-soft); }
+.notice_warning { border-left-color: var(--warning); background: var(--warning-soft); }
+.notice_error   { border-left-color: var(--error);   background: var(--error-soft); }
+.notice_success { border-left-color: var(--success); background: var(--success-soft); }
+
+.noticeText { flex: 1; min-width: 0; }
+
+/* ── Discard-guard bar ──────────────────────────────────────────────────── */
 .discardBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-4) var(--space-6);
   border-top: 1px solid var(--border);
   background: var(--warning-soft);
   flex-shrink: 0;
@@ -105,24 +227,3 @@
   gap: var(--space-3);
   align-items: center;
 }
-
-.discardConfirm {
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--text-base);
-  font-weight: 500;
-  background: transparent;
-  color: var(--error);
-  border: 1px solid var(--error);
-  cursor: pointer;
-  transition: background var(--motion-fast) var(--ease-standard);
-}
-
-.discardConfirm:hover {
-  background: var(--error-soft);
-}
-
-/* The `loom-field` / `loom-btn-primary` / `loom-btn-ghost` utilities moved to
-   styles/primitives.css — they are app-wide, not modal-scoped. */

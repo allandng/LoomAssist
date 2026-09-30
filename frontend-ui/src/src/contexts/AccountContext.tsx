@@ -1,15 +1,18 @@
-// Phase v3.0: Account state — identity-only.
+// Account state — identity only.
 //
-// Local mode is a first-class state, NOT an error. AccountContext.status === 'local'
-// just means: no Supabase user is signed in. The app is fully functional in this state.
+// Local mode is a first-class state, NOT an error. `status === 'local'` just
+// means no cloud user is signed in; the app is fully functional. Wraps <App/>
+// outside the router so route changes don't re-fetch identity.
 //
-// Per design doc §5: this provider wraps <App/> outside the router so route changes
-// don't re-fetch identity.
+// OAuth: the chosen provider is remembered (sessionStorage) before the system
+// browser opens, so the completion step reports the real provider instead of
+// assuming Google. A `provider` key in the returning URL fragment wins if present.
 
-import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   type Account,
   getMe,
+  getOAuthStatus,
   emailLogin as apiEmailLogin,
   emailSignup as apiEmailSignup,
   emailReset as apiEmailReset,
@@ -21,6 +24,14 @@ import {
 import { keychainSet, keychainDelete, KeychainSlots } from '../lib/keychain';
 
 export type AccountStatus = 'loading' | 'signedIn' | 'local' | 'error';
+export type OAuthProvider = 'google' | 'apple' | 'microsoft';
+
+const PENDING_PROVIDER_KEY = 'loom:oauth:provider';
+const OAUTH_PROVIDERS: readonly OAuthProvider[] = ['google', 'apple', 'microsoft'];
+// The system browser finishes OAuth via GET /auth/oauth/callback; the desktop
+// window never sees that redirect, so it polls /auth/oauth/status for a while.
+const OAUTH_POLL_MS = 2000;
+const OAUTH_POLL_LIMIT_MS = 3 * 60_000;
 
 interface AccountContextValue {
   account: Account | null;
@@ -30,7 +41,7 @@ interface AccountContextValue {
   signInEmail: (email: string, password: string) => Promise<void>;
   signUpEmail: (email: string, password: string) => Promise<void>;
   resetEmail: (email: string) => Promise<void>;
-  signInOAuth: (provider: 'google' | 'apple' | 'microsoft') => Promise<void>;
+  signInOAuth: (provider: OAuthProvider) => Promise<void>;
   completeOAuthFromFragment: () => Promise<boolean>;
   updateDisplayName: (name: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -38,7 +49,11 @@ interface AccountContextValue {
 
 const AccountContext = createContext<AccountContextValue | null>(null);
 
-function readFragmentToken(): { access_token: string; refresh_token?: string } | null {
+function isOAuthProvider(v: string | null | undefined): v is OAuthProvider {
+  return !!v && (OAUTH_PROVIDERS as readonly string[]).includes(v);
+}
+
+function readFragmentToken(): { access_token: string; refresh_token?: string; provider?: OAuthProvider } | null {
   if (typeof window === 'undefined') return null;
   const hash = window.location.hash.replace(/^#/, '');
   if (!hash) return null;
@@ -46,7 +61,17 @@ function readFragmentToken(): { access_token: string; refresh_token?: string } |
   const access = params.get('access_token');
   if (!access) return null;
   const refresh = params.get('refresh_token') ?? undefined;
-  return { access_token: access, refresh_token: refresh };
+  const provider = params.get('provider');
+  return { access_token: access, refresh_token: refresh, provider: isOAuthProvider(provider) ? provider : undefined };
+}
+
+function readPendingProvider(): OAuthProvider | null {
+  try {
+    const v = sessionStorage.getItem(PENDING_PROVIDER_KEY);
+    return isOAuthProvider(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 export function AccountProvider({ children }: { children: ReactNode }) {
@@ -66,24 +91,26 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Boot: read /auth/me once. The setState happens inside the async refresh —
-  // legitimate boot-time fetch, not a cascading render.
+  // Boot: read /auth/me once (204 = local mode, not an error).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
   }, [refresh]);
 
   // If the OAuth provider redirected back with #access_token=… in the URL,
-  // exchange it for an Account and stash the token in the Keychain.
+  // exchange it for an Account and stash the token in the keychain.
   const completeOAuthFromFragment = useCallback(async (): Promise<boolean> => {
     const tok = readFragmentToken();
     if (!tok) return false;
+    const provider: OAuthProvider = tok.provider ?? readPendingProvider() ?? 'google';
     try {
-      const acc = await apiCompleteOAuth(tok.access_token, tok.refresh_token ?? null, 'google');
-      await keychainSet(KeychainSlots.supabase, JSON.stringify(tok));
+      const acc = await apiCompleteOAuth(tok.access_token, tok.refresh_token ?? null, provider);
+      await keychainSet(KeychainSlots.supabase, JSON.stringify({ access_token: tok.access_token, refresh_token: tok.refresh_token }));
       setAccount(acc);
       setStatus('signedIn');
-      // Strip the fragment from the URL so it isn't re-processed on a reload.
+      setError(null);
+      try { sessionStorage.removeItem(PENDING_PROVIDER_KEY); } catch { /* ignore */ }
+      // Strip the fragment so it isn't re-processed on reload.
       history.replaceState(null, '', window.location.pathname + window.location.search);
       return true;
     } catch (e) {
@@ -101,28 +128,57 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const acc = await apiEmailLogin(email, password);
     setAccount(acc);
     setStatus('signedIn');
+    setError(null);
   }, []);
 
   const signUpEmail = useCallback(async (email: string, password: string) => {
     const acc = await apiEmailSignup(email, password);
     setAccount(acc);
     setStatus('signedIn');
+    setError(null);
   }, []);
 
   const resetEmail = useCallback(async (email: string) => {
     await apiEmailReset(email);
   }, []);
 
-  const signInOAuth = useCallback(async (provider: 'google' | 'apple' | 'microsoft') => {
+  // Poll the backend after handing off to the system browser; stops on success,
+  // on timeout, on a new attempt, or on unmount.
+  const pollRef = useRef<number | null>(null);
+  const stopPolling = useCallback(() => {
+    if (pollRef.current != null) { window.clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const watchOAuthCompletion = useCallback((baseline: string | null) => {
+    stopPolling();
+    const startedAt = Date.now();
+    pollRef.current = window.setInterval(async () => {
+      if (Date.now() - startedAt > OAUTH_POLL_LIMIT_MS) { stopPolling(); return; }
+      try {
+        const s = await getOAuthStatus();
+        if (s.completed_at && s.completed_at !== baseline) {
+          stopPolling();
+          try { sessionStorage.removeItem(PENDING_PROVIDER_KEY); } catch { /* ignore */ }
+          await refresh();
+        }
+      } catch { /* backend restarting — keep trying until the limit */ }
+    }, OAUTH_POLL_MS);
+  }, [refresh, stopPolling]);
+
+  const signInOAuth = useCallback(async (provider: OAuthProvider) => {
     const { auth_url } = await apiStartOAuth(provider);
+    try { sessionStorage.setItem(PENDING_PROVIDER_KEY, provider); } catch { /* ignore */ }
+    const baseline = await getOAuthStatus().then(s => s.completed_at).catch(() => null);
+    watchOAuthCompletion(baseline);
     // tauri-plugin-opener exposes window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', …).
     // In browser preview, fall back to window.open.
     const inv = window.__TAURI_INTERNALS__?.invoke;
     if (inv) {
       try { await inv('plugin:opener|open_url', { url: auth_url }); return; } catch { /* fall through */ }
     }
-    window.open(auth_url, '_blank');
-  }, []);
+    window.open(auth_url, '_blank', 'noopener');
+  }, [watchOAuthCompletion]);
 
   const updateDisplayName = useCallback(async (name: string) => {
     const acc = await apiUpdateMe(name);
@@ -130,11 +186,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    // Clear Keychain FIRST (so a backend failure doesn't leave a stale token).
+    // Clear the keychain FIRST so a backend failure can't leave a stale token.
     try { await keychainDelete(KeychainSlots.supabase); } catch { /* best-effort */ }
     await apiLogout();
     setAccount(null);
     setStatus('local');
+    setError(null);
   }, []);
 
   const value = useMemo<AccountContextValue>(() => ({

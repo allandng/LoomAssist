@@ -1,6 +1,24 @@
-# 🧶 LoomAssist v2.2 — Privacy-First Local AI Calendar
+# 🧶 LoomAssist v3.0 — Privacy-First Local AI Calendar
 
-LoomAssist is a local-first desktop calendar app for students and developers. All data and AI inference run on-device. Nothing leaves your machine — even when you connect a cloud calendar, sync runs **directly device ↔ provider**, never through a LoomAssist server.
+LoomAssist is a local-first desktop calendar app for students and developers. All data and AI inference run on-device. Nothing leaves your machine — even when you connect a cloud calendar, sync runs **directly device ↔ provider**, never through a LoomAssist server. Runs on Windows, macOS and Linux.
+
+---
+
+## ✨ What's new in v3.0 — the redesign
+
+A ground-up UI/UX rebuild informed by Mobbin research across the best calendar and planning tools (Amie, Rise, Motion, Proton Calendar, Superlist, Asana, Todoist, Cal.com, Toggl). The whole app now follows one design contract, `frontend-ui/DESIGN.md`.
+
+- **🧭 Labeled sidebar** — grouped navigation (Plan · Do · Learn) with keyboard hints and an Inbox badge; collapses to an icon rail (`B`). Search / ⌘K and "New event" live at the top; your account and sync status at the bottom.
+- **🗓️ Calendar, rebuilt** — big date title with Today and chevrons, a segmented view switcher, a collapsible context panel (mini calendar, timelines with per-timeline menus, filters, templates, find-free-time, missed events) and a tokenized grid with tinted event blocks, an accent today disc and a proper now-line. Empty states in every view.
+- **📝 Edit beside the grid** — the event editor is a right-side sheet, so the calendar stays visible while you edit. Icon-led rows for time, repeat, location, reminder, course, type, dependencies, checklist and notes. `Ctrl/⌘+↵` saves.
+- **🏠 Home dashboard** — greeting, quick actions, stat tiles (events today, tasks due, focus minutes, habit streak), Up next, activity heatmap, weekly review, energy map and a grades widget that finally shows real course data.
+- **✅ Tasks & Focus** — board/list toggle, group-by and filter controls, a "No timeline" bucket so standalone tasks never disappear, priority and due badges, and a hero Pomodoro timer with a progress ring, labeled controls and today-only "Up next".
+- **📚 Courses, Journal, Inbox** — course and assignment editors (weights, categories, scores), grade rings and projection, mood cards and a recording ring for the journal, and an Inbox page with capture, propose, schedule and archive.
+- **⚙️ Settings** — grouped left nav (Profile, Connections · Appearance, Keyboard, Notifications, Data & backup, Sync, Advanced), a complete keybinding table with conflict detection, a log viewer, one backup/restore flow, and cross-platform copy.
+- **🔔 Toasts** — success, error and undo feedback now appear bottom-right where you are; the bell keeps history.
+- **🧩 One design system** — semantic tokens with real light and high-contrast themes, a shared UI kit (`components/ui`), themed confirm/prompt dialogs instead of browser popups, no emoji chrome, every icon button labeled.
+- **🪟 Windows support** — launchers (`run.ps1` / `run.sh`), platform-aware requirements, keyring-backed token persistence, cross-platform log/backup paths, spoken briefing via SAPI, and `Ctrl` instead of `⌘` in every hint.
+- **🔧 Fixed features** — Google/Supabase OAuth can complete (callback routes), LAN sync targets real peers and pushes as well as pulls, backup/restore buttons work, sync status is visible, bulk approve in Sync Review, soft-delete with restore for voice cancel, syllabus scanner assigns to a course, event templates can be managed, ICS export has a UI.
 
 ---
 
@@ -138,30 +156,44 @@ LoomAssist is a local-first desktop calendar app for students and developers. Al
 ### Prerequisites
 - [Ollama](https://ollama.com/) installed and running (`ollama pull llama3.2`)
 - [Node.js](https://nodejs.org/) & [Rust](https://www.rust-lang.org/) (for Tauri/Cargo)
-- Python 3.13
+- Python 3.13 or newer (3.14 works)
 
 ### 1. Backend
+The launcher creates the venv, installs requirements and starts the API on `127.0.0.1:8000`.
+
+macOS / Linux:
+```bash
+cd backend-api && ./run.sh --reload
+```
+
+Windows (PowerShell):
+```powershell
+cd backend-api; .\run.ps1 -Reload
+```
+
+Manual equivalent:
 ```bash
 cd backend-api
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+# macOS/Linux: source venv/bin/activate   Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python3 -m uvicorn main:app --reload
+python -m uvicorn main:app --reload
 ```
 
 ### 2. Frontend
 ```bash
-cd frontend-ui
+cd frontend-ui/src
 npm install
-npm run tauri dev
+npm run tauri dev        # desktop window
+# or: npm run dev        # browser-only preview at http://localhost:5173
 ```
 
 ### 3. Load demo data (optional)
 ```bash
-cd backend-api && source venv/bin/activate && python3 seed_demo.py
+cd backend-api && venv/bin/python seed_demo.py           # Windows: venv\Scripts\python.exe seed_demo.py
 ```
 
-Populates 4 calendars, 25 events, 13 tasks, 6 journal entries, 7 inbox items, 2 courses, 14 assignments, and 5 event templates across a realistic two-week window. Re-running the script resets everything cleanly.
+Populates 4 calendars, 25 events, 13 tasks, 6 journal entries, 7 inbox items, 2 courses, 14 assignments, and 5 event templates across a realistic two-week window. The script is idempotent; pass `--reset` to wipe and reseed.
 
 ---
 

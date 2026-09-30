@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './QuickPeek.module.css';
-import { Icon, Icons } from '../shared/Icon';
-import { TLDot } from '../shared/TLDot';
+import { Badge, IconButton, Icon, Icons } from '../ui';
 import { SourceBadge } from '../shared/SourceBadge';
 import type { Event, Calendar } from '../../types';
 import { parseChecklist, renderDescription } from '../../lib/eventUtils';
@@ -13,7 +12,7 @@ interface QuickPeekProps {
   timelines: Calendar[];
   anchorX: number;
   anchorY: number;
-  /** WS5 #1 — a single-click pins an interactive peek (action row + toggles). */
+  /** A single-click pins an interactive peek (action row + toggles). */
   pinned?: boolean;
   /** Move focus into the card only when opened from the keyboard (APG non-modal dialog). */
   keyboardOpen?: boolean;
@@ -21,6 +20,8 @@ interface QuickPeekProps {
   onEdit?: (event: Event) => void;
   onDuplicate?: (event: Event) => void;
   onDelete?: (event: Event) => void;
+  /** Clock in (no actual_start yet) or clock out (tracking live). */
+  onClockToggle?: (event: Event) => void;
   onChecklistToggle?: (index: number) => void;
   /** Hover-mode grace: keep the passive peek alive while the cursor is over it. */
   onHoverEnter?: () => void;
@@ -40,6 +41,7 @@ export function QuickPeek({
   onEdit,
   onDuplicate,
   onDelete,
+  onClockToggle,
   onChecklistToggle,
   onHoverEnter,
   onHoverLeave,
@@ -75,6 +77,9 @@ export function QuickPeek({
       // Clicks on an event pill are owned by the calendar's click handler
       // (it re-pins / toggles the peek) — don't double-close here.
       if (target.closest('.fc-event')) return;
+      // The confirm dialog is portalled outside the card; a click on it must
+      // not tear the peek down mid-flow.
+      if (target.closest('[role="alertdialog"], [role="dialog"]')) return;
       onClose?.();
     }
     // Defer so the same click that pinned the peek doesn't immediately close it.
@@ -94,12 +99,13 @@ export function QuickPeek({
 
   const startDT = new Date(event.start_time);
   const endDT   = new Date(event.end_time);
-  const datePart = startDT.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const datePart = startDT.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   const timePart = event.is_all_day
     ? 'All day'
     : `${startDT.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${endDT.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 
   // Clock-in tracking summary
+  const isClockedIn = !!event.actual_start && !event.actual_end;
   let trackedRow: string | null = null;
   if (event.actual_start) {
     const actStart = new Date(event.actual_start);
@@ -107,19 +113,13 @@ export function QuickPeek({
     const actualMin = Math.max(0, Math.round((actEnd.getTime() - actStart.getTime()) / 60_000));
     const plannedMin = Math.max(1, Math.round((endDT.getTime() - startDT.getTime()) / 60_000));
     const live = event.actual_end ? '' : ' (live)';
-    trackedRow = `Tracked: ${actualMin}m vs. planned ${plannedMin}m${live}`;
+    trackedRow = `Tracked ${actualMin}m of ${plannedMin}m planned${live}`;
   }
 
   const renderItem = (item: typeof checklist[number]) => {
     const box = (
-      <span
-        className={styles.checkBox}
-        style={{
-          borderColor: item.done ? 'var(--text-dim)' : 'var(--border-strong)',
-          background: item.done ? 'var(--text-dim)' : 'transparent',
-        }}
-      >
-        {item.done && <Icon d={Icons.check} size={8} stroke="var(--bg-main)" strokeWidth={3} />}
+      <span className={[styles.checkBox, item.done ? styles.checkBoxDone : ''].join(' ')} aria-hidden="true">
+        {item.done && <Icon d={Icons.check} size={9} strokeWidth={3} />}
       </span>
     );
     return (
@@ -135,7 +135,7 @@ export function QuickPeek({
             {box}
           </button>
         ) : box}
-        {item.text}
+        <span className={styles.checkText}>{item.text}</span>
       </div>
     );
   };
@@ -155,37 +155,41 @@ export function QuickPeek({
       onMouseLeave={!pinned ? onHoverLeave : undefined}
     >
       <div className={styles.meta}>
-        <TLDot color={color} size={7} />
-        <span className={styles.tlName}>{timeline?.name?.toUpperCase() ?? '—'}</span>
+        <Badge size="sm" dot color={color}>{timeline?.name ?? 'No timeline'}</Badge>
+        {isClockedIn && <Badge size="sm" dot tone="success">Live</Badge>}
       </div>
       <div className={styles.title}>{event.title}</div>
-      <div className={styles.time}>{datePart} · {timePart}</div>
+      <div className={styles.time}>
+        <span>{datePart}</span>
+        <span className={styles.timeMono}>{timePart}</span>
+      </div>
 
-      {event.location && (
-        <div className={styles.metaRow}>
-          <Icon d={Icons.pin} size={11} stroke="var(--text-muted)" />
-          <span>{event.location}</span>
-        </div>
-      )}
-
-      {event.travel_time_minutes && event.travel_time_minutes > 0 ? (
-        <div className={styles.metaRow}>
-          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
-          <span>{event.travel_time_minutes} min travel buffer</span>
-        </div>
-      ) : null}
-
-      {event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0 ? (
-        <div className={styles.metaRow}>
-          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
-          <span>{event.prep_minutes} min prep buffer</span>
-        </div>
-      ) : null}
-
-      {trackedRow && (
-        <div className={styles.metaRow}>
-          <Icon d={Icons.clock} size={11} stroke="var(--text-muted)" />
-          <span>{trackedRow}</span>
+      {(event.location || (event.travel_time_minutes && event.travel_time_minutes > 0) || (event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0) || trackedRow) && (
+        <div className={styles.metaList}>
+          {event.location && (
+            <div className={styles.metaRow}>
+              <Icon d={Icons.mapPin} size={12} />
+              <span>{event.location}</span>
+            </div>
+          )}
+          {event.travel_time_minutes && event.travel_time_minutes > 0 ? (
+            <div className={styles.metaRow}>
+              <Icon d={Icons.arrowRight} size={12} />
+              <span>{event.travel_time_minutes} min travel buffer</span>
+            </div>
+          ) : null}
+          {event.event_type === 'lecture' && event.prep_minutes && event.prep_minutes > 0 ? (
+            <div className={styles.metaRow}>
+              <Icon d={Icons.book} size={12} />
+              <span>{event.prep_minutes} min prep buffer</span>
+            </div>
+          ) : null}
+          {trackedRow && (
+            <div className={styles.metaRow}>
+              <Icon d={Icons.timer} size={12} />
+              <span>{trackedRow}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -197,11 +201,11 @@ export function QuickPeek({
       )}
 
       {checklist.length > 0 && (
-        <>
+        <div className={styles.checklist}>
           {readings.length > 0 && (
             <>
               <div className={styles.checklistHeader}>
-                READINGS · {readings.filter(r => r.done).length} / {readings.length}
+                Readings · {readings.filter(r => r.done).length} / {readings.length}
               </div>
               {readings.slice(0, 5).map(renderItem)}
               {readings.length > 5 && <div className={styles.checkMore}>+{readings.length - 5} more</div>}
@@ -210,13 +214,13 @@ export function QuickPeek({
           {tasks.length > 0 && (
             <>
               <div className={styles.checklistHeader}>
-                CHECKLIST · {done} / {checklist.length}
+                Checklist · {done} / {checklist.length}
               </div>
               {tasks.slice(0, 5).map(renderItem)}
               {tasks.length > 5 && <div className={styles.checkMore}>+{tasks.length - 5} more</div>}
             </>
           )}
-        </>
+        </div>
       )}
 
       <SourceBadge
@@ -225,21 +229,22 @@ export function QuickPeek({
       />
 
       {/* Action row — last in DOM so the content reading order is preserved, but
-          absolutely positioned top-right (WS5 #1). */}
+          absolutely positioned top-right. */}
       {pinned && (
-        <div className={styles.actions}>
-          <button type="button" className={styles.actionBtn} onClick={() => onEdit?.(event)} aria-label="Edit event" title="Edit">
-            <Icon d={Icons.pencil} size={13} />
-          </button>
-          <button type="button" className={styles.actionBtn} onClick={() => onDuplicate?.(event)} aria-label="Duplicate event" title="Duplicate">
-            <Icon d={Icons.copy} size={13} />
-          </button>
-          <button type="button" className={styles.actionBtn} onClick={() => onDelete?.(event)} aria-label="Delete event" title="Delete">
-            <Icon d={Icons.trash} size={13} />
-          </button>
-          <button type="button" className={styles.actionBtn} onClick={() => onClose?.()} aria-label="Close" title="Close">
-            <Icon d={Icons.x} size={13} />
-          </button>
+        <div className={styles.actions} role="toolbar" aria-label="Event actions">
+          <IconButton size="sm" icon={Icons.pencil} label="Edit event" onClick={() => onEdit?.(event)} />
+          <IconButton size="sm" icon={Icons.copy} label="Duplicate event" onClick={() => onDuplicate?.(event)} />
+          {onClockToggle && !event.is_all_day && (
+            <IconButton
+              size="sm"
+              icon={isClockedIn ? Icons.stop : Icons.timer}
+              label={isClockedIn ? 'Clock out' : 'Clock in'}
+              active={isClockedIn}
+              onClick={() => onClockToggle(event)}
+            />
+          )}
+          <IconButton size="sm" icon={Icons.trash} label="Delete event" className={styles.deleteBtn} onClick={() => onDelete?.(event)} />
+          <IconButton size="sm" icon={Icons.x} label="Close" onClick={() => onClose?.()} />
         </div>
       )}
     </div>

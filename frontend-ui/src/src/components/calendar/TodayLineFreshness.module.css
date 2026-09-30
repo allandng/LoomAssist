@@ -1,0 +1,14 @@
+.freshness {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-5);
+  z-index: var(--z-sticky);
+  pointer-events: none;
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  background: var(--bg-panel);
+  box-shadow: 0 0 0 1px var(--border);
+}

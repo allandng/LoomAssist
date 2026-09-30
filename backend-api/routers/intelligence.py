@@ -278,9 +278,24 @@ def apply_intent(req: ApplyIntentRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found"}})
 
     if req.action == "cancel_event":
-        db.delete(ev)
+        # Soft delete: tombstone via `deleted_at` (GET /events/ already hides
+        # tombstoned rows) so the client can offer Undo. Response carries the
+        # full pre-delete event payload plus the restore endpoint:
+        #   {status: "deleted", soft: true, event_id, event: {...},
+        #    restore: {method: "POST", path: "/events/{id}/restore"}}
+        from datetime import datetime as _dt
+        snapshot = ev.model_dump()
+        now = _dt.utcnow().isoformat()
+        ev.deleted_at = now
+        ev.last_modified = now
         db.commit()
-        return {"status": "deleted", "event_id": req.event_id}
+        return {
+            "status": "deleted",
+            "soft": True,
+            "event_id": req.event_id,
+            "event": snapshot,
+            "restore": {"method": "POST", "path": f"/events/{req.event_id}/restore"},
+        }
 
     change = req.proposed_change
     if "start_time" in change:
